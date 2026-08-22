@@ -1,4 +1,5 @@
 mod attribution;
+mod docker;
 mod linux;
 mod model;
 mod sampler;
@@ -22,6 +23,7 @@ struct Options {
     no_wslc: bool,
     hide_infra: bool,
     tree: bool,
+    no_docker: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -71,6 +73,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let mut docker_usage = Vec::new();
+    if !options.no_docker && !options.tree {
+        match docker::usage(host_cpu_count) {
+            Ok(rows) => docker_usage = rows,
+            Err(error) => eprintln!("warning: Docker collector unavailable: {error}"),
+        }
+    }
+
     if options.tree {
         let hosts: Vec<_> = windows_usage
             .iter()
@@ -92,6 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut usage = linux_usage;
     usage.extend(windows_usage);
     usage.extend(wslc_usage);
+    usage.extend(docker_usage);
     prepare_flat_usage(
         &mut usage,
         options.show_wsl_host,
@@ -222,6 +233,7 @@ fn env_name(environment: EnvironmentKind) -> &'static str {
         EnvironmentKind::Windows => "Windows",
         EnvironmentKind::Wsl => "WSL",
         EnvironmentKind::WslContainer => "WSLC",
+        EnvironmentKind::Docker => "Docker",
     }
 }
 
@@ -252,6 +264,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
         no_wslc: false,
         hide_infra: false,
         tree: false,
+        no_docker: false,
     };
 
     let mut args = env::args().skip(1);
@@ -264,6 +277,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             "--no-wslc" => options.no_wslc = true,
             "--hide-infra" => options.hide_infra = true,
             "--tree" => options.tree = true,
+            "--no-docker" => options.no_docker = true,
             "--interval-ms" => {
                 let value = args.next().ok_or("--interval-ms requires a value")?;
                 let millis = value.parse::<u64>()?;
@@ -290,9 +304,9 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
 fn print_help() {
     println!(
         "wsltop 0.1.0\n\n\
-Unified Windows/WSL/WSLC CPU monitor (Phase 1)\n\n\
+Unified Windows/WSL/WSLC/Docker CPU monitor (Phase 2)\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --tree                 Emit the WSL/WSLC CPU attribution tree\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat output\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --tree                 Emit the WSL/WSLC CPU attribution tree\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat output\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
     );
 }
 

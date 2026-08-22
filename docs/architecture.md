@@ -1,10 +1,10 @@
-# Architecture (Phase 1)
+# Architecture (Phase 2)
 
 ## Goal
 
 Provide a single WSL command that ranks Windows-native processes, current-WSL processes, and WSLC containers by CPU consumption on one comparable host-wide scale.
 
-Phase 1 additionally presents WSL and WSLC host processes as CPU attribution trees without double-counting parents and children.
+Phase 1 additionally presents WSL and WSLC host processes as CPU attribution trees without double-counting parents and children. Phase 2 adds flat Docker container statistics.
 
 ## Components
 
@@ -58,6 +58,12 @@ Phase 0.1 uses:
 
 The WSLC collector is optional. If `wslc.exe` is not installed, monitoring continues with Windows + WSL only.
 
+### Docker collector
+
+Runs `docker stats --no-stream --no-trunc --format '{{json .}}'` and reads one JSON object per running container. `ID`, `Name`, `CPUPerc`, and the used portion of `MemUsage` become `Docker`/`container` resources. CPU is normalized by the Windows logical CPU count. Missing Docker CLI returns no rows; daemon and command failures warn without stopping other collectors. `--no-docker` disables collection.
+
+Docker rows are currently flat-only. They are not inserted into the WSL/WSLC attribution tree because Docker process/host attribution belongs to Phase 3.
+
 ### Resource model
 
 Phase 0 used a process-only output model. Phase 0.1 generalized the final row into `ResourceUsage` so a row can represent either a process or a container while preserving `pid` for process consumers.
@@ -102,10 +108,10 @@ Memory is intentionally absent from attribution arithmetic. Windows `WorkingSet6
 
 ## Scope boundaries
 
-Phase 1 intentionally does **not** solve:
+Phase 2 intentionally does **not** solve:
 
 - multiple WSLC sessions
-- Docker containers/processes
+- Docker process attribution
 - multiple WSL distributions
 - explanation of the components inside the `unattributed` bucket
 - disk/network/GPU accounting

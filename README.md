@@ -1,14 +1,14 @@
 # WSL Unified Process Monitor (`wsltop`)
 
-`wsltop` is a unified Windows + WSL + WSL Containers CPU monitor that runs from WSL2.
+`wsltop` is a unified Windows + WSL + WSL Containers + Docker CPU monitor that runs from WSL2.
 
 The core use case is:
 
 > Windows Task Manager says WSL is busy. Which Windows, WSL, or WSLC workload is actually using the host CPU?
 
-## Phase 1
+## Phase 2
 
-Phase 0 validated Windows-native and current-WSL process collection, Phase 0.1 added WSL Containers (WSLC), and Phase 0.2 added resource types. Phase 1 uses the Windows `vmmem`/`vmmemWSL` and `vmmemwslc-*` processes as host resources and attributes their CPU to known WSL/WSLC children plus an explicit `unattributed` remainder.
+Phase 2 adds optional Docker container statistics to the Phase 1 WSL/WSLC CPU attribution monitor. Docker rows use the same host-wide CPU scale and appear in flat table and flat JSON output.
 
 All rows use the same host-wide CPU scale:
 
@@ -29,6 +29,7 @@ WSL     infra       0.01%        2M           104  plan9
 - Windows/WSL interop enabled (`powershell.exe` callable from WSL)
 - Rust toolchain
 - Optional: WSL 2.9.3+ with `wslc.exe` for WSLC container rows
+- Optional: Docker CLI and a reachable daemon for Docker container rows
 
 WSLC is auto-detected. If `wslc.exe` is absent, `wsltop` continues with Windows + WSL only.
 
@@ -58,6 +59,7 @@ Useful options:
 ./target/release/wsltop --hide-infra
 ./target/release/wsltop --tree
 ./target/release/wsltop --tree --json
+./target/release/wsltop --no-docker
 ```
 
 `--show-wsl-host` exposes `vmmem`, `vmmemWSL`, and `vmmemwslc-*`. Those rows overlap with WSL/WSLC workloads and must not be summed with their child workloads.
@@ -86,6 +88,8 @@ The tree is CPU-only. `unattributed = max(host CPU - known children CPU, 0)`. Ch
 
 The current/default WSLC CLI session is mapped only when exactly one `vmmemwslc-*` host is available. With zero or multiple candidates, wsltop reports the mapping as unresolved instead of guessing; normal flat container output remains available.
 
+Docker is auto-detected through `docker stats --no-stream --no-trunc`. Docker's container CPU percentage is divided by the Windows logical CPU count. Phase 2 does not attribute Docker processes or add Docker to the WSL/WSLC tree; that remains Phase 3. Use `--no-docker` to disable collection. An unavailable daemon produces a warning without preventing other collectors from reporting.
+
 ## CPU semantics
 
 The display intentionally uses the Windows Task Manager style host scale:
@@ -94,7 +98,7 @@ The display intentionally uses the Windows Task Manager style host scale:
 all host logical processors fully busy = 100%
 ```
 
-For Windows and WSL processes, `wsltop` differences cumulative CPU time. For WSLC, the native `wslc stats` CPU percentage is divided by the Windows logical CPU count.
+For Windows and WSL processes, `wsltop` differences cumulative CPU time. For WSLC and Docker, the native container CPU percentage is divided by the Windows logical CPU count.
 
 See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and double-counting rules.
 
@@ -106,7 +110,7 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - [x] Phase 0.2: resource type classification and infrastructure filtering
 - [x] Phase 1: WSL/WSLC CPU host attribution tree
 - [ ] Validate Phase 0.1 WSLC CPU normalization against Task Manager
-- [ ] Phase 2: Docker container stats
+- [x] Phase 2: Docker container stats
 - [ ] Phase 3: Docker process attribution
 - [ ] Phase 4: multiple WSL distros and WSLC sessions
 - [ ] Phase 5: interactive ratatui TUI
@@ -119,4 +123,4 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - Phase 0.1 reads WSLC containers from the current/default WSLC CLI session only.
 - Multiple WSLC host candidates are deliberately left unresolved; session identity is not guessed.
 - Memory is not attributed. WSLC `MemUsage` and Windows host `WorkingSet64` use different accounting semantics and are never subtracted.
-- Docker and other WSL distros are intentionally not included yet.
+- Docker process attribution and other WSL distros are intentionally not included yet.

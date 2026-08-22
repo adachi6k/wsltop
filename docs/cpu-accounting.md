@@ -44,6 +44,16 @@ wsltop CPU%  = 100.29 / 16 = 6.27%
 
 This assumption must be validated against Windows Task Manager and the corresponding `vmmemwslc-*` host process before it is considered stable.
 
+## Docker container formula
+
+`docker stats` uses the same per-logical-CPU container convention. Phase 2 normalizes it identically:
+
+```text
+wsltop Docker CPU% = docker CPUPerc / host logical CPUs
+```
+
+Docker stats are instantaneous and collected after the process snapshots, so small timing differences are expected. Docker process attribution is deferred to Phase 3.
+
 ## WSL processor limits
 
 If `.wslconfig` limits WSL to 8 processors on a 16-processor Windows host, fully saturating all WSL processors consumes 50% of host capacity and therefore displays as approximately 50%.

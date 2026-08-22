@@ -10,6 +10,8 @@ pub enum EnvironmentKind {
     Wsl,
     #[serde(rename = "wslc")]
     WslContainer,
+    #[serde(rename = "docker")]
+    Docker,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
