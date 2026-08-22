@@ -1,0 +1,11 @@
+[package]
+name = "wsltop"
+version = "0.1.0"
+edition = "2021"
+description = "Unified Windows/WSL process CPU monitor for WSL2"
+license = "MIT"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
