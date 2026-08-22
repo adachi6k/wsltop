@@ -18,6 +18,7 @@ pub enum ResourceKind {
     Process,
     Container,
     Infra,
+    Host,
 }
 
 impl ResourceKind {
@@ -26,6 +27,7 @@ impl ResourceKind {
             Self::Process => "process",
             Self::Container => "container",
             Self::Infra => "infra",
+            Self::Host => "host",
         }
     }
 }

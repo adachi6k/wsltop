@@ -1,3 +1,4 @@
+mod attribution;
 mod linux;
 mod model;
 mod sampler;
@@ -20,6 +21,7 @@ struct Options {
     wsl_only: bool,
     no_wslc: bool,
     hide_infra: bool,
+    tree: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -29,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let windows_before = if options.wsl_only {
         None
     } else {
-        Some(windows::snapshot(options.show_wsl_host)?)
+        Some(windows::snapshot()?)
     };
 
     thread::sleep(options.interval);
@@ -38,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let windows_after = if options.wsl_only {
         None
     } else {
-        Some(windows::snapshot(options.show_wsl_host)?)
+        Some(windows::snapshot()?)
     };
 
     let host_cpu_count = match &windows_after {
@@ -48,7 +50,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or(1),
     };
 
-    let mut usage = sampler::calculate_usage(&linux_before, &linux_after, host_cpu_count);
+    let linux_usage = sampler::calculate_usage(&linux_before, &linux_after, host_cpu_count);
+    let mut windows_usage = Vec::new();
 
     if let (Some(before), Some(after)) = (&windows_before, &windows_after) {
         if before.host_logical_cpu_count != after.host_logical_cpu_count {
@@ -57,31 +60,44 @@ fn main() -> Result<(), Box<dyn Error>> {
                 before.host_logical_cpu_count, after.host_logical_cpu_count
             );
         }
-        usage.extend(sampler::calculate_usage(
-            &before.snapshot,
-            &after.snapshot,
-            host_cpu_count,
-        ));
+        windows_usage = sampler::calculate_usage(&before.snapshot, &after.snapshot, host_cpu_count);
     }
 
+    let mut wslc_usage = Vec::new();
     if !options.wsl_only && !options.no_wslc {
         match wslc::usage(host_cpu_count) {
-            Ok(rows) => usage.extend(rows),
+            Ok(rows) => wslc_usage = rows,
             Err(e) => eprintln!("warning: WSLC collector unavailable: {e}"),
         }
     }
 
-    if options.hide_infra {
-        usage.retain(|row| row.kind != ResourceKind::Infra);
+    if options.tree {
+        let hosts: Vec<_> = windows_usage
+            .iter()
+            .filter(|row| attribution::is_host_resource(row))
+            .cloned()
+            .collect();
+        let mut tree = attribution::build_tree(host_cpu_count, &hosts, &linux_usage, &wslc_usage);
+        if options.hide_infra {
+            attribution::hide_infra(&mut tree);
+        }
+        if options.json {
+            println!("{}", serde_json::to_string_pretty(&tree)?);
+        } else {
+            print_tree(&tree, options.wsl_only);
+        }
+        return Ok(());
     }
 
-    usage.sort_by(|a, b| {
-        b.cpu_percent
-            .partial_cmp(&a.cpu_percent)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
-    });
-    usage.truncate(options.limit);
+    let mut usage = linux_usage;
+    usage.extend(windows_usage);
+    usage.extend(wslc_usage);
+    prepare_flat_usage(
+        &mut usage,
+        options.show_wsl_host,
+        options.hide_infra,
+        options.limit,
+    );
 
     if options.json {
         println!("{}", serde_json::to_string_pretty(&usage)?);
@@ -90,6 +106,81 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn prepare_flat_usage(
+    usage: &mut Vec<ResourceUsage>,
+    show_wsl_host: bool,
+    hide_infra: bool,
+    limit: usize,
+) {
+    if !show_wsl_host {
+        usage.retain(|row| !attribution::is_host_resource(row));
+    }
+    if hide_infra {
+        usage.retain(|row| row.kind != ResourceKind::Infra);
+    }
+    usage.sort_by(|a, b| {
+        b.cpu_percent
+            .partial_cmp(&a.cpu_percent)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
+    });
+    usage.truncate(limit);
+}
+
+fn print_tree(tree: &attribution::AttributionTree, wsl_only: bool) {
+    if wsl_only {
+        eprintln!(
+            "warning: --wsl-only cannot collect Windows host resources; attribution mapping is unresolved"
+        );
+    }
+
+    println!("Host logical CPUs: {}", tree.host_logical_cpu_count);
+    println!();
+
+    for group in &tree.groups {
+        let unresolved = if group.mapping_status == attribution::MappingStatus::Unresolved {
+            " [session mapping unresolved]"
+        } else {
+            ""
+        };
+        println!(
+            "{:<42} {:>7.2}%{}",
+            group.name, group.cpu_percent, unresolved
+        );
+        for child in &group.children {
+            println!(
+                "|- {:<10} {:<27} {:>7.2}%",
+                child.kind.as_str(),
+                child.name,
+                child.cpu_percent
+            );
+        }
+        println!(
+            "`- {:<10} {:<27} {:>7.2}%",
+            "unattributed", "", group.unattributed_cpu_percent
+        );
+        if group.over_attributed_cpu_percent > 0.0 {
+            println!(
+                "   sampling skew (children exceed host by {:.2}%)",
+                group.over_attributed_cpu_percent
+            );
+        }
+        println!();
+    }
+
+    if !tree.unmapped_children.is_empty() {
+        println!("Session mapping unresolved; resources remain ungrouped:");
+        for child in &tree.unmapped_children {
+            println!(
+                "   {:<10} {:<27} {:>7.2}%",
+                child.kind.as_str(),
+                child.name,
+                child.cpu_percent
+            );
+        }
+    }
 }
 
 fn print_table(rows: &[ResourceUsage], host_cpu_count: u32, wsl_only: bool) {
@@ -160,6 +251,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
         wsl_only: false,
         no_wslc: false,
         hide_infra: false,
+        tree: false,
     };
 
     let mut args = env::args().skip(1);
@@ -171,6 +263,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             "--wsl-only" => options.wsl_only = true,
             "--no-wslc" => options.no_wslc = true,
             "--hide-infra" => options.hide_infra = true,
+            "--tree" => options.tree = true,
             "--interval-ms" => {
                 let value = args.next().ok_or("--interval-ms requires a value")?;
                 let millis = value.parse::<u64>()?;
@@ -197,8 +290,56 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
 fn print_help() {
     println!(
         "wsltop 0.1.0\n\n\
-Unified Windows/WSL/WSLC CPU monitor (Phase 0.2)\n\n\
+Unified Windows/WSL/WSLC CPU monitor (Phase 1)\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --limit N              Show at most N resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include vmmem/vmmemWSL/vmmemwslc-* rows (double-counts WSL/WSLC)\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --tree                 Emit the WSL/WSLC CPU attribution tree\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat output\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_flat_usage;
+    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+
+    fn resource(environment: EnvironmentKind, kind: ResourceKind, name: &str) -> ResourceUsage {
+        ResourceUsage {
+            environment,
+            kind,
+            id: name.to_string(),
+            pid: Some(1),
+            name: name.to_string(),
+            cpu_percent: 1.0,
+            memory_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn flat_output_hides_hosts_by_default_but_keeps_resource_types() {
+        let mut rows = vec![
+            resource(EnvironmentKind::Windows, ResourceKind::Host, "vmmemwsl"),
+            resource(EnvironmentKind::Wsl, ResourceKind::Infra, "plan9"),
+            resource(
+                EnvironmentKind::WslContainer,
+                ResourceKind::Container,
+                "container",
+            ),
+        ];
+
+        prepare_flat_usage(&mut rows, false, false, 30);
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| row.kind == ResourceKind::Infra));
+        assert!(rows.iter().any(|row| row.kind == ResourceKind::Container));
+    }
+
+    #[test]
+    fn flat_output_can_show_raw_hosts() {
+        let mut rows = vec![resource(
+            EnvironmentKind::Windows,
+            ResourceKind::Host,
+            "vmmemwsl",
+        )];
+        prepare_flat_usage(&mut rows, true, false, 30);
+        assert_eq!(rows.len(), 1);
+    }
 }

@@ -58,13 +58,22 @@ fn to_usage(sample: &ProcessSample, cpu_percent: f64) -> ResourceUsage {
 }
 
 fn classify_process(sample: &ProcessSample) -> ResourceKind {
-    if sample.key.environment == crate::model::EnvironmentKind::Wsl
+    if sample.key.environment == crate::model::EnvironmentKind::Windows
+        && is_wsl_host_process(&sample.name)
+    {
+        ResourceKind::Host
+    } else if sample.key.environment == crate::model::EnvironmentKind::Wsl
         && sample.name.eq_ignore_ascii_case("plan9")
     {
         ResourceKind::Infra
     } else {
         ResourceKind::Process
     }
+}
+
+fn is_wsl_host_process(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name == "vmmem" || name == "vmmemwsl" || name.starts_with("vmmemwslc-")
 }
 
 #[cfg(test)]
@@ -103,6 +112,16 @@ mod tests {
             assert_eq!(
                 classify_process(&sample(EnvironmentKind::Wsl, name)),
                 ResourceKind::Process
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_windows_wsl_hosts() {
+        for name in ["vmmem", "VmmemWSL", "vmmemwslc-cli-adach"] {
+            assert_eq!(
+                classify_process(&sample(EnvironmentKind::Windows, name)),
+                ResourceKind::Host
             );
         }
     }

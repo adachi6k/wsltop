@@ -19,10 +19,11 @@ struct RawWindowsProcess {
     memory_bytes: u64,
 }
 
-pub fn snapshot(show_wsl_host: bool) -> Result<WindowsSnapshot, Box<dyn Error>> {
+pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
     // Get-Process CPU is cumulative processor time in seconds. Idle is excluded because
     // its CPU time increases while CPUs are idle and would invert the meaning of "usage".
-    // vmmem/vmmemWSL/vmmemwslc-* are hidden by default to avoid double-counting WSL load.
+    // vmmem/vmmemWSL/vmmemwslc-* are retained for attribution. The flat renderer
+    // hides them by default to avoid double-counting WSL load.
     let script = r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
@@ -71,10 +72,6 @@ $items = @(Get-Process | ForEach-Object {
         if process.name.eq_ignore_ascii_case("idle") {
             continue;
         }
-        if !show_wsl_host && is_wsl_host_process(&process.name) {
-            continue;
-        }
-
         processes.push(ProcessSample {
             key: ProcessKey {
                 environment: EnvironmentKind::Windows,
@@ -96,22 +93,4 @@ $items = @(Get-Process | ForEach-Object {
         },
         host_logical_cpu_count: raw.logical_cpu_count,
     })
-}
-
-fn is_wsl_host_process(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name == "vmmem" || name == "vmmemwsl" || name.starts_with("vmmemwslc-")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_wsl_host_process;
-
-    #[test]
-    fn recognizes_wsl_host_processes() {
-        assert!(is_wsl_host_process("vmmem"));
-        assert!(is_wsl_host_process("VmmemWSL"));
-        assert!(is_wsl_host_process("vmmemwslc-cli-adach"));
-        assert!(!is_wsl_host_process("wsl"));
-    }
 }

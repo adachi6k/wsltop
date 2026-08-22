@@ -81,8 +81,20 @@ Rows such as `VmmemWSL` and `vmmemwslc-*` represent aggregate VM/session consump
 
 Therefore host rows and child workload rows must not be flat-summed.
 
-Phase 0.1 hides these host rows by default. Phase 1 will introduce resource-attribution trees with an explicit `unattributed` bucket for kernel work, infrastructure, virtualization overhead, and sampling skew.
+Flat output continues to hide these host rows by default. `--show-wsl-host` exposes them as raw diagnostic rows. `--tree` instead uses them as parents and computes:
+
+```text
+known_children_cpu = sum(mapped child CPU%)
+unattributed_cpu = max(host_cpu - known_children_cpu, 0)
+over_attributed_cpu = max(known_children_cpu - host_cpu, 0)
+```
+
+`over_attributed_cpu` records possible sampling skew; child rows are never proportionally reduced to match the host. The attribution is best-effort because `/proc`, two PowerShell snapshots, and `wslc stats` are not sampled at identical boundaries and PowerShell collection itself has latency.
+
+The `unattributed` bucket can contain kernel work, virtualization overhead, workloads outside the current distro/session view, and timing mismatch. It must not be interpreted as a precisely isolated overhead measurement.
 
 ## Memory accounting
 
 Windows `WorkingSet64` and WSLC `MemUsage` do not necessarily have matching accounting semantics. Phase 0.1 displays both but does not subtract container memory from `vmmemwslc-*` working set or label the difference as overhead.
+
+Phase 1 remains CPU-only: no host-minus-child memory calculation is performed in the attribution tree or JSON model.

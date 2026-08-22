@@ -6,9 +6,9 @@ The core use case is:
 
 > Windows Task Manager says WSL is busy. Which Windows, WSL, or WSLC workload is actually using the host CPU?
 
-## Phase 0.2
+## Phase 1
 
-Phase 0 validated Windows-native and current-WSL process collection on a real 16-logical-CPU WSL2 host. Phase 0.1 added automatic WSL Containers (WSLC) discovery through `wslc.exe stats --format json --no-trunc`. Phase 0.2 classifies every row as `process`, `container`, or `infra`.
+Phase 0 validated Windows-native and current-WSL process collection, Phase 0.1 added WSL Containers (WSLC), and Phase 0.2 added resource types. Phase 1 uses the Windows `vmmem`/`vmmemWSL` and `vmmemwslc-*` processes as host resources and attributes their CPU to known WSL/WSLC children plus an explicit `unattributed` remainder.
 
 All rows use the same host-wide CPU scale:
 
@@ -56,11 +56,35 @@ Useful options:
 ./target/release/wsltop --wsl-only
 ./target/release/wsltop --no-wslc
 ./target/release/wsltop --hide-infra
+./target/release/wsltop --tree
+./target/release/wsltop --tree --json
 ```
 
 `--show-wsl-host` exposes `vmmem`, `vmmemWSL`, and `vmmemwslc-*`. Those rows overlap with WSL/WSLC workloads and must not be summed with their child workloads.
 
 Windows and ordinary WSL processes are `process`, WSLC rows are `container`, and the WSL `plan9` process is `infra`. `init` and `systemd` remain `process`. `--hide-infra` removes `infra` rows from table and JSON output. JSON rows expose the classification in the existing `kind` field, for example `"kind": "infra"`.
+
+`--tree` displays CPU attribution without changing the default flat output:
+
+```text
+Host logical CPUs: 16
+
+WSL VM                                      8.20%
+|- infra      plan9                         2.70%
+|- process    codex                         0.20%
+`- unattributed                             5.30%
+
+WSLC session: wslc-cli-adach               13.40%
+|- container  frosty_scandinavian           6.03%
+|- container  daring_urals                  0.65%
+`- unattributed                             6.72%
+```
+
+The tree is CPU-only. `unattributed = max(host CPU - known children CPU, 0)`. Children are never proportionally scaled. If child CPU exceeds host CPU because collectors sampled different intervals, the tree reports sampling skew and keeps `unattributed` at zero. `--tree --json` emits a structured object; plain `--json` retains the existing flat resource array.
+
+`--tree --hide-infra` hides infrastructure rows after attribution, so hidden `plan9` CPU remains accounted as a known child rather than being moved into `unattributed`.
+
+The current/default WSLC CLI session is mapped only when exactly one `vmmemwslc-*` host is available. With zero or multiple candidates, wsltop reports the mapping as unresolved instead of guessing; normal flat container output remains available.
 
 ## CPU semantics
 
@@ -80,8 +104,8 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - [x] Validate Phase 0 on a real WSL2 host
 - [x] Phase 0.1 design: WSLC JSON schema and host-process recognition
 - [x] Phase 0.2: resource type classification and infrastructure filtering
+- [x] Phase 1: WSL/WSLC CPU host attribution tree
 - [ ] Validate Phase 0.1 WSLC CPU normalization against Task Manager
-- [ ] Phase 1: WSL/WSLC VM attribution + `unattributed`
 - [ ] Phase 2: Docker container stats
 - [ ] Phase 3: Docker process attribution
 - [ ] Phase 4: multiple WSL distros and WSLC sessions
@@ -90,8 +114,9 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 
 ## Current limitations
 
-- PowerShell is started once per Windows snapshot; a persistent collector is a later optimization.
+- PowerShell is started once per Windows snapshot; collector latency means Phase 1 attribution is best-effort rather than strict accounting.
 - Windows PID reuse is detected only indirectly (negative cumulative CPU delta). Linux uses PID + starttime.
 - Phase 0.1 reads WSLC containers from the current/default WSLC CLI session only.
-- WSLC memory and Windows `vmmemwslc-*` working set are displayed but are not subtracted from each other because they use different accounting semantics.
+- Multiple WSLC host candidates are deliberately left unresolved; session identity is not guessed.
+- Memory is not attributed. WSLC `MemUsage` and Windows host `WorkingSet64` use different accounting semantics and are never subtracted.
 - Docker and other WSL distros are intentionally not included yet.
