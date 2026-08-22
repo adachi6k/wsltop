@@ -4,6 +4,7 @@ mod linux;
 mod model;
 mod multiwsl;
 mod sampler;
+mod tui;
 mod windows;
 mod wslc;
 
@@ -25,10 +26,14 @@ struct Options {
     hide_infra: bool,
     tree: bool,
     no_docker: bool,
+    interactive: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_args()?;
+    if options.interactive {
+        return tui::run(options.interval);
+    }
 
     let linux_before = linux::snapshot()?;
     let extra_wsl_before = if options.wsl_only {
@@ -321,6 +326,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
         hide_infra: false,
         tree: false,
         no_docker: false,
+        interactive: false,
     };
 
     let mut args = env::args().skip(1);
@@ -334,6 +340,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             "--hide-infra" => options.hide_infra = true,
             "--tree" => options.tree = true,
             "--no-docker" => options.no_docker = true,
+            "-i" | "--interactive" => options.interactive = true,
             "--interval-ms" => {
                 let value = args.next().ok_or("--interval-ms requires a value")?;
                 let millis = value.parse::<u64>()?;
@@ -360,9 +367,9 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
 fn print_help() {
     println!(
         "wsltop 0.1.0\n\n\
-Unified Windows/WSL/WSLC/Docker CPU monitor (Phase 4)\n\n\
+Unified Windows/WSL/WSLC/Docker CPU monitor (Phase 5)\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --tree                 Emit the WSL/WSLC CPU attribution tree\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat output\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table\n    --tree                 Emit the WSL/WSLC CPU attribution tree\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat output\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
     );
 }
 

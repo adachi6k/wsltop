@@ -1,4 +1,4 @@
-# Architecture (Phase 4)
+# Architecture (Phase 5)
 
 ## Goal
 
@@ -114,7 +114,11 @@ Phase 4 enumerates running distributions with `wsl.exe --list --running --quiet`
 
 WSLC stats remain limited to the current/default CLI session. Multiple `vmmemwslc-*` hosts are represented but containers are attached only with a unique mapping; ambiguity remains explicit and unresolved.
 
-Phase 4 intentionally does **not** solve:
+### Interactive terminal UI
+
+Phase 5 uses ratatui with the crossterm backend. `src/tui.rs` owns navigation/toggle state and rendering. Refreshes invoke the same executable's one-shot flat or tree renderer, keeping collector behavior and accounting in one implementation rather than duplicating it in the UI. The child never receives `--interactive`, so recursion is impossible. A drop guard restores raw mode, the alternate screen, and cursor visibility on normal exit or propagated errors.
+
+Phase 5 intentionally does **not** solve:
 
 - Docker processes that cannot be exposed as host PIDs by the active daemon
 - explanation of the components inside the `unattributed` bucket

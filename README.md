@@ -6,9 +6,9 @@ The core use case is:
 
 > Windows Task Manager says WSL is busy. Which Windows, WSL, or WSLC workload is actually using the host CPU?
 
-## Phase 4
+## Phase 5
 
-Phase 4 discovers all running WSL distributions. The current distro keeps the fast direct `/proc` collector; additional distros are sampled through `wsl.exe -d <name>`. Their resources carry an optional `source` field and display as `[distro] command`.
+Phase 5 adds an interactive `top`-style terminal UI while preserving every one-shot, table, tree, and JSON interface. It continuously resamples the unified Windows/WSL/WSLC/Docker view.
 
 All rows use the same host-wide CPU scale:
 
@@ -60,6 +60,7 @@ Useful options:
 ./target/release/wsltop --tree
 ./target/release/wsltop --tree --json
 ./target/release/wsltop --no-docker
+./target/release/wsltop --interactive
 ```
 
 `--show-wsl-host` exposes `vmmem`, `vmmemWSL`, and `vmmemwslc-*`. Those rows overlap with WSL/WSLC workloads and must not be summed with their child workloads.
@@ -90,6 +91,10 @@ The current/default WSLC CLI session is mapped only when exactly one `vmmemwslc-
 
 Docker is auto-detected through `docker stats --no-stream --no-trunc`. Docker's container CPU percentage is divided by the Windows logical CPU count. Phase 3 uses `docker top -eo pid` to associate host-visible WSL PIDs with each container. Associated processes move below the container in tree output and are not also shown directly below the WSL VM. Use `--no-docker` to disable collection. A missing CLI or unavailable daemon is treated as “no Docker resources”.
 
+### Interactive controls
+
+`wsltop --interactive` (or `-i`) opens the alternate-screen TUI. `q`/Esc exits, arrows and PageUp/PageDown scroll, `t` switches flat/tree view, `i` toggles infrastructure rows, and `h` toggles raw WSL host rows. The selected `--interval-ms` controls sampling. Terminal raw mode and the alternate screen are restored on normal exit and errors.
+
 ## CPU semantics
 
 The display intentionally uses the Windows Task Manager style host scale:
@@ -113,7 +118,7 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - [x] Phase 2: Docker container stats
 - [x] Phase 3: Docker process attribution
 - [x] Phase 4: multiple WSL distros and ambiguity-safe WSLC sessions
-- [ ] Phase 5: interactive ratatui TUI
+- [x] Phase 5: interactive ratatui TUI
 - [ ] Phase 6: optional Windows GUI
 
 ## Current limitations
