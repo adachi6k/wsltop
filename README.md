@@ -88,7 +88,7 @@ The tree is CPU-only. `unattributed = max(host CPU - known children CPU, 0)`. Ch
 
 The current/default WSLC CLI session is mapped only when exactly one `vmmemwslc-*` host is available. With zero or multiple candidates, wsltop reports the mapping as unresolved instead of guessing; normal flat container output remains available.
 
-Docker is auto-detected through `docker stats --no-stream --no-trunc`. Docker's container CPU percentage is divided by the Windows logical CPU count. Phase 2 does not attribute Docker processes or add Docker to the WSL/WSLC tree; that remains Phase 3. Use `--no-docker` to disable collection. An unavailable daemon produces a warning without preventing other collectors from reporting.
+Docker is auto-detected through `docker stats --no-stream --no-trunc`. Docker's container CPU percentage is divided by the Windows logical CPU count. Phase 2 does not attribute Docker processes or add Docker to the WSL/WSLC tree; that remains Phase 3. Use `--no-docker` to disable collection. A missing CLI or unavailable daemon is treated as “no Docker resources”; unexpected command and data errors warn without preventing other collectors from reporting.
 
 ## CPU semantics
 

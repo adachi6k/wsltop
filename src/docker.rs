@@ -35,6 +35,9 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
         Err(error) => return Err(error.into()),
     };
     if !output.status.success() {
+        if daemon_unavailable(&output.stderr) {
+            return Ok(Vec::new());
+        }
         return Err(format!(
             "docker stats failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -42,6 +45,14 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
         .into());
     }
     parse_stats(&output.stdout, host_logical_cpu_count)
+}
+
+fn daemon_unavailable(stderr: &[u8]) -> bool {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    message.contains("failed to connect to the docker api")
+        || message.contains("cannot connect to the docker daemon")
+        || message.contains("error during connect")
+        || message.contains("is the docker daemon running")
 }
 
 fn parse_stats(input: &[u8], host_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
@@ -95,7 +106,7 @@ fn parse_memory(value: &str) -> Result<u64, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_stats;
+    use super::{daemon_unavailable, parse_stats};
     use crate::model::{EnvironmentKind, ResourceKind};
 
     #[test]
@@ -108,5 +119,17 @@ mod tests {
         assert_eq!(rows[0].kind, ResourceKind::Container);
         assert_eq!(rows[0].cpu_percent, 2.0);
         assert_eq!(rows[0].memory_bytes, 13_107_200);
+    }
+
+    #[test]
+    fn recognizes_unavailable_docker_daemon_messages() {
+        for message in [
+            "failed to connect to the docker API at unix:///var/run/docker.sock",
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+            "error during connect: this error may indicate that the docker daemon is not running",
+        ] {
+            assert!(daemon_unavailable(message.as_bytes()));
+        }
+        assert!(!daemon_unavailable(b"docker stats: unknown flag --bad"));
     }
 }

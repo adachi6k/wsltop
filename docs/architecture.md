@@ -60,7 +60,7 @@ The WSLC collector is optional. If `wslc.exe` is not installed, monitoring conti
 
 ### Docker collector
 
-Runs `docker stats --no-stream --no-trunc --format '{{json .}}'` and reads one JSON object per running container. `ID`, `Name`, `CPUPerc`, and the used portion of `MemUsage` become `Docker`/`container` resources. CPU is normalized by the Windows logical CPU count. Missing Docker CLI returns no rows; daemon and command failures warn without stopping other collectors. `--no-docker` disables collection.
+Runs `docker stats --no-stream --no-trunc --format '{{json .}}'` and reads one JSON object per running container. `ID`, `Name`, `CPUPerc`, and the used portion of `MemUsage` become `Docker`/`container` resources. CPU is normalized by the Windows logical CPU count. A missing CLI or unavailable daemon quietly returns no rows; unexpected command or data failures warn without stopping other collectors. `--no-docker` disables collection.
 
 Docker rows are currently flat-only. They are not inserted into the WSL/WSLC attribution tree because Docker process/host attribution belongs to Phase 3.
 
