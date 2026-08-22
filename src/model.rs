@@ -3,10 +3,20 @@ use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
-#[serde(rename_all = "lowercase")]
 pub enum EnvironmentKind {
+    #[serde(rename = "windows")]
     Windows,
+    #[serde(rename = "wsl")]
     Wsl,
+    #[serde(rename = "wslc")]
+    WslContainer,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceKind {
+    Process,
+    Container,
 }
 
 #[derive(Debug, Clone, Eq)]
@@ -53,9 +63,14 @@ pub struct WindowsSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ProcessUsage {
+pub struct ResourceUsage {
     pub environment: EnvironmentKind,
-    pub pid: u32,
+    pub kind: ResourceKind,
+    /// Stable identifier in the resource's native namespace.
+    /// Processes use their decimal PID; containers use their full container ID.
+    pub id: String,
+    /// Present for process rows and null for non-process resources.
+    pub pid: Option<u32>,
     pub name: String,
     pub cpu_percent: f64,
     pub memory_bytes: u64,

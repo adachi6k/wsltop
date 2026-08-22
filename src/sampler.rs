@@ -1,12 +1,15 @@
-use crate::model::{ProcessSample, ProcessUsage, Snapshot};
+use crate::model::{ProcessSample, ResourceKind, ResourceUsage, Snapshot};
 use std::collections::HashMap;
 
 pub fn calculate_usage(
     before: &Snapshot,
     after: &Snapshot,
     host_logical_cpu_count: u32,
-) -> Vec<ProcessUsage> {
-    let elapsed = after.captured_at.duration_since(before.captured_at).as_secs_f64();
+) -> Vec<ResourceUsage> {
+    let elapsed = after
+        .captured_at
+        .duration_since(before.captured_at)
+        .as_secs_f64();
     if elapsed <= 0.0 || host_logical_cpu_count == 0 {
         return Vec::new();
     }
@@ -42,10 +45,12 @@ pub fn calculate_usage(
     result
 }
 
-fn to_usage(sample: &ProcessSample, cpu_percent: f64) -> ProcessUsage {
-    ProcessUsage {
+fn to_usage(sample: &ProcessSample, cpu_percent: f64) -> ResourceUsage {
+    ResourceUsage {
         environment: sample.key.environment,
-        pid: sample.key.pid,
+        kind: ResourceKind::Process,
+        id: sample.key.pid.to_string(),
+        pid: Some(sample.key.pid),
         name: sample.name.clone(),
         cpu_percent,
         memory_bytes: sample.memory_bytes,

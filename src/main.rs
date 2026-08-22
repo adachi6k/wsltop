@@ -2,8 +2,9 @@ mod linux;
 mod model;
 mod sampler;
 mod windows;
+mod wslc;
 
-use crate::model::{EnvironmentKind, ProcessUsage};
+use crate::model::{EnvironmentKind, ResourceUsage};
 use std::cmp::Ordering;
 use std::env;
 use std::error::Error;
@@ -17,6 +18,7 @@ struct Options {
     json: bool,
     show_wsl_host: bool,
     wsl_only: bool,
+    no_wslc: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -61,6 +63,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         ));
     }
 
+    if !options.wsl_only && !options.no_wslc {
+        match wslc::usage(host_cpu_count) {
+            Ok(rows) => usage.extend(rows),
+            Err(e) => eprintln!("warning: WSLC collector unavailable: {e}"),
+        }
+    }
+
     usage.sort_by(|a, b| {
         b.cpu_percent
             .partial_cmp(&a.cpu_percent)
@@ -78,7 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn print_table(rows: &[ProcessUsage], host_cpu_count: u32, wsl_only: bool) {
+fn print_table(rows: &[ResourceUsage], host_cpu_count: u32, wsl_only: bool) {
     if wsl_only {
         eprintln!(
             "warning: --wsl-only uses the WSL-visible logical CPU count ({host_cpu_count}); host-normalized CPU% requires Windows interop"
@@ -86,18 +95,28 @@ fn print_table(rows: &[ProcessUsage], host_cpu_count: u32, wsl_only: bool) {
     }
 
     println!("Host logical CPUs: {host_cpu_count}");
-    println!("{:<7} {:>7} {:>9} {:>8}  {}", "ENV", "CPU%", "MEM", "PID", "COMMAND");
-    println!("{}", "-".repeat(68));
+    println!(
+        "{:<7} {:>7} {:>9} {:>12} COMMAND",
+        "ENV", "CPU%", "MEM", "ID/PID"
+    );
+    println!("{}", "-".repeat(74));
 
     for row in rows {
         println!(
-            "{:<7} {:>6.2}% {:>9} {:>8}  {}",
+            "{:<7} {:>6.2}% {:>9} {:>12}  {}",
             env_name(row.environment),
             row.cpu_percent,
             format_bytes(row.memory_bytes),
-            row.pid,
+            display_id(row),
             row.name
         );
+    }
+}
+
+fn display_id(row: &ResourceUsage) -> String {
+    match row.pid {
+        Some(pid) => pid.to_string(),
+        None => row.id.chars().take(12).collect(),
     }
 }
 
@@ -105,6 +124,7 @@ fn env_name(environment: EnvironmentKind) -> &'static str {
     match environment {
         EnvironmentKind::Windows => "Windows",
         EnvironmentKind::Wsl => "WSL",
+        EnvironmentKind::WslContainer => "WSLC",
     }
 }
 
@@ -132,6 +152,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
         json: false,
         show_wsl_host: false,
         wsl_only: false,
+        no_wslc: false,
     };
 
     let mut args = env::args().skip(1);
@@ -141,6 +162,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             "--json" => options.json = true,
             "--show-wsl-host" => options.show_wsl_host = true,
             "--wsl-only" => options.wsl_only = true,
+            "--no-wslc" => options.no_wslc = true,
             "--interval-ms" => {
                 let value = args.next().ok_or("--interval-ms requires a value")?;
                 let millis = value.parse::<u64>()?;
@@ -167,8 +189,8 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
 fn print_help() {
     println!(
         "wsltop 0.1.0\n\n\
-Unified Windows/WSL process CPU monitor (Phase 0)\n\n\
+Unified Windows/WSL/WSLC CPU monitor (Phase 0.1)\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --limit N              Show at most N processes [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include vmmem/vmmemWSL Windows rows (double-counts WSL)\n    --wsl-only             Skip Windows collector; CPU% is not host-normalized if WSL CPU-limited\n    -h, --help             Show this help\n"
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --limit N              Show at most N resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include vmmem/vmmemWSL/vmmemwslc-* rows (double-counts WSL/WSLC)\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    -h, --help             Show this help\n"
     );
 }

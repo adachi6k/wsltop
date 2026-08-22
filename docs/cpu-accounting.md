@@ -8,9 +8,9 @@ All normal output uses the Windows-host capacity scale:
 all host logical CPUs fully busy = 100%
 ```
 
-This deliberately differs from traditional Linux `top`, where one fully busy logical CPU is normally shown as 100%.
+This deliberately differs from traditional Linux/container tooling where one fully busy logical CPU is commonly shown as 100%.
 
-## Formula
+## Windows and WSL process formula
 
 For a process sampled twice:
 
@@ -23,11 +23,26 @@ CPU% = delta(process CPU seconds)
 Example for a 16-logical-CPU Windows host:
 
 ```text
-process CPU increases by 4.0 s over 1.0 s
-CPU% = 4.0 / (1.0 * 16) * 100 = 25%
+process CPU increases by 1.0 s over 1.0 s
+CPU% = 1.0 / (1.0 * 16) * 100 = 6.25%
 ```
 
-This lets Windows and WSL workloads appear in one sorted list without changing interpretation by environment.
+## WSLC container formula
+
+`wslc stats` reports a native CPU percentage such as `100.29%`. Phase 0.1 interprets this using the common container convention where one fully busy logical CPU is approximately 100%, then normalizes it to the Windows-host scale:
+
+```text
+wsltop WSLC CPU% = wslc CPUPerc / host logical CPUs
+```
+
+For a 16-logical-CPU host:
+
+```text
+wslc CPUPerc = 100.29%
+wsltop CPU%  = 100.29 / 16 = 6.27%
+```
+
+This assumption must be validated against Windows Task Manager and the corresponding `vmmemwslc-*` host process before it is considered stable.
 
 ## WSL processor limits
 
@@ -54,32 +69,20 @@ The process identity is `(environment, pid, starttime)` so PID reuse does not pr
 
 PowerShell `Get-Process` exposes cumulative process CPU time in seconds through the `CPU` property. The sampler differences this value between snapshots.
 
-Phase 0 uses `(environment, pid)` as the Windows process identity. Protected process metadata can make start-time enumeration unreliable. If cumulative CPU time decreases, the sample is discarded as a likely PID reuse/reset event.
+Windows process identity is currently `(environment, pid)`. If cumulative CPU time decreases, the sample is discarded as a likely PID reuse/reset event.
 
 ## Idle process
 
 Windows `Idle` must not be treated as a normal busy process. Its CPU time grows while processors are idle, so it is filtered from the Windows collector.
 
-## WSL host process and double counting
+## WSL/WSLC host processes and double counting
 
-A row such as `VmmemWSL` represents aggregate WSL VM consumption. WSL process rows represent work inside that aggregate.
+Rows such as `VmmemWSL` and `vmmemwslc-*` represent aggregate VM/session consumption. WSL process and WSLC container rows represent work inside those aggregates.
 
-Therefore this is invalid as a flat sum:
+Therefore host rows and child workload rows must not be flat-summed.
 
-```text
-VmmemWSL      40%
-verilator     20%
-cc1plus       10%
-```
+Phase 0.1 hides these host rows by default. Phase 1 will introduce resource-attribution trees with an explicit `unattributed` bucket for kernel work, infrastructure, virtualization overhead, and sampling skew.
 
-The 20% and 10% are already part of the 40%.
+## Memory accounting
 
-Phase 0 hides `vmmem`/`vmmemWSL` by default. Phase 1 will introduce a resource-attribution tree such as:
-
-```text
-WSL VM              40%
-+- known processes  36%
-`- unattributed      4%
-```
-
-`unattributed` is intentional and may contain Linux kernel work, WSL infrastructure, virtualization overhead, and sampling skew.
+Windows `WorkingSet64` and WSLC `MemUsage` do not necessarily have matching accounting semantics. Phase 0.1 displays both but does not subtract container memory from `vmmemwslc-*` working set or label the difference as overhead.

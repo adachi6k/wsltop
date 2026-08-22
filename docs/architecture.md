@@ -1,93 +1,83 @@
-# Architecture (Phase 0)
+# Architecture (Phase 0.1)
 
 ## Goal
 
-Provide a single WSL command that ranks Windows-native and current-WSL processes by CPU consumption on one comparable scale.
-
-The user question is intentionally simple:
-
-> `VmmemWSL` is busy. Which actual workload is responsible?
-
-Phase 0 validates the cross-OS measurement path before adding Docker, multiple distros, TUI, or resource attribution.
+Provide a single WSL command that ranks Windows-native processes, current-WSL processes, and WSLC containers by CPU consumption on one comparable host-wide scale.
 
 ## Components
 
 ```text
-                    wsltop
-                      |
-          +-----------+-----------+
-          |                       |
-          v                       v
-  Linux collector         Windows collector
-      /proc/*                powershell.exe
-          |                       |
-          +-----------+-----------+
-                      |
-                      v
-                   sampler
-              cumulative CPU delta
-                      |
-                      v
-                  normalizer
-         Windows host capacity = 100%
-                      |
-                      v
-                table / JSON
+                         wsltop
+                           |
+          +----------------+----------------+
+          |                |                |
+          v                v                v
+  Linux collector   Windows collector   WSLC collector
+      /proc/*         powershell.exe      wslc.exe
+          |                |             stats --json
+          |                |                |
+          +--------+-------+----------------+
+                   |
+                   v
+              normalizer
+      Windows host capacity = 100%
+                   |
+                   v
+             table / JSON
 ```
 
 ### Linux collector
 
-Reads the current distro's `/proc/<pid>/stat` and `/proc/<pid>/cmdline`.
-
-Collected fields:
-
-- PID
-- process start time (Linux jiffies, used as process identity)
-- user + system CPU time
-- resident set size
-- executable/command name
+Reads the current distro's `/proc/<pid>/stat` and `/proc/<pid>/cmdline` and records cumulative CPU time, RSS, PID, start time, and executable name.
 
 ### Windows collector
 
-Runs `powershell.exe` through WSL interop and collects `Get-Process` output.
+Runs `powershell.exe` through WSL interop and collects `Get-Process` output plus the Windows logical processor count.
 
-Collected fields:
+`Idle` is excluded. `vmmem`, `vmmemWSL`, and `vmmemwslc-*` are hidden by default because they overlap with WSL/WSLC workload rows.
 
-- PID
-- process name
-- cumulative CPU time (`CPU`)
-- working set
-- Windows logical processor count
+### WSLC collector
 
-`Idle` is excluded because its cumulative CPU time represents idle processor time, not busy processor time.
+Runs:
 
-`vmmem` and `vmmemWSL` are hidden by default in Phase 0. Showing those rows together with their WSL workload would double-count the same resource consumption.
+```text
+wslc.exe stats --format json --no-trunc
+```
 
-### Sampler
+The JSON schema observed with WSLC 2.9.4 contains `ID`, `Name`, `CPUPerc`, `MemUsage`, `NetIO`, `BlockIO`, and `PIDs`.
 
-Each collector takes two snapshots separated by the configured interval. CPU usage is computed from the delta in cumulative CPU time.
+Phase 0.1 uses:
 
-Linux and Windows snapshot timestamps are kept separately so PowerShell startup/collection overhead does not corrupt the sampling interval of the other collector.
+- full container ID
+- container name
+- `CPUPerc`
+- used-memory portion of `MemUsage`
+
+The WSLC collector is optional. If `wslc.exe` is not installed, monitoring continues with Windows + WSL only.
+
+### Resource model
+
+Phase 0 used a process-only output model. Phase 0.1 generalizes the final row into `ResourceUsage` so a row can represent either a process or a container while preserving `pid` for process consumers.
 
 ## Scope boundaries
 
-Phase 0 intentionally does **not** solve:
+Phase 0.1 intentionally does **not** solve:
 
+- attribution of `vmmemWSL` or `vmmemwslc-*` to children
+- multiple WSLC sessions
 - Docker containers/processes
 - multiple WSL distributions
-- exact `VmmemWSL` attribution
 - kernel/virtualization overhead attribution
 - disk/network/GPU accounting
 - interactive TUI
 
-Those belong to later phases after the fundamental CPU normalization is validated against Windows Task Manager.
-
 ## Roadmap
 
 1. Phase 0: current WSL distro + Windows native processes
-2. Phase 1: `VmmemWSL` attribution and `unattributed` bucket
-3. Phase 2: Docker container statistics
-4. Phase 3: Docker process attribution
-5. Phase 4: multiple WSL distros
-6. Phase 5: ratatui interactive UI
-7. Phase 6: optional Windows GUI
+2. Phase 0.1: current WSLC CLI-session container statistics
+3. Phase 1: WSL/WSLC host attribution and `unattributed` buckets
+4. Phase 2: Docker container statistics
+5. Phase 3: Docker process attribution
+6. Phase 4: multiple WSL distros and WSLC sessions
+7. Phase 5: ratatui interactive UI
+8. Phase 6: optional Windows GUI
