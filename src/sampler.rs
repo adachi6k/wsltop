@@ -48,6 +48,7 @@ pub fn calculate_usage(
 fn to_usage(sample: &ProcessSample, cpu_percent: f64) -> ResourceUsage {
     ResourceUsage {
         environment: sample.key.environment,
+        source: sample.key.source.clone(),
         kind: classify_process(sample),
         id: sample.key.pid.to_string(),
         pid: Some(sample.key.pid),
@@ -85,6 +86,7 @@ mod tests {
         ProcessSample {
             key: ProcessKey {
                 environment,
+                source: None,
                 pid: 1,
                 start_id: 1,
             },

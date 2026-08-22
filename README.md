@@ -6,9 +6,9 @@ The core use case is:
 
 > Windows Task Manager says WSL is busy. Which Windows, WSL, or WSLC workload is actually using the host CPU?
 
-## Phase 3
+## Phase 4
 
-Phase 3 maps Docker container host PIDs back to WSL processes and nests them below their container in `--tree`. Flat table and flat JSON remain unchanged.
+Phase 4 discovers all running WSL distributions. The current distro keeps the fast direct `/proc` collector; additional distros are sampled through `wsl.exe -d <name>`. Their resources carry an optional `source` field and display as `[distro] command`.
 
 All rows use the same host-wide CPU scale:
 
@@ -112,7 +112,7 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - [ ] Validate Phase 0.1 WSLC CPU normalization against Task Manager
 - [x] Phase 2: Docker container stats
 - [x] Phase 3: Docker process attribution
-- [ ] Phase 4: multiple WSL distros and WSLC sessions
+- [x] Phase 4: multiple WSL distros and ambiguity-safe WSLC sessions
 - [ ] Phase 5: interactive ratatui TUI
 - [ ] Phase 6: optional Windows GUI
 
@@ -120,7 +120,7 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 
 - PowerShell is started once per Windows snapshot; collector latency means Phase 1 attribution is best-effort rather than strict accounting.
 - Windows PID reuse is detected only indirectly (negative cumulative CPU delta). Linux uses PID + starttime.
-- Phase 0.1 reads WSLC containers from the current/default WSLC CLI session only.
+- WSLC 2.9.x exposes stats for the current/default CLI session only. If multiple `vmmemwslc-*` hosts exist, mapping remains unresolved rather than guessed.
 - Multiple WSLC host candidates are deliberately left unresolved; session identity is not guessed.
 - Memory is not attributed. WSLC `MemUsage` and Windows host `WorkingSet64` use different accounting semantics and are never subtracted.
 - Docker PID mapping depends on the active daemon exposing host PIDs through `docker top`; other WSL distros are intentionally not included yet.

@@ -1,4 +1,4 @@
-# Architecture (Phase 3)
+# Architecture (Phase 4)
 
 ## Goal
 
@@ -108,11 +108,15 @@ Memory is intentionally absent from attribution arithmetic. Windows `WorkingSet6
 
 ## Scope boundaries
 
-Phase 3 intentionally does **not** solve:
+### Multiple WSL distributions
 
-- multiple WSLC sessions
+Phase 4 enumerates running distributions with `wsl.exe --list --running --quiet`. The current distribution continues to use direct `/proc`; each additional distribution is sampled with `wsl.exe -d <name>` and tagged through the optional `source` field. Process identity includes this source, preventing identical PIDs across distributions from colliding. Remote collection is best-effort and adds timing skew.
+
+WSLC stats remain limited to the current/default CLI session. Multiple `vmmemwslc-*` hosts are represented but containers are attached only with a unique mapping; ambiguity remains explicit and unresolved.
+
+Phase 4 intentionally does **not** solve:
+
 - Docker processes that cannot be exposed as host PIDs by the active daemon
-- multiple WSL distributions
 - explanation of the components inside the `unattributed` bucket
 - disk/network/GPU accounting
 - interactive TUI

@@ -64,6 +64,7 @@ fn read_process(pid: u32, clock_ticks: f64, page_size: u64) -> io::Result<Proces
     Ok(ProcessSample {
         key: ProcessKey {
             environment: EnvironmentKind::Wsl,
+            source: None,
             pid,
             start_id: starttime,
         },

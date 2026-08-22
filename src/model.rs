@@ -37,6 +37,7 @@ impl ResourceKind {
 #[derive(Debug, Clone, Eq)]
 pub struct ProcessKey {
     pub environment: EnvironmentKind,
+    pub source: Option<String>,
     pub pid: u32,
     pub start_id: u64,
 }
@@ -44,6 +45,7 @@ pub struct ProcessKey {
 impl PartialEq for ProcessKey {
     fn eq(&self, other: &Self) -> bool {
         self.environment == other.environment
+            && self.source == other.source
             && self.pid == other.pid
             && self.start_id == other.start_id
     }
@@ -52,6 +54,7 @@ impl PartialEq for ProcessKey {
 impl Hash for ProcessKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.environment.hash(state);
+        self.source.hash(state);
         self.pid.hash(state);
         self.start_id.hash(state);
     }
@@ -80,6 +83,8 @@ pub struct WindowsSnapshot {
 #[derive(Debug, Clone, Serialize)]
 pub struct ResourceUsage {
     pub environment: EnvironmentKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub kind: ResourceKind,
     /// Stable identifier in the resource's native namespace.
     /// Processes use their decimal PID; containers use their full container ID.

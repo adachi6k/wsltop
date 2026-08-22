@@ -2,6 +2,7 @@ mod attribution;
 mod docker;
 mod linux;
 mod model;
+mod multiwsl;
 mod sampler;
 mod windows;
 mod wslc;
@@ -30,6 +31,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_args()?;
 
     let linux_before = linux::snapshot()?;
+    let extra_wsl_before = if options.wsl_only {
+        Vec::new()
+    } else {
+        multiwsl::snapshots().unwrap_or_else(|error| {
+            eprintln!("warning: additional WSL distro discovery unavailable: {error}");
+            Vec::new()
+        })
+    };
     let windows_before = if options.wsl_only {
         None
     } else {
@@ -39,6 +48,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     thread::sleep(options.interval);
 
     let linux_after = linux::snapshot()?;
+    let extra_wsl_after = if options.wsl_only {
+        Vec::new()
+    } else {
+        multiwsl::snapshots().unwrap_or_else(|error| {
+            eprintln!("warning: additional WSL distro discovery unavailable: {error}");
+            Vec::new()
+        })
+    };
     let windows_after = if options.wsl_only {
         None
     } else {
@@ -52,7 +69,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or(1),
     };
 
-    let linux_usage = sampler::calculate_usage(&linux_before, &linux_after, host_cpu_count);
+    let mut linux_usage = sampler::calculate_usage(&linux_before, &linux_after, host_cpu_count);
+    for (name, before) in &extra_wsl_before {
+        if let Some((_, after)) = extra_wsl_after
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+        {
+            linux_usage.extend(sampler::calculate_usage(before, after, host_cpu_count));
+        }
+    }
     let mut windows_usage = Vec::new();
 
     if let (Some(before), Some(after)) = (&windows_before, &windows_after) {
@@ -170,7 +195,7 @@ fn print_tree(tree: &attribution::AttributionTree, wsl_only: bool) {
             println!(
                 "|- {:<10} {:<27} {:>7.2}%",
                 child.kind.as_str(),
-                child.name,
+                display_name(child),
                 child.cpu_percent
             );
             if child.environment == EnvironmentKind::Docker {
@@ -211,7 +236,7 @@ fn print_tree(tree: &attribution::AttributionTree, wsl_only: bool) {
             println!(
                 "   {:<10} {:<27} {:>7.2}%",
                 child.kind.as_str(),
-                child.name,
+                display_name(child),
                 child.cpu_percent
             );
         }
@@ -240,9 +265,16 @@ fn print_table(rows: &[ResourceUsage], host_cpu_count: u32, wsl_only: bool) {
             row.cpu_percent,
             format_bytes(row.memory_bytes),
             display_id(row),
-            row.name
+            display_name(row)
         );
     }
+}
+
+fn display_name(row: &ResourceUsage) -> String {
+    row.source.as_ref().map_or_else(
+        || row.name.clone(),
+        |source| format!("[{source}] {}", row.name),
+    )
 }
 
 fn display_id(row: &ResourceUsage) -> String {
@@ -328,7 +360,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
 fn print_help() {
     println!(
         "wsltop 0.1.0\n\n\
-Unified Windows/WSL/WSLC/Docker CPU monitor (Phase 2)\n\n\
+Unified Windows/WSL/WSLC/Docker CPU monitor (Phase 4)\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
 OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --tree                 Emit the WSL/WSLC CPU attribution tree\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat output\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
     );
@@ -342,6 +374,7 @@ mod tests {
     fn resource(environment: EnvironmentKind, kind: ResourceKind, name: &str) -> ResourceUsage {
         ResourceUsage {
             environment,
+            source: None,
             kind,
             id: name.to_string(),
             pid: Some(1),

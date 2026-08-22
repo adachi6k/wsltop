@@ -71,6 +71,7 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
 
         result.push(ResourceUsage {
             environment: EnvironmentKind::WslContainer,
+            source: None,
             kind: ResourceKind::Container,
             id: container.id,
             pid: None,

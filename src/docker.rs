@@ -87,6 +87,7 @@ fn parse_stats(input: &[u8], host_cpu_count: u32) -> Result<Vec<ResourceUsage>, 
             let raw: RawDockerStat = serde_json::from_str(line)?;
             Ok(ResourceUsage {
                 environment: EnvironmentKind::Docker,
+                source: None,
                 kind: ResourceKind::Container,
                 id: raw.id,
                 pid: None,

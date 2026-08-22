@@ -214,6 +214,7 @@ mod tests {
     fn resource(kind: ResourceKind, name: &str, cpu_percent: f64) -> ResourceUsage {
         ResourceUsage {
             environment: EnvironmentKind::Wsl,
+            source: None,
             kind,
             id: name.to_string(),
             pid: Some(1),

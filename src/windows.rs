@@ -75,6 +75,7 @@ $items = @(Get-Process | ForEach-Object {
         processes.push(ProcessSample {
             key: ProcessKey {
                 environment: EnvironmentKind::Windows,
+                source: None,
                 pid: process.pid,
                 // Phase 0 does not request StartTime because access can fail for protected
                 // processes. A negative CPU delta is treated as PID reuse by the sampler.
