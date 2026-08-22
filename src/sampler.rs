@@ -48,11 +48,62 @@ pub fn calculate_usage(
 fn to_usage(sample: &ProcessSample, cpu_percent: f64) -> ResourceUsage {
     ResourceUsage {
         environment: sample.key.environment,
-        kind: ResourceKind::Process,
+        kind: classify_process(sample),
         id: sample.key.pid.to_string(),
         pid: Some(sample.key.pid),
         name: sample.name.clone(),
         cpu_percent,
         memory_bytes: sample.memory_bytes,
+    }
+}
+
+fn classify_process(sample: &ProcessSample) -> ResourceKind {
+    if sample.key.environment == crate::model::EnvironmentKind::Wsl
+        && sample.name.eq_ignore_ascii_case("plan9")
+    {
+        ResourceKind::Infra
+    } else {
+        ResourceKind::Process
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_process;
+    use crate::model::{EnvironmentKind, ProcessKey, ProcessSample, ResourceKind};
+
+    fn sample(environment: EnvironmentKind, name: &str) -> ProcessSample {
+        ProcessSample {
+            key: ProcessKey {
+                environment,
+                pid: 1,
+                start_id: 1,
+            },
+            name: name.to_string(),
+            cpu_time_secs: 0.0,
+            memory_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn classifies_only_wsl_plan9_as_infra() {
+        assert_eq!(
+            classify_process(&sample(EnvironmentKind::Wsl, "plan9")),
+            ResourceKind::Infra
+        );
+        assert_eq!(
+            classify_process(&sample(EnvironmentKind::Windows, "plan9")),
+            ResourceKind::Process
+        );
+    }
+
+    #[test]
+    fn keeps_wsl_init_and_systemd_as_processes() {
+        for name in ["init", "systemd"] {
+            assert_eq!(
+                classify_process(&sample(EnvironmentKind::Wsl, name)),
+                ResourceKind::Process
+            );
+        }
     }
 }

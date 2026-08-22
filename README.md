@@ -6,20 +6,21 @@ The core use case is:
 
 > Windows Task Manager says WSL is busy. Which Windows, WSL, or WSLC workload is actually using the host CPU?
 
-## Phase 0.1
+## Phase 0.2
 
-Phase 0 validated Windows-native and current-WSL process collection on a real 16-logical-CPU WSL2 host. Phase 0.1 adds automatic WSL Containers (WSLC) discovery through `wslc.exe stats --format json --no-trunc`.
+Phase 0 validated Windows-native and current-WSL process collection on a real 16-logical-CPU WSL2 host. Phase 0.1 added automatic WSL Containers (WSLC) discovery through `wslc.exe stats --format json --no-trunc`. Phase 0.2 classifies every row as `process`, `container`, or `infra`.
 
 All rows use the same host-wide CPU scale:
 
 ```text
 Host logical CPUs: 16
-ENV        CPU%       MEM       ID/PID  COMMAND
---------------------------------------------------------------------------
-WSLC       6.27%     1.04G  5a489c3faa3d  misty_beartooth
-WSLC       6.24%     1.04G  986c5523ef5c  mossy_sangre
-Windows    1.08%      141M         31460  Taskmgr
-WSL        0.10%      296M           311  codex
+ENV     TYPE         CPU%       MEM       ID/PID  COMMAND
+------------------------------------------------------------------------------------
+WSLC    container   6.27%     1.04G  5a489c3faa3d  misty_beartooth
+WSLC    container   6.24%     1.04G  986c5523ef5c  mossy_sangre
+Windows process     1.08%      141M         31460  Taskmgr
+WSL     process     0.10%      296M           311  codex
+WSL     infra       0.01%        2M           104  plan9
 ```
 
 ## Requirements
@@ -54,9 +55,12 @@ Useful options:
 ./target/release/wsltop --show-wsl-host
 ./target/release/wsltop --wsl-only
 ./target/release/wsltop --no-wslc
+./target/release/wsltop --hide-infra
 ```
 
 `--show-wsl-host` exposes `vmmem`, `vmmemWSL`, and `vmmemwslc-*`. Those rows overlap with WSL/WSLC workloads and must not be summed with their child workloads.
+
+Windows and ordinary WSL processes are `process`, WSLC rows are `container`, and the WSL `plan9` process is `infra`. `init` and `systemd` remain `process`. `--hide-infra` removes `infra` rows from table and JSON output. JSON rows expose the classification in the existing `kind` field, for example `"kind": "infra"`.
 
 ## CPU semantics
 
@@ -75,6 +79,7 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - [x] Phase 0: Windows + current WSL process merge
 - [x] Validate Phase 0 on a real WSL2 host
 - [x] Phase 0.1 design: WSLC JSON schema and host-process recognition
+- [x] Phase 0.2: resource type classification and infrastructure filtering
 - [ ] Validate Phase 0.1 WSLC CPU normalization against Task Manager
 - [ ] Phase 1: WSL/WSLC VM attribution + `unattributed`
 - [ ] Phase 2: Docker container stats

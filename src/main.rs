@@ -4,7 +4,7 @@ mod sampler;
 mod windows;
 mod wslc;
 
-use crate::model::{EnvironmentKind, ResourceUsage};
+use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
 use std::cmp::Ordering;
 use std::env;
 use std::error::Error;
@@ -19,6 +19,7 @@ struct Options {
     show_wsl_host: bool,
     wsl_only: bool,
     no_wslc: bool,
+    hide_infra: bool,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -70,6 +71,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    if options.hide_infra {
+        usage.retain(|row| row.kind != ResourceKind::Infra);
+    }
+
     usage.sort_by(|a, b| {
         b.cpu_percent
             .partial_cmp(&a.cpu_percent)
@@ -96,15 +101,16 @@ fn print_table(rows: &[ResourceUsage], host_cpu_count: u32, wsl_only: bool) {
 
     println!("Host logical CPUs: {host_cpu_count}");
     println!(
-        "{:<7} {:>7} {:>9} {:>12} COMMAND",
-        "ENV", "CPU%", "MEM", "ID/PID"
+        "{:<7} {:<9} {:>7} {:>9} {:>12} COMMAND",
+        "ENV", "TYPE", "CPU%", "MEM", "ID/PID"
     );
-    println!("{}", "-".repeat(74));
+    println!("{}", "-".repeat(84));
 
     for row in rows {
         println!(
-            "{:<7} {:>6.2}% {:>9} {:>12}  {}",
+            "{:<7} {:<9} {:>6.2}% {:>9} {:>12}  {}",
             env_name(row.environment),
+            row.kind.as_str(),
             row.cpu_percent,
             format_bytes(row.memory_bytes),
             display_id(row),
@@ -153,6 +159,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
         show_wsl_host: false,
         wsl_only: false,
         no_wslc: false,
+        hide_infra: false,
     };
 
     let mut args = env::args().skip(1);
@@ -163,6 +170,7 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             "--show-wsl-host" => options.show_wsl_host = true,
             "--wsl-only" => options.wsl_only = true,
             "--no-wslc" => options.no_wslc = true,
+            "--hide-infra" => options.hide_infra = true,
             "--interval-ms" => {
                 let value = args.next().ok_or("--interval-ms requires a value")?;
                 let millis = value.parse::<u64>()?;
@@ -189,8 +197,8 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
 fn print_help() {
     println!(
         "wsltop 0.1.0\n\n\
-Unified Windows/WSL/WSLC CPU monitor (Phase 0.1)\n\n\
+Unified Windows/WSL/WSLC CPU monitor (Phase 0.2)\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --limit N              Show at most N resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include vmmem/vmmemWSL/vmmemwslc-* rows (double-counts WSL/WSLC)\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    -h, --help             Show this help\n"
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    --json                 Emit JSON instead of a table\n    --limit N              Show at most N resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include vmmem/vmmemWSL/vmmemwslc-* rows (double-counts WSL/WSLC)\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
     );
 }

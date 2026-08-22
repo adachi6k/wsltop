@@ -17,6 +17,17 @@ pub enum EnvironmentKind {
 pub enum ResourceKind {
     Process,
     Container,
+    Infra,
+}
+
+impl ResourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Process => "process",
+            Self::Container => "container",
+            Self::Infra => "infra",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq)]
@@ -74,4 +85,17 @@ pub struct ResourceUsage {
     pub name: String,
     pub cpu_percent: f64,
     pub memory_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResourceKind;
+
+    #[test]
+    fn serializes_infra_kind_for_json_output() {
+        assert_eq!(
+            serde_json::to_string(&ResourceKind::Infra).unwrap(),
+            "\"infra\""
+        );
+    }
 }
