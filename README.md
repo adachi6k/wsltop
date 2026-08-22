@@ -6,9 +6,9 @@ The core use case is:
 
 > Windows Task Manager says WSL is busy. Which Windows, WSL, or WSLC workload is actually using the host CPU?
 
-## Phase 2
+## Phase 3
 
-Phase 2 adds optional Docker container statistics to the Phase 1 WSL/WSLC CPU attribution monitor. Docker rows use the same host-wide CPU scale and appear in flat table and flat JSON output.
+Phase 3 maps Docker container host PIDs back to WSL processes and nests them below their container in `--tree`. Flat table and flat JSON remain unchanged.
 
 All rows use the same host-wide CPU scale:
 
@@ -88,7 +88,7 @@ The tree is CPU-only. `unattributed = max(host CPU - known children CPU, 0)`. Ch
 
 The current/default WSLC CLI session is mapped only when exactly one `vmmemwslc-*` host is available. With zero or multiple candidates, wsltop reports the mapping as unresolved instead of guessing; normal flat container output remains available.
 
-Docker is auto-detected through `docker stats --no-stream --no-trunc`. Docker's container CPU percentage is divided by the Windows logical CPU count. Phase 2 does not attribute Docker processes or add Docker to the WSL/WSLC tree; that remains Phase 3. Use `--no-docker` to disable collection. A missing CLI or unavailable daemon is treated as “no Docker resources”; unexpected command and data errors warn without preventing other collectors from reporting.
+Docker is auto-detected through `docker stats --no-stream --no-trunc`. Docker's container CPU percentage is divided by the Windows logical CPU count. Phase 3 uses `docker top -eo pid` to associate host-visible WSL PIDs with each container. Associated processes move below the container in tree output and are not also shown directly below the WSL VM. Use `--no-docker` to disable collection. A missing CLI or unavailable daemon is treated as “no Docker resources”.
 
 ## CPU semantics
 
@@ -111,7 +111,7 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - [x] Phase 1: WSL/WSLC CPU host attribution tree
 - [ ] Validate Phase 0.1 WSLC CPU normalization against Task Manager
 - [x] Phase 2: Docker container stats
-- [ ] Phase 3: Docker process attribution
+- [x] Phase 3: Docker process attribution
 - [ ] Phase 4: multiple WSL distros and WSLC sessions
 - [ ] Phase 5: interactive ratatui TUI
 - [ ] Phase 6: optional Windows GUI
@@ -123,4 +123,4 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - Phase 0.1 reads WSLC containers from the current/default WSLC CLI session only.
 - Multiple WSLC host candidates are deliberately left unresolved; session identity is not guessed.
 - Memory is not attributed. WSLC `MemUsage` and Windows host `WorkingSet64` use different accounting semantics and are never subtracted.
-- Docker process attribution and other WSL distros are intentionally not included yet.
+- Docker PID mapping depends on the active daemon exposing host PIDs through `docker top`; other WSL distros are intentionally not included yet.

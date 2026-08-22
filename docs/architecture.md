@@ -1,4 +1,4 @@
-# Architecture (Phase 2)
+# Architecture (Phase 3)
 
 ## Goal
 
@@ -62,7 +62,7 @@ The WSLC collector is optional. If `wslc.exe` is not installed, monitoring conti
 
 Runs `docker stats --no-stream --no-trunc --format '{{json .}}'` and reads one JSON object per running container. `ID`, `Name`, `CPUPerc`, and the used portion of `MemUsage` become `Docker`/`container` resources. CPU is normalized by the Windows logical CPU count. A missing CLI or unavailable daemon quietly returns no rows; unexpected command or data failures warn without stopping other collectors. `--no-docker` disables collection.
 
-Docker rows are currently flat-only. They are not inserted into the WSL/WSLC attribution tree because Docker process/host attribution belongs to Phase 3.
+Phase 3 runs `docker top <id> -eo pid` for each collected container. Host PIDs are matched to current-WSL process resources. Matched processes are removed from the WSL VM's direct children and nested below their Docker container; the container CPU replaces those process values in the WSL parent's known-child sum. Each container gets its own clamped `unattributed` and sampling-skew values. Flat output is unchanged.
 
 ### Resource model
 
@@ -108,10 +108,10 @@ Memory is intentionally absent from attribution arithmetic. Windows `WorkingSet6
 
 ## Scope boundaries
 
-Phase 2 intentionally does **not** solve:
+Phase 3 intentionally does **not** solve:
 
 - multiple WSLC sessions
-- Docker process attribution
+- Docker processes that cannot be exposed as host PIDs by the active daemon
 - multiple WSL distributions
 - explanation of the components inside the `unattributed` bucket
 - disk/network/GPU accounting

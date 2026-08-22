@@ -1,4 +1,4 @@
-use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
@@ -16,7 +16,7 @@ struct RawDockerStat {
     name: String,
 }
 
-pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
+pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ContainerProcessUsage>, Box<dyn Error>> {
     if host_logical_cpu_count == 0 {
         return Ok(Vec::new());
     }
@@ -44,7 +44,31 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
         )
         .into());
     }
-    parse_stats(&output.stdout, host_logical_cpu_count)
+    let resources = parse_stats(&output.stdout, host_logical_cpu_count)?;
+    Ok(resources
+        .into_iter()
+        .map(|resource| {
+            let host_pids = container_pids(&resource.id).unwrap_or_default();
+            ContainerProcessUsage {
+                resource,
+                host_pids,
+            }
+        })
+        .collect())
+}
+
+fn container_pids(id: &str) -> Result<Vec<u32>, Box<dyn Error>> {
+    let output = Command::new("docker")
+        .args(["top", id, "-eo", "pid"])
+        .output()?;
+    if !output.status.success() {
+        return Err("docker top failed".into());
+    }
+    Ok(String::from_utf8(output.stdout)?
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.trim().parse().ok())
+        .collect())
 }
 
 fn daemon_unavailable(stderr: &[u8]) -> bool {

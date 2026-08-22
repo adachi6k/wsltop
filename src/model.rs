@@ -91,6 +91,12 @@ pub struct ResourceUsage {
     pub memory_bytes: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ContainerProcessUsage {
+    pub resource: ResourceUsage,
+    pub host_pids: Vec<u32>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::ResourceKind;

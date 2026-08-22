@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let mut docker_usage = Vec::new();
-    if !options.no_docker && !options.tree {
+    if !options.no_docker {
         match docker::usage(host_cpu_count) {
             Ok(rows) => docker_usage = rows,
             Err(error) => eprintln!("warning: Docker collector unavailable: {error}"),
@@ -87,7 +87,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             .filter(|row| attribution::is_host_resource(row))
             .cloned()
             .collect();
-        let mut tree = attribution::build_tree(host_cpu_count, &hosts, &linux_usage, &wslc_usage);
+        let mut tree = attribution::build_tree_with_docker(
+            host_cpu_count,
+            &hosts,
+            &linux_usage,
+            &wslc_usage,
+            &docker_usage,
+        );
         if options.hide_infra {
             attribution::hide_infra(&mut tree);
         }
@@ -102,7 +108,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut usage = linux_usage;
     usage.extend(windows_usage);
     usage.extend(wslc_usage);
-    usage.extend(docker_usage);
+    usage.extend(docker_usage.into_iter().map(|item| item.resource));
     prepare_flat_usage(
         &mut usage,
         options.show_wsl_host,
@@ -167,6 +173,24 @@ fn print_tree(tree: &attribution::AttributionTree, wsl_only: bool) {
                 child.name,
                 child.cpu_percent
             );
+            if child.environment == EnvironmentKind::Docker {
+                if let Some(docker) = tree
+                    .docker_groups
+                    .iter()
+                    .find(|docker| docker.container.id == child.id)
+                {
+                    for process in &docker.children {
+                        println!(
+                            "|  |- {:<7} {:<24} {:>7.2}%",
+                            "process", process.name, process.cpu_percent
+                        );
+                    }
+                    println!(
+                        "|  `- {:<7} {:<24} {:>7.2}%",
+                        "unattributed", "", docker.unattributed_cpu_percent
+                    );
+                }
+            }
         }
         println!(
             "`- {:<10} {:<27} {:>7.2}%",

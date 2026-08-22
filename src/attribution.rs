@@ -27,14 +27,54 @@ pub struct AttributionTree {
     pub groups: Vec<AttributionGroup>,
     /// Children retained here when no unique host mapping can be made.
     pub unmapped_children: Vec<ResourceUsage>,
+    pub docker_groups: Vec<DockerAttributionGroup>,
 }
 
-pub fn build_tree(
+#[derive(Debug, Clone, Serialize)]
+pub struct DockerAttributionGroup {
+    pub container: ResourceUsage,
+    pub children: Vec<ResourceUsage>,
+    pub unattributed_cpu_percent: f64,
+    pub over_attributed_cpu_percent: f64,
+}
+
+pub fn build_tree_with_docker(
     host_logical_cpu_count: u32,
     hosts: &[ResourceUsage],
     wsl_children: &[ResourceUsage],
     wslc_children: &[ResourceUsage],
+    docker: &[crate::model::ContainerProcessUsage],
 ) -> AttributionTree {
+    let mut docker_pids = std::collections::HashSet::new();
+    for container in docker {
+        docker_pids.extend(container.host_pids.iter().copied());
+    }
+    let direct_wsl: Vec<_> = wsl_children
+        .iter()
+        .filter(|row| row.pid.is_none_or(|pid| !docker_pids.contains(&pid)))
+        .cloned()
+        .collect();
+    let mut docker_groups = Vec::new();
+    for container in docker {
+        let children: Vec<_> = wsl_children
+            .iter()
+            .filter(|row| {
+                row.pid
+                    .is_some_and(|pid| container.host_pids.contains(&pid))
+            })
+            .cloned()
+            .collect();
+        let known: f64 = children.iter().map(|row| row.cpu_percent).sum();
+        let difference = container.resource.cpu_percent - known;
+        docker_groups.push(DockerAttributionGroup {
+            container: container.resource.clone(),
+            children,
+            unattributed_cpu_percent: difference.max(0.0),
+            over_attributed_cpu_percent: (-difference).max(0.0),
+        });
+    }
+    let mut wsl_parent_children = direct_wsl;
+    wsl_parent_children.extend(docker.iter().map(|item| item.resource.clone()));
     let wsl_hosts: Vec<_> = hosts
         .iter()
         .filter(|row| is_wsl_host(&row.name))
@@ -53,7 +93,7 @@ pub fn build_tree(
         &mut groups,
         &mut unmapped_children,
         wsl_hosts,
-        wsl_children,
+        &wsl_parent_children,
         |_| "WSL VM".to_string(),
     );
     add_groups(
@@ -75,6 +115,7 @@ pub fn build_tree(
         host_logical_cpu_count,
         groups,
         unmapped_children,
+        docker_groups,
     }
 }
 
@@ -158,12 +199,17 @@ pub fn hide_infra(tree: &mut AttributionTree) {
     }
     tree.unmapped_children
         .retain(|child| child.kind != ResourceKind::Infra);
+    for docker in &mut tree.docker_groups {
+        docker
+            .children
+            .retain(|child| child.kind != ResourceKind::Infra);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tree, make_group, MappingStatus};
-    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+    use super::{build_tree_with_docker, make_group, MappingStatus};
+    use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
 
     fn resource(kind: ResourceKind, name: &str, cpu_percent: f64) -> ResourceUsage {
         ResourceUsage {
@@ -219,11 +265,12 @@ mod tests {
     #[test]
     fn maps_default_wslc_children_to_one_session_host() {
         let container = resource(ResourceKind::Container, "demo", 4.0);
-        let tree = build_tree(
+        let tree = build_tree_with_docker(
             16,
             &[windows_host("vmmemwslc-cli-user", 10.0)],
             &[],
             &[container],
+            &[],
         );
 
         assert_eq!(tree.groups.len(), 1);
@@ -235,7 +282,7 @@ mod tests {
     #[test]
     fn does_not_guess_between_multiple_wslc_hosts() {
         let container = resource(ResourceKind::Container, "demo", 4.0);
-        let tree = build_tree(
+        let tree = build_tree_with_docker(
             16,
             &[
                 windows_host("vmmemwslc-cli-a", 10.0),
@@ -243,6 +290,7 @@ mod tests {
             ],
             &[],
             &[container],
+            &[],
         );
 
         assert_eq!(tree.groups.len(), 2);
@@ -252,5 +300,31 @@ mod tests {
             .all(|group| group.mapping_status == MappingStatus::Unresolved
                 && group.children.is_empty()));
         assert_eq!(tree.unmapped_children.len(), 1);
+    }
+
+    #[test]
+    fn nests_docker_processes_without_double_counting_wsl_children() {
+        let mut process = resource(ResourceKind::Process, "nginx", 2.0);
+        process.pid = Some(42);
+        let container = ContainerProcessUsage {
+            resource: {
+                let mut row = resource(ResourceKind::Container, "web", 3.0);
+                row.environment = EnvironmentKind::Docker;
+                row
+            },
+            host_pids: vec![42],
+        };
+        let tree = build_tree_with_docker(
+            16,
+            &[windows_host("vmmemwsl", 10.0)],
+            &[process],
+            &[],
+            &[container],
+        );
+        assert_eq!(tree.groups[0].children.len(), 1);
+        assert_eq!(tree.groups[0].children[0].kind, ResourceKind::Container);
+        assert_eq!(tree.docker_groups[0].children[0].pid, Some(42));
+        assert_eq!(tree.docker_groups[0].unattributed_cpu_percent, 1.0);
+        assert_eq!(tree.groups[0].unattributed_cpu_percent, 7.0);
     }
 }
