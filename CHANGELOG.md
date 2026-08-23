@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-23
+
 ### Added
 
 - Unified monitoring for Windows native processes, the current and additional running WSL distributions, WSL Containers, and Docker containers.
@@ -18,7 +20,7 @@ All notable changes to this project will be documented in this file. The format 
 
 - CLI and TUI now share an in-process monitoring and sampling engine.
 - Interactive mode honors collector, interval, limit, filtering, and initial tree options.
-- Repository metadata, documentation, validation guidance, CI, and release automation are prepared for the v0.1.0 release candidate.
+- Repository metadata, documentation, validation guidance, CI, and release automation for the initial release.
 
 ### Compatibility
 
@@ -28,3 +30,4 @@ All notable changes to this project will be documented in this file. The format 
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
 [Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/adachi6k/wsltop/releases/tag/v0.1.0
