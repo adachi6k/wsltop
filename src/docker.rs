@@ -16,9 +16,15 @@ struct RawDockerStat {
     name: String,
 }
 
-pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ContainerProcessUsage>, Box<dyn Error>> {
+#[derive(Debug, Default)]
+pub struct DockerUsage {
+    pub resources: Vec<ContainerProcessUsage>,
+    pub warnings: Vec<String>,
+}
+
+pub fn usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>> {
     if host_logical_cpu_count == 0 {
-        return Ok(Vec::new());
+        return Ok(DockerUsage::default());
     }
     let output = match Command::new("docker")
         .args([
@@ -31,12 +37,12 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ContainerProcessUsage>, 
         .output()
     {
         Ok(output) => output,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DockerUsage::default()),
         Err(error) => return Err(error.into()),
     };
     if !output.status.success() {
         if daemon_unavailable(&output.stderr) {
-            return Ok(Vec::new());
+            return Ok(DockerUsage::default());
         }
         return Err(format!(
             "docker stats failed: {}",
@@ -45,16 +51,28 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ContainerProcessUsage>, 
         .into());
     }
     let resources = parse_stats(&output.stdout, host_logical_cpu_count)?;
-    Ok(resources
-        .into_iter()
-        .map(|resource| {
-            let host_pids = container_pids(&resource.id).unwrap_or_default();
-            ContainerProcessUsage {
-                resource,
-                host_pids,
+    let mut result = Vec::with_capacity(resources.len());
+    let mut warnings = Vec::new();
+    for resource in resources {
+        let host_pids = match container_pids(&resource.id) {
+            Ok(pids) => pids,
+            Err(error) => {
+                warnings.push(format!(
+                    "Docker container {} process attribution unavailable: {error}",
+                    resource.name
+                ));
+                Vec::new()
             }
-        })
-        .collect())
+        };
+        result.push(ContainerProcessUsage {
+            resource,
+            host_pids,
+        });
+    }
+    Ok(DockerUsage {
+        resources: result,
+        warnings,
+    })
 }
 
 fn container_pids(id: &str) -> Result<Vec<u32>, Box<dyn Error>> {

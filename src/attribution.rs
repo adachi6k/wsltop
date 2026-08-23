@@ -51,7 +51,9 @@ pub fn build_tree_with_docker(
     }
     let direct_wsl: Vec<_> = wsl_children
         .iter()
-        .filter(|row| row.pid.is_none_or(|pid| !docker_pids.contains(&pid)))
+        .filter(|row| {
+            !is_current_wsl_process(row) || row.pid.is_none_or(|pid| !docker_pids.contains(&pid))
+        })
         .cloned()
         .collect();
     let mut docker_groups = Vec::new();
@@ -59,8 +61,10 @@ pub fn build_tree_with_docker(
         let children: Vec<_> = wsl_children
             .iter()
             .filter(|row| {
-                row.pid
-                    .is_some_and(|pid| container.host_pids.contains(&pid))
+                is_current_wsl_process(row)
+                    && row
+                        .pid
+                        .is_some_and(|pid| container.host_pids.contains(&pid))
             })
             .cloned()
             .collect();
@@ -117,6 +121,10 @@ pub fn build_tree_with_docker(
         unmapped_children,
         docker_groups,
     }
+}
+
+fn is_current_wsl_process(resource: &ResourceUsage) -> bool {
+    resource.environment == EnvironmentKind::Wsl && resource.source.is_none()
 }
 
 fn add_groups<F>(
@@ -327,5 +335,39 @@ mod tests {
         assert_eq!(tree.docker_groups[0].children[0].pid, Some(42));
         assert_eq!(tree.docker_groups[0].unattributed_cpu_percent, 1.0);
         assert_eq!(tree.groups[0].unattributed_cpu_percent, 7.0);
+    }
+
+    #[test]
+    fn docker_pid_matching_does_not_cross_wsl_distribution_sources() {
+        let mut current = resource(ResourceKind::Process, "current", 2.0);
+        current.pid = Some(42);
+        let mut additional = resource(ResourceKind::Process, "additional", 1.0);
+        additional.pid = Some(42);
+        additional.source = Some("OtherDistro".to_string());
+        let container = ContainerProcessUsage {
+            resource: {
+                let mut row = resource(ResourceKind::Container, "web", 3.0);
+                row.environment = EnvironmentKind::Docker;
+                row
+            },
+            host_pids: vec![42],
+        };
+
+        let tree = build_tree_with_docker(
+            16,
+            &[windows_host("vmmemwsl", 10.0)],
+            &[current, additional],
+            &[],
+            &[container],
+        );
+
+        assert_eq!(tree.docker_groups[0].children.len(), 1);
+        assert_eq!(tree.docker_groups[0].children[0].name, "current");
+        assert!(tree.docker_groups[0].children[0].source.is_none());
+        assert!(tree.groups[0]
+            .children
+            .iter()
+            .any(|child| child.name == "additional"
+                && child.source.as_deref() == Some("OtherDistro")));
     }
 }

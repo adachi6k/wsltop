@@ -16,14 +16,20 @@ struct RawWslcStat {
     name: String,
 }
 
+#[derive(Debug, Default)]
+pub struct WslcUsage {
+    pub resources: Vec<ResourceUsage>,
+    pub warnings: Vec<String>,
+}
+
 /// Return current WSLC container usage normalized to the Windows-host CPU scale.
 ///
 /// `wslc stats` reports CPU in the container convention where one fully busy
 /// logical CPU is approximately 100%. wsltop divides that value by the Windows
 /// host logical CPU count so that all host logical CPUs busy is 100%.
-pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
+pub fn usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
     if host_logical_cpu_count == 0 {
-        return Ok(Vec::new());
+        return Ok(WslcUsage::default());
     }
 
     let output = match Command::new("wslc.exe")
@@ -31,7 +37,7 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
         .output()
     {
         Ok(output) => output,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(WslcUsage::default()),
         Err(e) => return Err(e.into()),
     };
 
@@ -45,15 +51,16 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
 
     let raw: Vec<RawWslcStat> = serde_json::from_slice(&output.stdout)?;
     let mut result = Vec::with_capacity(raw.len());
+    let mut warnings = Vec::new();
 
     for container in raw {
         let cpu_native = match parse_percent(&container.cpu_percent) {
             Ok(value) => value,
             Err(e) => {
-                eprintln!(
-                    "warning: skipping WSLC container {}: invalid CPU percentage {:?}: {e}",
+                warnings.push(format!(
+                    "skipping WSLC container {}: invalid CPU percentage {:?}: {e}",
                     container.name, container.cpu_percent
-                );
+                ));
                 continue;
             }
         };
@@ -61,10 +68,10 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
         let memory_bytes = match parse_memory_usage(&container.memory_usage) {
             Ok(value) => value,
             Err(e) => {
-                eprintln!(
-                    "warning: WSLC container {} has invalid memory usage {:?}: {e}",
+                warnings.push(format!(
+                    "WSLC container {} has invalid memory usage {:?}: {e}",
                     container.name, container.memory_usage
-                );
+                ));
                 0
             }
         };
@@ -81,7 +88,10 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<Vec<ResourceUsage>, Box<dyn 
         });
     }
 
-    Ok(result)
+    Ok(WslcUsage {
+        resources: result,
+        warnings,
+    })
 }
 
 fn parse_percent(value: &str) -> Result<f64, Box<dyn Error>> {

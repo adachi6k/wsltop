@@ -32,10 +32,6 @@ impl Monitor {
     pub fn new(config: MonitorConfig) -> Self {
         Self { config }
     }
-    pub fn config_mut(&mut self) -> &mut MonitorConfig {
-        &mut self.config
-    }
-
     pub fn sample(&mut self) -> Result<MonitorSnapshot, Box<dyn Error>> {
         let mut warnings = Vec::new();
         let linux_before = linux::snapshot()?;
@@ -84,18 +80,30 @@ impl Monitor {
         let wslc_usage = if self.config.wsl_only || self.config.no_wslc {
             Vec::new()
         } else {
-            wslc::usage(host_cpu_count).unwrap_or_else(|error| {
-                warnings.push(format!("WSLC collector unavailable: {error}"));
-                Vec::new()
-            })
+            match wslc::usage(host_cpu_count) {
+                Ok(result) => {
+                    warnings.extend(result.warnings);
+                    result.resources
+                }
+                Err(error) => {
+                    warnings.push(format!("WSLC collector unavailable: {error}"));
+                    Vec::new()
+                }
+            }
         };
         let docker_usage = if self.config.no_docker {
             Vec::new()
         } else {
-            docker::usage(host_cpu_count).unwrap_or_else(|error| {
-                warnings.push(format!("Docker collector unavailable: {error}"));
-                Vec::new()
-            })
+            match docker::usage(host_cpu_count) {
+                Ok(result) => {
+                    warnings.extend(result.warnings);
+                    result.resources
+                }
+                Err(error) => {
+                    warnings.push(format!("Docker collector unavailable: {error}"));
+                    Vec::new()
+                }
+            }
         };
         let hosts: Vec<_> = windows_usage
             .iter()
