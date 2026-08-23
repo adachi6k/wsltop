@@ -31,6 +31,9 @@ struct Options {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let options = parse_args()?;
+    if options.interactive && options.json {
+        return Err("--interactive cannot be combined with --json".into());
+    }
     if options.interactive {
         return tui::run(options.interval);
     }
@@ -341,6 +344,10 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             "--tree" => options.tree = true,
             "--no-docker" => options.no_docker = true,
             "-i" | "--interactive" => options.interactive = true,
+            "-V" | "--version" => {
+                println!("wsltop {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "--interval-ms" => {
                 let value = args.next().ok_or("--interval-ms requires a value")?;
                 let millis = value.parse::<u64>()?;

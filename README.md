@@ -93,7 +93,7 @@ Docker is auto-detected through `docker stats --no-stream --no-trunc`. Docker's 
 
 ### Interactive controls
 
-`wsltop --interactive` (or `-i`) opens the alternate-screen TUI. `q`/Esc exits, arrows and PageUp/PageDown scroll, `t` switches flat/tree view, `i` toggles infrastructure rows, and `h` toggles raw WSL host rows. The selected `--interval-ms` controls sampling. Terminal raw mode and the alternate screen are restored on normal exit and errors.
+`wsltop --interactive` (or `-i`) opens the alternate-screen TUI. `q`/Esc exits, arrows and PageUp/PageDown scroll, `t` switches flat/tree view, `i` toggles infrastructure rows, `h` toggles raw WSL host rows, and `0` toggles zero-CPU rows. The selected `--interval-ms` controls sampling. Terminal raw mode and the alternate screen are restored on normal exit and errors. `--interactive --json` is rejected explicitly; use the one-shot JSON interface for machine consumption.
 
 ## CPU semantics
 
@@ -120,6 +120,7 @@ See [`docs/cpu-accounting.md`](docs/cpu-accounting.md) for the exact formula and
 - [x] Phase 4: multiple WSL distros and ambiguity-safe WSLC sessions
 - [x] Phase 5: interactive ratatui TUI
 - [ ] Phase 6: optional Windows GUI
+- Future option: native Windows GUI after CLI/TUI stabilization
 
 ## Current limitations
 

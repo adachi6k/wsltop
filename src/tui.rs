@@ -49,9 +49,10 @@ pub fn run(interval: Duration) -> Result<(), Box<dyn Error>> {
             );
             frame.render_widget(
                 Paragraph::new(format!(
-                    " q/Esc quit  ↑↓/Pg scroll  t tree  i infra:{}  h hosts:{}  {}",
+                    " q/Esc quit  ↑↓/Pg scroll  t tree  i infra:{}  h hosts:{}  0 zero:{}  {}",
                     on_off(!state.hide_infra),
                     on_off(state.show_hosts),
+                    on_off(!state.hide_zero),
                     state.status
                 )),
                 footer,
@@ -63,7 +64,7 @@ pub fn run(interval: Duration) -> Result<(), Box<dyn Error>> {
                 if state.key(key.code) {
                     break;
                 }
-                if matches!(key.code, KeyCode::Char('t' | 'i' | 'h')) {
+                if matches!(key.code, KeyCode::Char('t' | 'i' | 'h' | '0')) {
                     refresh(&mut state, interval);
                     last_refresh = Instant::now();
                 }
@@ -85,6 +86,7 @@ struct State {
     hide_infra: bool,
     show_hosts: bool,
     status: String,
+    hide_zero: bool,
 }
 
 impl State {
@@ -101,6 +103,7 @@ impl State {
             }
             KeyCode::Char('i') => self.hide_infra = !self.hide_infra,
             KeyCode::Char('h') => self.show_hosts = !self.show_hosts,
+            KeyCode::Char('0') => self.hide_zero = !self.hide_zero,
             _ => {}
         }
         false
@@ -139,6 +142,7 @@ fn refresh(state: &mut State, interval: Duration) {
         Ok(output) if output.status.success() => {
             state.lines = String::from_utf8_lossy(&output.stdout)
                 .lines()
+                .filter(|line| !state.hide_zero || !line.contains(" 0.00%"))
                 .map(|line| Line::raw(line.to_string()))
                 .collect();
             state.status = "updated".to_string();
