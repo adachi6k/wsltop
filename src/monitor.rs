@@ -57,6 +57,12 @@ impl Monitor {
             || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
             |snapshot| snapshot.host_logical_cpu_count,
         );
+        if self.config.wsl_only {
+            warnings.push(
+                "--wsl-only uses the WSL-visible logical CPU count; exact host normalization and Windows host attribution require Windows interop"
+                    .to_string(),
+            );
+        }
 
         let mut linux_usage = sampler::calculate_usage(&linux_before, &linux_after, host_cpu_count);
         for (name, before) in &extra_before {

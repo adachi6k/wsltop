@@ -53,12 +53,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     for warning in &snapshot.warnings {
         eprintln!("warning: {warning}");
     }
-    if options.wsl_only {
-        eprintln!(
-            "warning: --wsl-only uses the WSL-visible logical CPU count; host-normalized CPU% requires Windows interop"
-        );
-    }
-
     if options.json {
         if options.tree {
             println!("{}", serde_json::to_string_pretty(&snapshot.tree)?);
