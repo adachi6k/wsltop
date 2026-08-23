@@ -11,11 +11,12 @@ cargo fmt --all -- --check
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --release --locked
+cargo package --locked
 cargo run --locked -- --help
 cargo run --locked -- --version
 ```
 
-Unit tests cover CPU delta normalization, resource classification, attribution remainder/clamping, WSLC ambiguity, Docker nesting, parsing, and flat filtering. Help and version smoke tests must exit before any WSL/Windows runtime collection.
+Unit tests cover CPU delta normalization, resource classification, attribution remainder/clamping, WSLC ambiguity, Docker/WSLC process parsing and nesting, host normalization, malformed-output degradation, and grouped flat filtering. Help and version smoke tests must exit before any WSL/Windows runtime collection.
 
 ## Real-host feature matrix
 
@@ -25,13 +26,15 @@ Unit tests cover CPU delta normalization, resource classification, attribution r
 | Current WSL distro | Run a known workload in the invoking distro | Process appears with no remote-distro source label |
 | Second WSL distro | Start another distro, run a workload, then `wsltop --once` | Workload appears labelled with its distro; PID collisions do not merge |
 | WSLC present | Run containers in the default WSLC session | Container rows appear as `WSLC container` |
+| WSLC process attribution | Run identifiable processes in WSLC, then use `--show-container-processes` and `--tree` | Processes appear beneath their WSLC container; the collector's temporary `ps` is absent |
 | WSLC absent | Run without `wslc.exe` installed | WSLC rows are silently omitted; Windows, WSL, and Docker collection continue |
 | Multiple WSLC hosts | Make more than one `vmmemwslc-*` host visible | Tree reports session mapping unresolved and does not guess; flat containers remain |
 | Docker present | Run a busy container | Docker container appears and is host-normalized |
 | Docker CLI absent | Remove Docker CLI from `PATH` | Docker rows are silently omitted; non-Docker monitoring continues |
 | Docker daemon stopped | Stop the daemon or make it unreachable with a recognized connection error | Docker rows are silently omitted; other collectors continue |
 | Unexpected optional collector error | Cause malformed output or an unrecognized command failure | Monitoring continues and the common warning path reports the failure in CLI/TUI |
-| Docker process attribution | Run identifiable processes in a busy container, `wsltop --tree` | Container nests matching processes; values are not double-counted as direct WSL children |
+| Docker process attribution | Run identifiable processes in a busy Docker Desktop container, then use `--show-container-processes` and `--tree` | Container nests Docker-native processes under an independent Docker group and is not attached to the current WSL VM |
+| Grouped flat limits | Use `--show-container-processes --container-process-limit 2 --limit 5` | Five top-level resources are ranked by their own CPU; each selected container shows at most two processes plus omitted/residual rows |
 | Tree output | `wsltop --tree` | WSL/WSLC hosts are parents with children and non-negative unattributed CPU |
 | Flat JSON | `wsltop --json` | Top-level value remains a resource array with `kind` fields |
 | Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, groups, residuals, and unresolved resources |
@@ -85,7 +88,7 @@ Validate these failure paths deliberately:
 
 ## Release acceptance
 
-Before tagging v0.1.0:
+Before tagging v0.2.0:
 
 1. All automated commands pass from a clean checkout using `Cargo.lock`.
 2. The feature matrix is exercised on at least one current Windows 11 + WSL2 host.

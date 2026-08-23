@@ -38,11 +38,28 @@ With `--wsl-only`, Windows collection is skipped and the WSL-visible logical CPU
 
 The collector's `MemUsage` value is retained as resource metadata but is not used in parent/child subtraction.
 
-## Docker containers
+WSLC 2.9 does not expose a `top` command, so wsltop executes `ps -eo pid,ppid,pcpu,rss,comm,args` inside each running container with `wslc.exe exec`. The injected `ps` process is excluded. Its ps-style `%CPU` is divided by the Windows host logical CPU count, has the same averaging caveat as Docker process CPU, and explains the container internally without being added to the container total.
+
+## Docker containers and processes
 
 Docker reports a container CPU percentage in a convention where one fully busy CPU is approximately 100%. `wsltop` divides it by the host logical CPU count so the result shares the Windows host scale.
 
-Docker process attribution does not add nested process CPU to container CPU. The container is the accounting child of the WSL host; matching process samples explain the container internally.
+Docker process discovery separately runs `docker top <container-id> -eo pid,ppid,pcpu,rss,comm,args`. Its `pcpu` uses the same one-busy-CPU-is-100% convention and is normalized independently:
+
+```text
+docker_process_CPU% = docker_top_pcpu / Windows_host_logical_cpu_count
+```
+
+Unlike wsltop's two-snapshot `/proc` measurement, docker-top `%CPU` is a ps-style average over process lifetime (with platform-specific averaging/decay behavior). It is therefore less precisely aligned with the current wsltop sampling interval and container statistics.
+
+Process observations explain a container internally and are never added to its value or rescaled to force a match:
+
+```text
+unattributed = max(container_CPU% - sum(process_CPU%), 0)
+over_attributed = max(sum(process_CPU%) - container_CPU%, 0)
+```
+
+Docker is not charged to the current WSL host unless the Docker daemon is proven to share its host PID namespace. Docker Desktop normally uses a separate Linux VM, so its attribution group remains top-level when no valid host/VM mapping is known.
 
 ## Host attribution
 

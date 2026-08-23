@@ -12,6 +12,7 @@ cargo fmt --all -- --check
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --release --locked
+cargo package --locked
 ```
 
 Run `cargo run --locked -- --help` and `cargo run --locked -- --version` when changing CLI behavior or package metadata.

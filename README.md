@@ -4,7 +4,7 @@
 
 > Windows Task Manager says `VmmemWSL` is busy. `wsltop` shows which Windows, WSL, WSLC, or Docker workload is responsible.
 
-`wsltop` is currently a v0.1.0 release candidate. Its CLI and terminal UI are the supported interfaces; a graphical UI is outside the current scope.
+`wsltop` provides supported CLI and terminal UI interfaces; a graphical UI is outside the current scope.
 
 ## Why wsltop?
 
@@ -13,9 +13,12 @@ Task Manager may show only a VM aggregate such as `VmmemWSL 35%`. That identifie
 ```text
 WSL VM
 |- process    verilator
-|- infra      plan9
-`- container  Docker build
-   `- process compiler
+`- infra      plan9
+
+Docker
+`- container  build
+   |- process compiler
+   `- unattributed
 ```
 
 Parent and child CPU values are attribution views, not values to add together.
@@ -26,7 +29,7 @@ Parent and child CPU values are attribution views, not values to add together.
 - Current WSL distribution process monitoring through `/proc`
 - Multiple running WSL distribution monitoring
 - WSL Containers monitoring
-- Docker container monitoring and Docker process attribution
+- Docker and WSLC container monitoring with in-container process attribution
 - WSL and WSLC host attribution trees with an `unattributed` remainder
 - Host-wide CPU normalization: all environments use Windows host logical CPUs = 100%
 - Interactive terminal UI with flat/tree views, scrolling, and display toggles
@@ -38,7 +41,7 @@ Parent and child CPU values are attribution views, not values to add together.
 
 ```console
 cargo build --release
-./target/release/wsltop --interactive
+./target/release/wsltop --interactive --show-container-processes
 ```
 
 For a single sample:
@@ -48,6 +51,46 @@ For a single sample:
 ```
 
 Run `./target/release/wsltop --help` for the complete option reference.
+
+## What the TUI shows
+
+The flat view is a host-wide activity ranking. Windows and WSL processes appear alongside Docker and WSLC containers. A container is ranked once by its total CPU; optional process rows are an indented explanation of that total, not extra CPU to add to it.
+
+```text
+wsltop 0.2.0 | flat | refresh 1000ms
+
+ENV     TYPE         CPU%       MEM       ID/PID COMMAND
+------------------------------------------------------------------------------------
+Docker  container  11.99%      520M 68dae66282ff  act-CI-simulate...
+        process    11.75%      157M        34692    |- simx
+        residual   0.24%          -            -    `- unattributed
+WSLC    container   5.94%      348M 5e0c144e6a3c  mighty_flinders
+        process     5.71%       31M          806    |- cc1plus
+        process     0.19%        6M          470    |- ninja
+        residual    0.04%          -            -    `- unattributed
+Windows process     1.13%       29M        18352  dllhost
+WSL     infra       0.05%        4M            5  plan9
+```
+
+In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. By default, at most five processes are shown per container and additional processes are summarized.
+
+Press `t` to switch to the attribution tree and answer a different question: how much of each VM or container total can wsltop explain?
+
+```text
+Host logical CPUs: 16
+
+WSL VM                                    3.20%
+|- infra      plan9                       0.05%
+|- process    codex                       0.18%
+`- unattributed                           2.97%
+
+Docker
+`- container  act-CI-simulate...         11.99%
+   |- process  simx                       11.75%
+   `- unattributed                         0.24%
+```
+
+All percentages use the Windows host-wide scale: on a 16-logical-CPU machine, one fully occupied logical CPU is approximately `6.25%`.
 
 ## Installation
 
@@ -85,6 +128,8 @@ wsltop [OPTIONS]
 --wsl-only             Skip Windows, additional-distro, and WSLC collectors
 --no-wslc              Disable WSLC collection
 --no-docker            Disable Docker collection
+--show-container-processes Include Docker/WSLC processes in flat output
+--container-process-limit N Show at most N processes per container (default: 5)
 --hide-infra           Hide infrastructure rows
 ```
 
@@ -140,7 +185,9 @@ Raw WSL host processes stay hidden in default flat output to avoid accidental do
 
 WSLC collection uses the current/default CLI session. A single available `vmmemwslc-*` host can be associated with its containers. If multiple hosts make the mapping ambiguous, `wsltop` reports the mapping as unresolved and does not guess; flat WSLC rows remain available.
 
-Docker collection is optional. Container CPU and memory come from Docker statistics, while `docker top` PIDs are used to nest matching current-WSL processes under containers in the attribution tree. PID matching is restricted to resources from the current distribution; a process in another distribution with the same PID is not attributed to the container.
+Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container.
+
+Docker Desktop containers run in Docker Desktop's own Linux VM, so they are shown under an independent top-level `Docker` group. They are not manufactured as children of the current WSL VM. The legacy current-WSL PID-matching path is used only if sharing of the host PID namespace has been positively established; the current Docker Desktop path does not make that claim. Use `--show-container-processes` to add Docker and WSLC process rows while preserving existing container rows and the default flat schema (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
 
 A missing `wslc.exe`, missing Docker CLI, or recognized unavailable Docker daemon is treated as an expected absence: its rows are silently omitted and monitoring continues. Unexpected command, output, parse, or per-container attribution failures are reported through the common warning path. Use `--no-wslc` or `--no-docker` to disable a collector intentionally.
 
@@ -167,7 +214,7 @@ JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 - Sampling is best effort. Linux, PowerShell, WSLC, Docker, and remote-distro snapshots are not captured atomically.
 - PowerShell process collection adds latency and is not yet a persistent collector.
 - WSLC session attribution is deliberately conservative when multiple host mappings are possible.
-- Docker process nesting depends on host PID visibility and currently matches processes visible in the current WSL distribution.
+- Docker process `%CPU` from `docker top` is a ps-style lifetime/decay average and may not align precisely with interval-sampled container or `/proc` CPU.
 - Memory values from Windows, WSLC, and Docker have different meanings and are not attributed by subtraction.
 - This is a WSL2-hosted CLI/TUI, not a native Windows executable or GUI.
 
@@ -187,6 +234,7 @@ cargo fmt --all -- --check
 cargo test --locked --all-targets
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --release --locked
+cargo package --locked
 ```
 
 CI runs portable build, lint, test, and help/version smoke checks on Ubuntu. Windows/WSL interoperability, WSLC, Docker, attribution accuracy, and terminal recovery require real-host validation; see the test plan.

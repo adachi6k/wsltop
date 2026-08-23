@@ -268,6 +268,8 @@ mod tests {
             no_wslc: true,
             no_docker: true,
             hide_infra: true,
+            show_container_processes: false,
+            container_process_limit: 5,
         };
         let state = State::from_config(&config, true);
         assert!(state.tree);

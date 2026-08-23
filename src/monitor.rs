@@ -15,6 +15,8 @@ pub struct MonitorConfig {
     pub no_wslc: bool,
     pub no_docker: bool,
     pub hide_infra: bool,
+    pub show_container_processes: bool,
+    pub container_process_limit: usize,
 }
 
 pub struct Monitor {
@@ -78,16 +80,16 @@ impl Monitor {
                 sampler::calculate_usage(&before.snapshot, &after.snapshot, host_cpu_count);
         }
         let wslc_usage = if self.config.wsl_only || self.config.no_wslc {
-            Vec::new()
+            wslc::WslcUsage::default()
         } else {
             match wslc::usage(host_cpu_count) {
                 Ok(result) => {
-                    warnings.extend(result.warnings);
-                    result.resources
+                    warnings.extend(result.warnings.iter().cloned());
+                    result
                 }
                 Err(error) => {
                     warnings.push(format!("WSLC collector unavailable: {error}"));
-                    Vec::new()
+                    wslc::WslcUsage::default()
                 }
             }
         };
@@ -114,16 +116,39 @@ impl Monitor {
             host_cpu_count,
             &hosts,
             &linux_usage,
-            &wslc_usage,
+            &wslc_usage.resources,
             &docker_usage,
         );
+        attribution::attach_wslc_processes(&mut tree, &wslc_usage.process_resources);
         if self.config.hide_infra {
             attribution::hide_infra(&mut tree);
         }
 
         let mut resources = linux_usage;
         resources.extend(windows_usage);
-        resources.extend(wslc_usage);
+        resources.extend(wslc_usage.resources);
+        if self.config.show_container_processes {
+            resources.extend(wslc_usage.process_resources.iter().flat_map(|item| {
+                let mut processes = item.processes.clone();
+                processes.sort_by(|a, b| {
+                    b.cpu_percent
+                        .partial_cmp(&a.cpu_percent)
+                        .unwrap_or(Ordering::Equal)
+                });
+                processes.truncate(self.config.container_process_limit);
+                processes
+            }));
+            resources.extend(docker_usage.iter().flat_map(|item| {
+                let mut processes = item.processes.clone();
+                processes.sort_by(|a, b| {
+                    b.cpu_percent
+                        .partial_cmp(&a.cpu_percent)
+                        .unwrap_or(Ordering::Equal)
+                });
+                processes.truncate(self.config.container_process_limit);
+                processes
+            }));
+        }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
         prepare_flat_resources(&mut resources, &self.config);
         Ok(MonitorSnapshot {
@@ -154,13 +179,49 @@ fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config: &MonitorCo
     if config.hide_infra {
         resources.retain(|row| row.kind != ResourceKind::Infra);
     }
-    resources.sort_by(|a, b| {
+    let mut container_processes = Vec::new();
+    let mut top_level = Vec::new();
+    for row in std::mem::take(resources) {
+        if matches!(
+            row.environment,
+            crate::model::EnvironmentKind::Docker | crate::model::EnvironmentKind::WslContainer
+        ) && row.kind == ResourceKind::Process
+            && row.source.is_some()
+        {
+            container_processes.push(row);
+        } else {
+            top_level.push(row);
+        }
+    }
+    top_level.sort_by(|a, b| {
         b.cpu_percent
             .partial_cmp(&a.cpu_percent)
             .unwrap_or(Ordering::Equal)
             .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
     });
-    resources.truncate(config.limit);
+    top_level.truncate(config.limit);
+
+    container_processes.sort_by(|a, b| {
+        b.cpu_percent
+            .partial_cmp(&a.cpu_percent)
+            .unwrap_or(Ordering::Equal)
+    });
+    for row in top_level {
+        let container_id = (matches!(
+            row.environment,
+            crate::model::EnvironmentKind::Docker | crate::model::EnvironmentKind::WslContainer
+        ) && row.kind == ResourceKind::Container)
+            .then(|| row.id.clone());
+        resources.push(row);
+        if let Some(container_id) = container_id {
+            resources.extend(
+                container_processes
+                    .iter()
+                    .filter(|process| process.source.as_deref() == Some(container_id.as_str()))
+                    .cloned(),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +239,8 @@ mod tests {
             no_wslc: false,
             no_docker: false,
             hide_infra: false,
+            show_container_processes: false,
+            container_process_limit: 5,
         }
     }
 
@@ -188,7 +251,9 @@ mod tests {
             kind,
             id: name.to_string(),
             pid: Some(1),
+            ppid: None,
             name: name.to_string(),
+            args: None,
             cpu_percent: 1.0,
             memory_bytes: 0,
         }
@@ -224,5 +289,31 @@ mod tests {
         prepare_flat_resources(&mut rows, &options);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, ResourceKind::Host);
+    }
+
+    #[test]
+    fn flat_limit_ranks_container_and_keeps_its_process_children_together() {
+        let mut options = config();
+        options.show_container_processes = true;
+        options.limit = 1;
+        let mut container = resource(
+            EnvironmentKind::Docker,
+            ResourceKind::Container,
+            "container-id",
+        );
+        container.cpu_percent = 10.0;
+        container.pid = None;
+        let mut process = resource(EnvironmentKind::Docker, ResourceKind::Process, "simx");
+        process.cpu_percent = 9.0;
+        process.source = Some("container-id".to_string());
+        let mut windows = resource(EnvironmentKind::Windows, ResourceKind::Process, "worker");
+        windows.cpu_percent = 5.0;
+        let mut rows = vec![process, windows, container];
+
+        prepare_flat_resources(&mut rows, &options);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, ResourceKind::Container);
+        assert_eq!(rows[1].name, "simx");
     }
 }

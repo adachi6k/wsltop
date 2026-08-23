@@ -52,7 +52,9 @@ fn to_usage(sample: &ProcessSample, cpu_percent: f64) -> ResourceUsage {
         kind: classify_process(sample),
         id: sample.key.pid.to_string(),
         pid: Some(sample.key.pid),
+        ppid: None,
         name: sample.name.clone(),
+        args: None,
         cpu_percent,
         memory_bytes: sample.memory_bytes,
     }

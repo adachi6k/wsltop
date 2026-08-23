@@ -91,7 +91,11 @@ pub struct ResourceUsage {
     pub id: String,
     /// Present for process rows and null for non-process resources.
     pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ppid: Option<u32>,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
     pub cpu_percent: f64,
     pub memory_bytes: u64,
 }
@@ -99,6 +103,10 @@ pub struct ResourceUsage {
 #[derive(Debug, Clone)]
 pub struct ContainerProcessUsage {
     pub resource: ResourceUsage,
+    /// Process observations collected inside the Docker daemon's PID namespace.
+    pub processes: Vec<ResourceUsage>,
+    /// Host PIDs are only populated after the daemon has been proven to share
+    /// the current WSL host PID namespace.
     pub host_pids: Vec<u32>,
 }
 

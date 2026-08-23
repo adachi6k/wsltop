@@ -1,4 +1,4 @@
-use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
@@ -19,6 +19,7 @@ struct RawWslcStat {
 #[derive(Debug, Default)]
 pub struct WslcUsage {
     pub resources: Vec<ResourceUsage>,
+    pub process_resources: Vec<ContainerProcessUsage>,
     pub warnings: Vec<String>,
 }
 
@@ -82,16 +83,121 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
             kind: ResourceKind::Container,
             id: container.id,
             pid: None,
+            ppid: None,
             name: container.name,
+            args: None,
             cpu_percent: cpu_native / host_logical_cpu_count as f64,
             memory_bytes,
         });
     }
 
+    let mut process_resources = Vec::with_capacity(result.len());
+    for resource in &result {
+        let processes = match container_processes(&resource.id, host_logical_cpu_count) {
+            Ok(processes) => processes,
+            Err(error) => {
+                warnings.push(format!(
+                    "WSLC container {} process attribution unavailable: {error}",
+                    resource.name
+                ));
+                Vec::new()
+            }
+        };
+        process_resources.push(ContainerProcessUsage {
+            resource: resource.clone(),
+            processes,
+            host_pids: Vec::new(),
+        });
+    }
+
     Ok(WslcUsage {
         resources: result,
+        process_resources,
         warnings,
     })
+}
+
+fn container_processes(
+    id: &str,
+    host_logical_cpu_count: u32,
+) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
+    let output = Command::new("wslc.exe")
+        .args(["exec", id, "ps", "-eo", "pid,ppid,pcpu,rss,comm,args"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "wslc.exe exec ps failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    parse_processes(&output.stdout, id, host_logical_cpu_count)
+}
+
+fn parse_processes(
+    input: &[u8],
+    container_id: &str,
+    host_cpu_count: u32,
+) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
+    if host_cpu_count == 0 {
+        return Err("host logical CPU count is zero".into());
+    }
+    let text = std::str::from_utf8(input)?;
+    let mut lines = text.lines();
+    let header: Vec<_> = lines
+        .next()
+        .ok_or("WSLC ps output is empty")?
+        .split_whitespace()
+        .collect();
+    if header.len() < 6
+        || !header[0].eq_ignore_ascii_case("PID")
+        || !header[1].eq_ignore_ascii_case("PPID")
+        || header[2] != "%CPU"
+        || !header[3].eq_ignore_ascii_case("RSS")
+    {
+        return Err("unsupported WSLC ps columns".into());
+    }
+    lines
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            if fields.len() < 6 {
+                return Some(Err(format!("malformed WSLC process row: {line:?}").into()));
+            }
+            let pid = match fields[0].parse::<u32>() {
+                Ok(pid) => pid,
+                Err(error) => return Some(Err(error.into())),
+            };
+            let ppid = match fields[1].parse::<u32>() {
+                Ok(ppid) => ppid,
+                Err(error) => return Some(Err(error.into())),
+            };
+            // Exclude the short-lived ps injected by this collector.
+            if ppid == 0 && fields[4] == "ps" {
+                return None;
+            }
+            let cpu = match fields[2].parse::<f64>() {
+                Ok(cpu) if cpu.is_finite() && cpu >= 0.0 => cpu,
+                _ => return Some(Err("invalid WSLC process CPU percentage".into())),
+            };
+            let rss_kib = match fields[3].parse::<u64>() {
+                Ok(rss) => rss,
+                Err(error) => return Some(Err(error.into())),
+            };
+            Some(Ok(ResourceUsage {
+                environment: EnvironmentKind::WslContainer,
+                source: Some(container_id.to_string()),
+                kind: ResourceKind::Process,
+                id: format!("{container_id}:{pid}"),
+                pid: Some(pid),
+                ppid: Some(ppid),
+                name: fields[4].to_string(),
+                args: Some(fields[5..].join(" ")),
+                cpu_percent: cpu / host_cpu_count as f64,
+                memory_bytes: rss_kib.saturating_mul(1024),
+            }))
+        })
+        .collect()
 }
 
 fn parse_percent(value: &str) -> Result<f64, Box<dyn Error>> {
@@ -149,7 +255,7 @@ fn parse_size_bytes(value: &str) -> Result<u64, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_memory_usage, parse_percent, parse_size_bytes};
+    use super::{parse_memory_usage, parse_percent, parse_processes, parse_size_bytes};
 
     #[test]
     fn parses_wslc_cpu_percent() {
@@ -170,5 +276,15 @@ mod tests {
     fn parses_binary_sizes() {
         assert_eq!(parse_size_bytes("1 KiB").unwrap(), 1024);
         assert_eq!(parse_size_bytes("1 GiB").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parses_wslc_processes_and_excludes_collector_ps() {
+        let input = b"PID PPID %CPU RSS COMMAND COMMAND\n1 0 16.0 1024 cc1plus cc1plus -O2\n99 0 20.0 3864 ps ps -eo pid,ppid,pcpu,rss,comm,args\n";
+        let rows = parse_processes(input, "abc", 16).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "cc1plus");
+        assert_eq!(rows[0].cpu_percent, 1.0);
+        assert_eq!(rows[0].memory_bytes, 1024 * 1024);
     }
 }

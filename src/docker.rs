@@ -54,8 +54,8 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>>
     let mut result = Vec::with_capacity(resources.len());
     let mut warnings = Vec::new();
     for resource in resources {
-        let host_pids = match container_pids(&resource.id) {
-            Ok(pids) => pids,
+        let processes = match container_processes(&resource.id, host_logical_cpu_count) {
+            Ok(processes) => processes,
             Err(error) => {
                 warnings.push(format!(
                     "Docker container {} process attribution unavailable: {error}",
@@ -66,7 +66,10 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>>
         };
         result.push(ContainerProcessUsage {
             resource,
-            host_pids,
+            processes,
+            // docker top PIDs are daemon-namespace PIDs.  They must not be
+            // treated as current-WSL host PIDs without a separate proof.
+            host_pids: Vec::new(),
         });
     }
     Ok(DockerUsage {
@@ -75,18 +78,76 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>>
     })
 }
 
-fn container_pids(id: &str) -> Result<Vec<u32>, Box<dyn Error>> {
+fn container_processes(
+    id: &str,
+    host_logical_cpu_count: u32,
+) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
     let output = Command::new("docker")
-        .args(["top", id, "-eo", "pid"])
+        .args(["top", id, "-eo", "pid,ppid,pcpu,rss,comm,args"])
         .output()?;
     if !output.status.success() {
-        return Err("docker top failed".into());
+        return Err(format!(
+            "docker top failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
     }
-    Ok(String::from_utf8(output.stdout)?
-        .lines()
-        .skip(1)
-        .filter_map(|line| line.trim().parse().ok())
-        .collect())
+    parse_top(&output.stdout, id, host_logical_cpu_count)
+}
+
+fn parse_top(
+    input: &[u8],
+    container_id: &str,
+    host_cpu_count: u32,
+) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
+    if host_cpu_count == 0 {
+        return Err("host logical CPU count is zero".into());
+    }
+    let text = std::str::from_utf8(input)?;
+    let mut lines = text.lines();
+    let header: Vec<_> = lines
+        .next()
+        .ok_or("docker top output is empty")?
+        .split_whitespace()
+        .collect();
+    if header.len() < 6
+        || !header[0].eq_ignore_ascii_case("PID")
+        || !header[1].eq_ignore_ascii_case("PPID")
+        || !matches!(header[2].to_ascii_uppercase().as_str(), "%CPU" | "PCPU")
+        || !header[3].eq_ignore_ascii_case("RSS")
+    {
+        return Err("unsupported docker top columns".into());
+    }
+    lines
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            if fields.len() < 6 {
+                return Err(format!("malformed docker top process row: {line:?}").into());
+            }
+            let pid = fields[0].parse::<u32>()?;
+            let ppid = fields[1].parse::<u32>()?;
+            let cpu = fields[2].parse::<f64>()?;
+            let rss_kib = fields[3].parse::<u64>()?;
+            if !cpu.is_finite() || cpu < 0.0 {
+                return Err("invalid docker top CPU percentage".into());
+            }
+            let command = fields[4];
+            let args = fields[5..].join(" ");
+            Ok(ResourceUsage {
+                environment: EnvironmentKind::Docker,
+                source: Some(container_id.to_string()),
+                kind: ResourceKind::Process,
+                id: format!("{container_id}:{pid}"),
+                pid: Some(pid),
+                ppid: Some(ppid),
+                name: command.to_string(),
+                args: Some(args),
+                cpu_percent: cpu / host_cpu_count as f64,
+                memory_bytes: rss_kib.saturating_mul(1024),
+            })
+        })
+        .collect()
 }
 
 fn daemon_unavailable(stderr: &[u8]) -> bool {
@@ -109,7 +170,9 @@ fn parse_stats(input: &[u8], host_cpu_count: u32) -> Result<Vec<ResourceUsage>, 
                 kind: ResourceKind::Container,
                 id: raw.id,
                 pid: None,
+                ppid: None,
                 name: raw.name,
+                args: None,
                 cpu_percent: parse_percent(&raw.cpu_percent)? / host_cpu_count as f64,
                 memory_bytes: parse_memory(&raw.memory_usage)?,
             })
@@ -149,7 +212,7 @@ fn parse_memory(value: &str) -> Result<u64, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{daemon_unavailable, parse_stats};
+    use super::{daemon_unavailable, parse_stats, parse_top};
     use crate::model::{EnvironmentKind, ResourceKind};
 
     #[test]
@@ -174,5 +237,25 @@ mod tests {
             assert!(daemon_unavailable(message.as_bytes()));
         }
         assert!(!daemon_unavailable(b"docker stats: unknown flag --bad"));
+    }
+
+    #[test]
+    fn parses_docker_top_and_normalizes_host_cpu() {
+        let input =
+            b"PID PPID %CPU RSS COMMAND COMMAND\n42 1 499.2 2048 cc1plus cc1plus -O2 source.cc\n";
+        let rows = parse_top(input, "abcdef", 16).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pid, Some(42));
+        assert_eq!(rows[0].ppid, Some(1));
+        assert_eq!(rows[0].name, "cc1plus");
+        assert_eq!(rows[0].args.as_deref(), Some("cc1plus -O2 source.cc"));
+        assert_eq!(rows[0].cpu_percent, 31.2);
+        assert_eq!(rows[0].memory_bytes, 2_097_152);
+    }
+
+    #[test]
+    fn rejects_malformed_or_unsupported_docker_top() {
+        assert!(parse_top(b"PID COMMAND\n1 init\n", "id", 8).is_err());
+        assert!(parse_top(b"PID PPID %CPU RSS COMMAND COMMAND\nbad row\n", "id", 8).is_err());
     }
 }

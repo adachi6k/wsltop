@@ -27,6 +27,8 @@ struct Options {
     tree: bool,
     no_docker: bool,
     interactive: bool,
+    show_container_processes: bool,
+    container_process_limit: usize,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -43,6 +45,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         no_wslc: options.no_wslc,
         no_docker: options.no_docker,
         hide_infra: options.hide_infra,
+        show_container_processes: options.show_container_processes,
+        container_process_limit: options.container_process_limit,
     };
     if options.interactive {
         return tui::run(config, options.tree);
@@ -80,6 +84,8 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
         tree: false,
         no_docker: false,
         interactive: false,
+        show_container_processes: false,
+        container_process_limit: 5,
     };
 
     let mut args = env::args().skip(1);
@@ -93,6 +99,18 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
             "--hide-infra" => options.hide_infra = true,
             "--tree" => options.tree = true,
             "--no-docker" => options.no_docker = true,
+            "--show-container-processes" | "--show-docker-processes" => {
+                options.show_container_processes = true
+            }
+            "--container-process-limit" | "--docker-process-limit" => {
+                let value = args
+                    .next()
+                    .ok_or("--container-process-limit requires a value")?;
+                options.container_process_limit = value.parse::<usize>()?;
+                if options.container_process_limit == 0 {
+                    return Err("--container-process-limit must be at least 1".into());
+                }
+            }
             "-i" | "--interactive" => options.interactive = true,
             "-V" | "--version" => {
                 println!("wsltop {}", env!("CARGO_PKG_VERSION"));
@@ -126,7 +144,7 @@ fn print_help() {
         "wsltop {}\n\n\
 Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes in flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
         env!("CARGO_PKG_VERSION")
     );
 }

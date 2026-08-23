@@ -1,6 +1,6 @@
 [package]
 name = "wsltop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2"
 license = "MIT"

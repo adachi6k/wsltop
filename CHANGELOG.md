@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-24
+
+### Added
+
+- Docker-internal process discovery through `docker top`, independent of the invoking WSL distribution's `/proc` and PID namespace.
+- WSLC-internal process discovery through `wslc.exe exec` and in-container `ps`.
+- Container process CPU, PID, PPID, RSS, command, and argument metadata with Windows-host CPU normalization.
+- Container-level `unattributed_cpu_percent` and `over_attributed_cpu_percent` accounting without proportional process scaling.
+- Unified `--show-container-processes` and `--container-process-limit` options for optional flat Docker/WSLC process visibility.
+
+### Changed
+
+- Docker Desktop attribution remains an independent top-level group when no valid Docker-host/VM mapping is known; containers are no longer attached to the current WSL VM by numeric PID coincidence.
+- Flat output ranks and limits containers by total container CPU, then groups CPU-sorted child processes and residual accounting directly beneath each selected container.
+- Long container IDs are shortened to 12 characters in text process labels while complete native IDs remain available in JSON.
+- Docker and WSLC ps-style process CPU averages are explicitly distinguished from interval-sampled `/proc` CPU measurements.
+
+### Compatibility
+
+- Default flat output continues to include existing container rows without internal process rows.
+- Flat JSON remains a top-level resource array; process metadata is additive and opt-in.
+- Tree JSON keeps existing fields and adds WSLC process attribution groups.
+- `--show-docker-processes` and `--docker-process-limit` remain accepted as aliases for the unified container options.
+
 ## [0.1.0] - 2026-08-23
 
 ### Added
@@ -29,5 +53,6 @@ All notable changes to this project will be documented in this file. The format 
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/adachi6k/wsltop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/adachi6k/wsltop/releases/tag/v0.1.0

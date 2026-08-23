@@ -20,6 +20,8 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Release build
         run: cargo build --release --locked
+      - name: Package
+        run: cargo package --locked
       - name: Help smoke test
         run: cargo run --locked -- --help
       - name: Version smoke test

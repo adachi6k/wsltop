@@ -15,6 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Verify tag matches package version
+        run: |
+          package_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "${GITHUB_REF_NAME#v}" = "$package_version"
       - name: Build locked release binary
         run: cargo build --release --locked
       - name: Package
