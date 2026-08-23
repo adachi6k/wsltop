@@ -1,3 +1,5 @@
+use crate::monitor::{Monitor, MonitorConfig};
+use crate::render;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -11,13 +13,19 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Terminal;
 use std::error::Error;
 use std::io::{self, stdout};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-pub fn run(interval: Duration) -> Result<(), Box<dyn Error>> {
+pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Error>> {
+    let interval = config.interval;
     let mut terminal = TerminalGuard::new()?;
-    let mut state = State::default();
-    refresh(&mut state, interval);
+    let mut state = State {
+        tree: initial_tree,
+        hide_infra: config.hide_infra,
+        show_hosts: config.show_wsl_host,
+        ..State::default()
+    };
+    let mut monitor = Monitor::new(config);
+    refresh(&mut state, &mut monitor);
     let mut last_refresh = Instant::now();
 
     loop {
@@ -31,7 +39,8 @@ pub fn run(interval: Duration) -> Result<(), Box<dyn Error>> {
             frame.render_widget(
                 Paragraph::new(Line::styled(
                     format!(
-                        " wsltop Phase 5 | {} | refresh {}ms ",
+                        " wsltop {} | {} | refresh {}ms ",
+                        env!("CARGO_PKG_VERSION"),
                         if state.tree { "tree" } else { "flat" },
                         interval.as_millis()
                     ),
@@ -65,13 +74,13 @@ pub fn run(interval: Duration) -> Result<(), Box<dyn Error>> {
                     break;
                 }
                 if matches!(key.code, KeyCode::Char('t' | 'i' | 'h' | '0')) {
-                    refresh(&mut state, interval);
+                    refresh(&mut state, &mut monitor);
                     last_refresh = Instant::now();
                 }
             }
         }
         if last_refresh.elapsed() >= interval {
-            refresh(&mut state, interval);
+            refresh(&mut state, &mut monitor);
             last_refresh = Instant::now();
         }
     }
@@ -114,40 +123,27 @@ impl State {
     }
 }
 
-fn refresh(state: &mut State, interval: Duration) {
-    let executable = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(error) => {
-            state.status = error.to_string();
-            return;
-        }
-    };
-    let mut command = Command::new(executable);
-    command.args([
-        "--interval-ms",
-        &interval.as_millis().to_string(),
-        "--limit",
-        "200",
-    ]);
-    if state.tree {
-        command.arg("--tree");
-    }
-    if state.hide_infra {
-        command.arg("--hide-infra");
-    }
-    if state.show_hosts {
-        command.arg("--show-wsl-host");
-    }
-    match command.output() {
-        Ok(output) if output.status.success() => {
-            state.lines = String::from_utf8_lossy(&output.stdout)
+fn refresh(state: &mut State, monitor: &mut Monitor) {
+    monitor.config_mut().hide_infra = state.hide_infra;
+    monitor.config_mut().show_wsl_host = state.show_hosts;
+    match monitor.sample() {
+        Ok(snapshot) => {
+            let output = if state.tree {
+                render::tree(&snapshot)
+            } else {
+                render::flat(&snapshot)
+            };
+            state.lines = output
                 .lines()
                 .filter(|line| !state.hide_zero || !line.contains(" 0.00%"))
                 .map(|line| Line::raw(line.to_string()))
                 .collect();
-            state.status = "updated".to_string();
+            state.status = if snapshot.warnings.is_empty() {
+                "updated".to_string()
+            } else {
+                snapshot.warnings.join("; ")
+            };
         }
-        Ok(output) => state.status = String::from_utf8_lossy(&output.stderr).trim().to_string(),
         Err(error) => state.status = error.to_string(),
     }
 }

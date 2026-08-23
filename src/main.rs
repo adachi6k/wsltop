@@ -2,17 +2,17 @@ mod attribution;
 mod docker;
 mod linux;
 mod model;
+mod monitor;
 mod multiwsl;
+mod render;
 mod sampler;
 mod tui;
 mod windows;
 mod wslc;
 
-use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
-use std::cmp::Ordering;
+use crate::monitor::{Monitor, MonitorConfig};
 use std::env;
 use std::error::Error;
-use std::thread;
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -34,288 +34,44 @@ fn main() -> Result<(), Box<dyn Error>> {
     if options.interactive && options.json {
         return Err("--interactive cannot be combined with --json".into());
     }
+
+    let config = MonitorConfig {
+        interval: options.interval,
+        limit: options.limit,
+        show_wsl_host: options.show_wsl_host,
+        wsl_only: options.wsl_only,
+        no_wslc: options.no_wslc,
+        no_docker: options.no_docker,
+        hide_infra: options.hide_infra,
+    };
     if options.interactive {
-        return tui::run(options.interval);
+        return tui::run(config, options.tree);
     }
 
-    let linux_before = linux::snapshot()?;
-    let extra_wsl_before = if options.wsl_only {
-        Vec::new()
-    } else {
-        multiwsl::snapshots().unwrap_or_else(|error| {
-            eprintln!("warning: additional WSL distro discovery unavailable: {error}");
-            Vec::new()
-        })
-    };
-    let windows_before = if options.wsl_only {
-        None
-    } else {
-        Some(windows::snapshot()?)
-    };
-
-    thread::sleep(options.interval);
-
-    let linux_after = linux::snapshot()?;
-    let extra_wsl_after = if options.wsl_only {
-        Vec::new()
-    } else {
-        multiwsl::snapshots().unwrap_or_else(|error| {
-            eprintln!("warning: additional WSL distro discovery unavailable: {error}");
-            Vec::new()
-        })
-    };
-    let windows_after = if options.wsl_only {
-        None
-    } else {
-        Some(windows::snapshot()?)
-    };
-
-    let host_cpu_count = match &windows_after {
-        Some(snapshot) => snapshot.host_logical_cpu_count,
-        None => std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(1),
-    };
-
-    let mut linux_usage = sampler::calculate_usage(&linux_before, &linux_after, host_cpu_count);
-    for (name, before) in &extra_wsl_before {
-        if let Some((_, after)) = extra_wsl_after
-            .iter()
-            .find(|(candidate, _)| candidate == name)
-        {
-            linux_usage.extend(sampler::calculate_usage(before, after, host_cpu_count));
-        }
+    let mut monitor = Monitor::new(config);
+    let snapshot = monitor.sample()?;
+    for warning in &snapshot.warnings {
+        eprintln!("warning: {warning}");
     }
-    let mut windows_usage = Vec::new();
-
-    if let (Some(before), Some(after)) = (&windows_before, &windows_after) {
-        if before.host_logical_cpu_count != after.host_logical_cpu_count {
-            eprintln!(
-                "warning: Windows logical CPU count changed during sampling ({} -> {})",
-                before.host_logical_cpu_count, after.host_logical_cpu_count
-            );
-        }
-        windows_usage = sampler::calculate_usage(&before.snapshot, &after.snapshot, host_cpu_count);
-    }
-
-    let mut wslc_usage = Vec::new();
-    if !options.wsl_only && !options.no_wslc {
-        match wslc::usage(host_cpu_count) {
-            Ok(rows) => wslc_usage = rows,
-            Err(e) => eprintln!("warning: WSLC collector unavailable: {e}"),
-        }
-    }
-
-    let mut docker_usage = Vec::new();
-    if !options.no_docker {
-        match docker::usage(host_cpu_count) {
-            Ok(rows) => docker_usage = rows,
-            Err(error) => eprintln!("warning: Docker collector unavailable: {error}"),
-        }
-    }
-
-    if options.tree {
-        let hosts: Vec<_> = windows_usage
-            .iter()
-            .filter(|row| attribution::is_host_resource(row))
-            .cloned()
-            .collect();
-        let mut tree = attribution::build_tree_with_docker(
-            host_cpu_count,
-            &hosts,
-            &linux_usage,
-            &wslc_usage,
-            &docker_usage,
+    if options.wsl_only {
+        eprintln!(
+            "warning: --wsl-only uses the WSL-visible logical CPU count; host-normalized CPU% requires Windows interop"
         );
-        if options.hide_infra {
-            attribution::hide_infra(&mut tree);
-        }
-        if options.json {
-            println!("{}", serde_json::to_string_pretty(&tree)?);
-        } else {
-            print_tree(&tree, options.wsl_only);
-        }
-        return Ok(());
     }
-
-    let mut usage = linux_usage;
-    usage.extend(windows_usage);
-    usage.extend(wslc_usage);
-    usage.extend(docker_usage.into_iter().map(|item| item.resource));
-    prepare_flat_usage(
-        &mut usage,
-        options.show_wsl_host,
-        options.hide_infra,
-        options.limit,
-    );
 
     if options.json {
-        println!("{}", serde_json::to_string_pretty(&usage)?);
+        if options.tree {
+            println!("{}", serde_json::to_string_pretty(&snapshot.tree)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&snapshot.resources)?);
+        }
+    } else if options.tree {
+        print!("{}", render::tree(&snapshot));
     } else {
-        print_table(&usage, host_cpu_count, options.wsl_only);
+        print!("{}", render::flat(&snapshot));
     }
 
     Ok(())
-}
-
-fn prepare_flat_usage(
-    usage: &mut Vec<ResourceUsage>,
-    show_wsl_host: bool,
-    hide_infra: bool,
-    limit: usize,
-) {
-    if !show_wsl_host {
-        usage.retain(|row| !attribution::is_host_resource(row));
-    }
-    if hide_infra {
-        usage.retain(|row| row.kind != ResourceKind::Infra);
-    }
-    usage.sort_by(|a, b| {
-        b.cpu_percent
-            .partial_cmp(&a.cpu_percent)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
-    });
-    usage.truncate(limit);
-}
-
-fn print_tree(tree: &attribution::AttributionTree, wsl_only: bool) {
-    if wsl_only {
-        eprintln!(
-            "warning: --wsl-only cannot collect Windows host resources; attribution mapping is unresolved"
-        );
-    }
-
-    println!("Host logical CPUs: {}", tree.host_logical_cpu_count);
-    println!();
-
-    for group in &tree.groups {
-        let unresolved = if group.mapping_status == attribution::MappingStatus::Unresolved {
-            " [session mapping unresolved]"
-        } else {
-            ""
-        };
-        println!(
-            "{:<42} {:>7.2}%{}",
-            group.name, group.cpu_percent, unresolved
-        );
-        for child in &group.children {
-            println!(
-                "|- {:<10} {:<27} {:>7.2}%",
-                child.kind.as_str(),
-                display_name(child),
-                child.cpu_percent
-            );
-            if child.environment == EnvironmentKind::Docker {
-                if let Some(docker) = tree
-                    .docker_groups
-                    .iter()
-                    .find(|docker| docker.container.id == child.id)
-                {
-                    for process in &docker.children {
-                        println!(
-                            "|  |- {:<7} {:<24} {:>7.2}%",
-                            "process", process.name, process.cpu_percent
-                        );
-                    }
-                    println!(
-                        "|  `- {:<7} {:<24} {:>7.2}%",
-                        "unattributed", "", docker.unattributed_cpu_percent
-                    );
-                }
-            }
-        }
-        println!(
-            "`- {:<10} {:<27} {:>7.2}%",
-            "unattributed", "", group.unattributed_cpu_percent
-        );
-        if group.over_attributed_cpu_percent > 0.0 {
-            println!(
-                "   sampling skew (children exceed host by {:.2}%)",
-                group.over_attributed_cpu_percent
-            );
-        }
-        println!();
-    }
-
-    if !tree.unmapped_children.is_empty() {
-        println!("Session mapping unresolved; resources remain ungrouped:");
-        for child in &tree.unmapped_children {
-            println!(
-                "   {:<10} {:<27} {:>7.2}%",
-                child.kind.as_str(),
-                display_name(child),
-                child.cpu_percent
-            );
-        }
-    }
-}
-
-fn print_table(rows: &[ResourceUsage], host_cpu_count: u32, wsl_only: bool) {
-    if wsl_only {
-        eprintln!(
-            "warning: --wsl-only uses the WSL-visible logical CPU count ({host_cpu_count}); host-normalized CPU% requires Windows interop"
-        );
-    }
-
-    println!("Host logical CPUs: {host_cpu_count}");
-    println!(
-        "{:<7} {:<9} {:>7} {:>9} {:>12} COMMAND",
-        "ENV", "TYPE", "CPU%", "MEM", "ID/PID"
-    );
-    println!("{}", "-".repeat(84));
-
-    for row in rows {
-        println!(
-            "{:<7} {:<9} {:>6.2}% {:>9} {:>12}  {}",
-            env_name(row.environment),
-            row.kind.as_str(),
-            row.cpu_percent,
-            format_bytes(row.memory_bytes),
-            display_id(row),
-            display_name(row)
-        );
-    }
-}
-
-fn display_name(row: &ResourceUsage) -> String {
-    row.source.as_ref().map_or_else(
-        || row.name.clone(),
-        |source| format!("[{source}] {}", row.name),
-    )
-}
-
-fn display_id(row: &ResourceUsage) -> String {
-    match row.pid {
-        Some(pid) => pid.to_string(),
-        None => row.id.chars().take(12).collect(),
-    }
-}
-
-fn env_name(environment: EnvironmentKind) -> &'static str {
-    match environment {
-        EnvironmentKind::Windows => "Windows",
-        EnvironmentKind::Wsl => "WSL",
-        EnvironmentKind::WslContainer => "WSLC",
-        EnvironmentKind::Docker => "Docker",
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    let value = bytes as f64;
-
-    if value >= GIB {
-        format!("{:.2}G", value / GIB)
-    } else if value >= MIB {
-        format!("{:.0}M", value / MIB)
-    } else if value >= KIB {
-        format!("{:.0}K", value / KIB)
-    } else {
-        format!("{bytes}B")
-    }
 }
 
 fn parse_args() -> Result<Options, Box<dyn Error>> {
@@ -373,58 +129,10 @@ fn parse_args() -> Result<Options, Box<dyn Error>> {
 
 fn print_help() {
     println!(
-        "wsltop 0.1.0\n\n\
-Unified Windows/WSL/WSLC/Docker CPU monitor (Phase 5)\n\n\
+        "wsltop {}\n\n\
+Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table\n    --tree                 Emit the WSL/WSLC CPU attribution tree\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat output\n    --wsl-only             Skip Windows and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n"
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: 1000]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
+        env!("CARGO_PKG_VERSION")
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::prepare_flat_usage;
-    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
-
-    fn resource(environment: EnvironmentKind, kind: ResourceKind, name: &str) -> ResourceUsage {
-        ResourceUsage {
-            environment,
-            source: None,
-            kind,
-            id: name.to_string(),
-            pid: Some(1),
-            name: name.to_string(),
-            cpu_percent: 1.0,
-            memory_bytes: 0,
-        }
-    }
-
-    #[test]
-    fn flat_output_hides_hosts_by_default_but_keeps_resource_types() {
-        let mut rows = vec![
-            resource(EnvironmentKind::Windows, ResourceKind::Host, "vmmemwsl"),
-            resource(EnvironmentKind::Wsl, ResourceKind::Infra, "plan9"),
-            resource(
-                EnvironmentKind::WslContainer,
-                ResourceKind::Container,
-                "container",
-            ),
-        ];
-
-        prepare_flat_usage(&mut rows, false, false, 30);
-
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().any(|row| row.kind == ResourceKind::Infra));
-        assert!(rows.iter().any(|row| row.kind == ResourceKind::Container));
-    }
-
-    #[test]
-    fn flat_output_can_show_raw_hosts() {
-        let mut rows = vec![resource(
-            EnvironmentKind::Windows,
-            ResourceKind::Host,
-            "vmmemwsl",
-        )];
-        prepare_flat_usage(&mut rows, true, false, 30);
-        assert_eq!(rows.len(), 1);
-    }
 }
