@@ -18,12 +18,7 @@ use std::time::{Duration, Instant};
 pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Error>> {
     let interval = config.interval;
     let mut terminal = TerminalGuard::new()?;
-    let mut state = State {
-        tree: initial_tree,
-        hide_infra: config.hide_infra,
-        show_hosts: config.show_wsl_host,
-        ..State::default()
-    };
+    let mut state = State::from_config(&config, initial_tree);
     let mut monitor = Monitor::new(config);
     refresh(&mut state, &mut monitor);
     let mut last_refresh = Instant::now();
@@ -99,6 +94,15 @@ struct State {
 }
 
 impl State {
+    fn from_config(config: &MonitorConfig, tree: bool) -> Self {
+        Self {
+            tree,
+            hide_infra: config.hide_infra,
+            show_hosts: config.show_wsl_host,
+            ..Self::default()
+        }
+    }
+
     fn key(&mut self, code: KeyCode) -> bool {
         match code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
@@ -179,7 +183,9 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::State;
+    use crate::monitor::MonitorConfig;
     use crossterm::event::KeyCode;
+    use std::time::Duration;
     #[test]
     fn updates_navigation_and_toggles() {
         let mut state = State::default();
@@ -189,5 +195,22 @@ mod tests {
         assert_eq!(state.scroll, 0);
         assert!(state.tree && state.hide_infra);
         assert!(state.key(KeyCode::Char('q')));
+    }
+
+    #[test]
+    fn applies_initial_interactive_view_options() {
+        let config = MonitorConfig {
+            interval: Duration::from_millis(500),
+            limit: 12,
+            show_wsl_host: true,
+            wsl_only: false,
+            no_wslc: true,
+            no_docker: true,
+            hide_infra: true,
+        };
+        let state = State::from_config(&config, true);
+        assert!(state.tree);
+        assert!(state.hide_infra);
+        assert!(state.show_hosts);
     }
 }

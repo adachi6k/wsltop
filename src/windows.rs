@@ -77,8 +77,8 @@ $items = @(Get-Process | ForEach-Object {
                 environment: EnvironmentKind::Windows,
                 source: None,
                 pid: process.pid,
-                // Phase 0 does not request StartTime because access can fail for protected
-                // processes. A negative CPU delta is treated as PID reuse by the sampler.
+                // StartTime is not requested because access can fail for protected processes.
+                // A negative CPU delta is treated as PID reuse by the sampler.
                 start_id: 0,
             },
             name: process.name,
