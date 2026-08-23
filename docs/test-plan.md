@@ -1,127 +1,93 @@
-# Phase 0 Validation Plan
+# Validation and Test Plan
 
-The goal is to validate semantics against a real WSL2 + Windows host before adding Docker or a TUI.
+This document separates portable CI checks from real Windows/WSL host validation. CI validates deterministic code paths on an Ubuntu runner; collectors that require Windows interoperability, WSLC, Docker, or multiple WSL distributions must be exercised on representative hosts before release.
 
-## 1. Environment sanity
+## Automated checks
 
-From WSL:
+Run from a clean checkout with the tracked lockfile:
 
-```bash
-powershell.exe -NoProfile -NonInteractive -Command '[Environment]::ProcessorCount'
-echo "$WSL_DISTRO_NAME"
-rustc --version
-cargo --version
+```console
+cargo fmt --all -- --check
+cargo test --all-targets
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --release --locked
+cargo run --locked -- --help
+cargo run --locked -- --version
 ```
 
-`powershell.exe` must run successfully. If it does not, check WSL interop before debugging `wsltop`.
+Unit tests cover CPU delta normalization, resource classification, attribution remainder/clamping, WSLC ambiguity, Docker nesting, parsing, and flat filtering. Help and version smoke tests must exit before any WSL/Windows runtime collection.
 
-## 2. Build
+## Real-host feature matrix
 
-```bash
-cargo build --release
-./target/release/wsltop --help
-```
+| Case | Setup / command | Expected result |
+| --- | --- | --- |
+| Windows native processes | `wsltop --once` with interop enabled | Windows rows appear and use host-wide CPU normalization |
+| Current WSL distro | Run a known workload in the invoking distro | Process appears with no remote-distro source label |
+| Second WSL distro | Start another distro, run a workload, then `wsltop --once` | Workload appears labelled with its distro; PID collisions do not merge |
+| WSLC present | Run containers in the default WSLC session | Container rows appear as `WSLC container` |
+| WSLC absent | Run without `wslc.exe` installed | Warning is emitted; Windows, WSL, and Docker collection continue |
+| Multiple WSLC hosts | Make more than one `vmmemwslc-*` host visible | Tree reports session mapping unresolved and does not guess; flat containers remain |
+| Docker present | Run a busy container | Docker container appears and is host-normalized |
+| Docker CLI absent | Remove Docker CLI from `PATH` | Warning is emitted; non-Docker monitoring continues |
+| Docker daemon stopped | Stop/unreachable daemon | Warning is emitted; no Docker rows; other collectors continue |
+| Docker process attribution | Run identifiable processes in a busy container, `wsltop --tree` | Container nests matching processes; values are not double-counted as direct WSL children |
+| Tree output | `wsltop --tree` | WSL/WSLC hosts are parents with children and non-negative unattributed CPU |
+| Flat JSON | `wsltop --json` | Top-level value remains a resource array with `kind` fields |
+| Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, groups, residuals, and unresolved resources |
+| Interactive TUI | `wsltop --interactive` | Updates in place without spawning child `wsltop` processes; navigation/toggles work |
+| Initial interactive options | Combine `--interactive` with interval, collector switches, limit, tree, infra, and host options | Initial state and all collection/filter choices are honored |
+| Invalid interactive JSON | `wsltop --interactive --json` | Exits with an explicit incompatibility error and restores terminal state |
+| Hide infrastructure | `wsltop --hide-infra` and toggle `i` in TUI | `plan9` infrastructure rows are hidden as selected |
+| Show raw host | `wsltop --show-wsl-host` | Raw `vmmem*` host rows appear only in flat views |
+| WSL-only | `wsltop --wsl-only` | Current distro and optional Docker data remain; Windows, additional distros, and WSLC are skipped; limitation warning appears |
 
-## 3. Baseline sample
+## CPU validation
 
-```bash
-./target/release/wsltop --once --limit 30
-```
+Use a workload that can pin a known number of logical CPUs and compare against Windows Task Manager over a stable interval.
 
-Verify that both `Windows` and `WSL` rows appear and that `Idle` and `VmmemWSL` do not appear by default.
+On a 16-logical-CPU host:
 
-Then verify the diagnostic mode:
+| Workload | Expected host-wide value |
+| --- | --- |
+| One busy logical CPU | Approximately 6.25% |
+| Four busy logical CPUs | Approximately 25% |
 
-```bash
-./target/release/wsltop --once --show-wsl-host
-```
+Validate Windows, current WSL, a second distro, WSLC, and Docker separately where possible. Use a sampling interval long enough that collector startup latency is small relative to the interval. Exact equality is not expected.
 
-`vmmem`/`vmmemWSL` may now appear; its CPU must not be added to the WSL process rows.
+## Attribution validation
 
-## 4. Single WSL CPU load
-
-Start one busy Linux process:
-
-```bash
-yes > /dev/null &
-LOAD_PID=$!
-./target/release/wsltop --once --limit 20
-kill "$LOAD_PID"
-```
-
-Expected host-normalized result:
+For each visible host group, verify:
 
 ```text
-approximately 100 / Windows-host-logical-CPU-count percent
+unattributed = max(host - known children, 0)
 ```
 
-For example, one saturated logical CPU on a 16-logical-CPU Windows host should be about 6.25%.
+- host 10%, children 7% produces unattributed 3%
+- host 10%, children 10% produces unattributed 0%
+- host 10%, children 12% produces unattributed 0% and records 2% sampling skew
+- child values are never proportionally scaled to fit the host
+- parent memory is never subtracted from child memory
 
-Traditional Linux `top` will normally show that same process near 100%; this difference is intentional.
+Confirm that parent and child CPU are not summed when interpreting total machine utilization.
 
-## 5. Multi-core WSL load
+## Degradation and recovery
 
-Start four independent busy processes:
+Validate these failure paths deliberately:
 
-```bash
-for i in 1 2 3 4; do yes > /dev/null & echo $!; done > /tmp/wsltop-load-pids
-./target/release/wsltop --once --limit 30
-xargs -r kill < /tmp/wsltop-load-pids
-rm -f /tmp/wsltop-load-pids
-```
+- WSLC not installed: continue with Windows and WSL data.
+- Docker CLI missing or daemon unavailable: continue without Docker rows.
+- Additional distro exits or is unavailable mid-sample: warn and continue with remaining sources.
+- Multiple WSLC hosts: mark mapping unresolved and preserve ungrouped resources.
+- Collector warning in TUI: surface it in the status line without terminating refreshes.
+- Terminal exit, collector error, panic/unwind path, and `Ctrl-C` where supported: raw mode, alternate screen, and cursor state return to normal.
 
-On a 16-logical-CPU Windows host, their total should be near 25% of host CPU capacity (subject to scheduler/sample noise).
+## Release acceptance
 
-Compare the total with Windows Task Manager's overall CPU change and with the WSL VM consumption.
+Before tagging v0.1.0:
 
-## 6. Sampling stability
-
-Compare several intervals:
-
-```bash
-./target/release/wsltop --once --interval-ms 500
-./target/release/wsltop --once --interval-ms 1000
-./target/release/wsltop --once --interval-ms 2000
-```
-
-A longer interval should reduce jitter. If Windows rows vary much more than WSL rows, PowerShell collection timing is the first suspect.
-
-## 7. JSON contract
-
-```bash
-./target/release/wsltop --json | jq '.[0:5]'
-```
-
-Fields expected per row:
-
-- `environment`
-- `pid`
-- `name`
-- `cpu_percent`
-- `memory_bytes`
-
-## 8. WSL CPU-limit test (optional but important)
-
-If Windows has 16 logical CPUs and `.wslconfig` contains:
-
-```ini
-[wsl2]
-processors=4
-```
-
-then fully saturating all four WSL CPUs should display about 25%, not 100%, because the canonical scale is Windows host capacity.
-
-After changing `.wslconfig`, run `wsl.exe --shutdown` from Windows before retesting.
-
-## Exit criteria for Phase 0
-
-Phase 0 is accepted when:
-
-1. Windows and current-WSL processes merge into one CPU-sorted list.
-2. One saturated WSL CPU matches `100 / host logical CPUs` within normal sample error.
-3. Multi-core load scales approximately linearly.
-4. Windows process CPU ranking is directionally consistent with Task Manager.
-5. `vmmem`/`vmmemWSL` is hidden by default to avoid double counting.
-6. No obvious CPU spikes are caused by PID reuse.
-
-Only after these checks should Phase 1 implement WSL VM attribution and the `unattributed` bucket.
+1. All automated commands pass from a clean checkout using `Cargo.lock`.
+2. The feature matrix is exercised on at least one current Windows 11 + WSL2 host.
+3. CPU normalization is checked against one-CPU and four-CPU workloads.
+4. At least one optional-collector failure path is verified for WSLC and Docker.
+5. The release workflow produces an executable Linux x86_64 archive from a test tag or dry run.
+6. README installation and quick-start commands work as written.

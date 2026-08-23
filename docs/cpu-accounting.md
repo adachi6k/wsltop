@@ -1,110 +1,83 @@
 # CPU Accounting
 
-## Canonical display scale
+`wsltop` reports every CPU percentage on a common host-wide scale: all logical CPUs on the Windows host together equal 100%.
 
-All normal output uses the Windows-host capacity scale:
+This matches Task Manager-style whole-machine reasoning and makes Windows, WSL, WSLC, and Docker values comparable. It differs from tools that report one fully occupied CPU as 100% regardless of host CPU count.
+
+## Expected values
+
+On a 16-logical-CPU host:
+
+- one fully busy logical CPU is approximately `100 / 16 = 6.25%`
+- four fully busy logical CPUs are approximately `4 * 100 / 16 = 25%`
+- all logical CPUs fully busy are approximately `100%`
+
+Scheduler effects, collection latency, and workload variation make observed values approximate.
+
+## Windows and WSL processes
+
+Both collectors record cumulative processor time at the beginning and end of the sampling interval. For a matched process:
 
 ```text
-all host logical CPUs fully busy = 100%
+delta_cpu_seconds = max(after.cpu_time - before.cpu_time, 0)
+elapsed_seconds = after.captured_at - before.captured_at
+
+CPU% = delta_cpu_seconds / elapsed_seconds
+       / host_logical_cpu_count * 100
 ```
 
-This deliberately differs from traditional Linux/container tooling where one fully busy logical CPU is commonly shown as 100%.
+Windows cumulative time comes from `Get-Process .CPU`. Current-WSL cumulative time comes from `/proc/<pid>/stat`; additional distributions provide equivalent values through `wsl.exe -d` collection.
 
-## Windows and WSL process formula
+Negative deltas are treated as process replacement/PID reuse and do not become negative usage. Process identity includes environment, PID, and source where available.
 
-For a process sampled twice:
+With `--wsl-only`, Windows collection is skipped and the WSL-visible logical CPU count is used as a fallback. The command warns because exact Windows-host normalization cannot be guaranteed in that mode.
 
-```text
-CPU% = delta(process CPU seconds)
-       -------------------------- * 100
-       delta(wall seconds) * host logical CPUs
-```
+## WSLC containers
 
-Example for a 16-logical-CPU Windows host:
+`wslc.exe stats --format json --no-trunc` reports `CPUPerc` using its own container convention. `wsltop` divides that percentage by the Windows logical CPU count to place it on the common host-wide scale.
 
-```text
-process CPU increases by 1.0 s over 1.0 s
-CPU% = 1.0 / (1.0 * 16) * 100 = 6.25%
-```
+The collector's `MemUsage` value is retained as resource metadata but is not used in parent/child subtraction.
 
-## WSLC container formula
+## Docker containers
 
-`wslc stats` reports a native CPU percentage such as `100.29%`. Phase 0.1 interprets this using the common container convention where one fully busy logical CPU is approximately 100%, then normalizes it to the Windows-host scale:
+Docker reports a container CPU percentage in a convention where one fully busy CPU is approximately 100%. `wsltop` divides it by the host logical CPU count so the result shares the Windows host scale.
 
-```text
-wsltop WSLC CPU% = wslc CPUPerc / host logical CPUs
-```
+Docker process attribution does not add nested process CPU to container CPU. The container is the accounting child of the WSL host; matching process samples explain the container internally.
 
-For a 16-logical-CPU host:
+## Host attribution
+
+Windows `vmmem`, `vmmemWSL`, and `vmmemwslc-*` process CPU values are parent observations. Known WSL or WSLC resources are child observations:
 
 ```text
-wslc CPUPerc = 100.29%
-wsltop CPU%  = 100.29 / 16 = 6.27%
-```
-
-This assumption must be validated against Windows Task Manager and the corresponding `vmmemwslc-*` host process before it is considered stable.
-
-## Docker container formula
-
-`docker stats` uses the same per-logical-CPU container convention. Phase 2 normalizes it identically:
-
-```text
-wsltop Docker CPU% = docker CPUPerc / host logical CPUs
-```
-
-Docker stats are instantaneous and collected after the process snapshots, so small timing differences are expected. Docker process attribution is deferred to Phase 3.
-
-## WSL processor limits
-
-If `.wslconfig` limits WSL to 8 processors on a 16-processor Windows host, fully saturating all WSL processors consumes 50% of host capacity and therefore displays as approximately 50%.
-
-For this reason `wsltop` obtains the denominator from Windows rather than from the WSL-visible CPU count.
-
-`--wsl-only` is a degraded/debug mode: it uses the WSL-visible logical CPU count and warns that the value may not be host-normalized.
-
-## Linux process CPU time
-
-`/proc/<pid>/stat` fields:
-
-- `utime` (14)
-- `stime` (15)
-- `starttime` (22)
-- `rss` (24)
-
-`utime + stime` is converted from clock ticks using `_SC_CLK_TCK`.
-
-The process identity is `(environment, pid, starttime)` so PID reuse does not produce a false CPU spike.
-
-## Windows process CPU time
-
-PowerShell `Get-Process` exposes cumulative process CPU time in seconds through the `CPU` property. The sampler differences this value between snapshots.
-
-Windows process identity is currently `(environment, pid)`. If cumulative CPU time decreases, the sample is discarded as a likely PID reuse/reset event.
-
-## Idle process
-
-Windows `Idle` must not be treated as a normal busy process. Its CPU time grows while processors are idle, so it is filtered from the Windows collector.
-
-## WSL/WSLC host processes and double counting
-
-Rows such as `VmmemWSL` and `vmmemwslc-*` represent aggregate VM/session consumption. WSL process and WSLC container rows represent work inside those aggregates.
-
-Therefore host rows and child workload rows must not be flat-summed.
-
-Flat output continues to hide these host rows by default. `--show-wsl-host` exposes them as raw diagnostic rows. `--tree` instead uses them as parents and computes:
-
-```text
-known_children_cpu = sum(mapped child CPU%)
+known_children_cpu = sum(child.cpu_percent)
 unattributed_cpu = max(host_cpu - known_children_cpu, 0)
 over_attributed_cpu = max(known_children_cpu - host_cpu, 0)
 ```
 
-`over_attributed_cpu` records possible sampling skew; child rows are never proportionally reduced to match the host. The attribution is best-effort because `/proc`, two PowerShell snapshots, and `wslc stats` are not sampled at identical boundaries and PowerShell collection itself has latency.
+The two clamped residuals make sampling behavior explicit:
 
-The `unattributed` bucket can contain kernel work, virtualization overhead, workloads outside the current distro/session view, and timing mismatch. It must not be interpreted as a precisely isolated overhead measurement.
+- `unattributed_cpu_percent` represents host CPU not explained by known children.
+- `over_attributed_cpu_percent` records the amount by which child observations exceed the host sample.
 
-## Memory accounting
+No proportional scaling is applied to children. A displayed tree is an attribution model, not an additive list to combine with the parent.
 
-Windows `WorkingSet64` and WSLC `MemUsage` do not necessarily have matching accounting semantics. Phase 0.1 displays both but does not subtract container memory from `vmmemwslc-*` working set or label the difference as overhead.
+## Sampling alignment
 
-Phase 1 remains CPU-only: no host-minus-child memory calculation is performed in the attribution tree or JSON model.
+Linux `/proc`, PowerShell, remote WSL, WSLC, and Docker snapshots are collected through different interfaces with different latency. Their sampling windows are not atomic or perfectly aligned. Consequently:
+
+- short-lived work may appear only in a parent or child sample
+- known children may temporarily exceed a host
+- refresh intervals shorter than collector latency may be noisy
+- additional distributions can have more skew because they are sampled serially
+
+Attribution is therefore best effort. A longer `--interval-ms` may reduce relative timing noise, but it also lowers temporal resolution.
+
+## Memory is not attributed
+
+Windows `WorkingSet64`, WSLC `MemUsage`, Docker memory statistics, and Linux process resident memory have different scopes and sharing semantics. `wsltop` displays collector-provided memory values but never computes:
+
+```text
+host memory - child memory
+```
+
+Tree parent/child relationships apply to CPU attribution only.

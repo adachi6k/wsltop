@@ -1,138 +1,122 @@
-# Architecture (Phase 5)
+# Architecture
 
-## Goal
-
-Provide a single WSL command that ranks Windows-native processes, current-WSL processes, and WSLC containers by CPU consumption on one comparable host-wide scale.
-
-Phase 1 additionally presents WSL and WSLC host processes as CPU attribution trees without double-counting parents and children. Phase 2 adds flat Docker container statistics.
-
-## Components
+`wsltop` separates data acquisition, sampling/accounting, attribution, and presentation. The one-shot CLI and interactive TUI share the same monitoring engine and unified snapshot.
 
 ```text
-                         wsltop
-                           |
-          +----------------+----------------+
-          |                |                |
-          v                v                v
-  Linux collector   Windows collector   WSLC collector
-      /proc/*         powershell.exe      wslc.exe
-          |                |             stats --json
-          |                |                |
-          +--------+-------+----------------+
-                   |
-                   v
-              normalizer
-      Windows host capacity = 100%
-                   |
-                   v
-        flat table / JSON
-        attribution tree / JSON
+Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
+     \                 |                |            |           /
+      +----------------+----------------+------------+----------+
+                               collectors
+                                   |
+                      Monitor / sampling engine
+                                   |
+                         unified MonitorSnapshot
+                                   |
+                        CPU attribution model
+                            /              \
+                     CLI renderer       TUI renderer
 ```
 
-### Linux collector
+## Module responsibilities
 
-Reads the current distro's `/proc/<pid>/stat` and `/proc/<pid>/cmdline` and records cumulative CPU time, RSS, PID, start time, and executable name.
+| Module | Responsibility |
+| --- | --- |
+| `linux.rs` | Snapshot processes from the current distribution's `/proc` |
+| `windows.rs` | Snapshot Windows process cumulative CPU time and working sets through PowerShell |
+| `multiwsl.rs` | Discover and snapshot additional running WSL distributions |
+| `wslc.rs` | Collect current/default WSLC session container statistics |
+| `docker.rs` | Collect Docker statistics and host PIDs for process nesting |
+| `sampler.rs` | Convert cumulative process-time deltas into host-normalized `ResourceUsage` values |
+| `monitor.rs` | Orchestrate collectors, sampling interval, degradation warnings, flat filtering, and snapshot construction |
+| `attribution.rs` | Build WSL, WSLC, and Docker CPU attribution groups without double-counting |
+| `render.rs` | Render a `MonitorSnapshot` as the flat table or text tree |
+| `tui.rs` | Own terminal lifecycle, navigation, toggles, and refresh scheduling |
+| `main.rs` | Parse/validate CLI options and choose JSON, text, or interactive presentation |
 
-### Windows collector
+Collector logic is not duplicated between interfaces. `Monitor::sample()` is the only orchestration path used by the CLI and TUI, and the TUI refreshes it directly in-process.
 
-Runs `powershell.exe` through WSL interop and collects `Get-Process` output plus the Windows logical processor count.
+## Sampling flow
 
-`Idle` is excluded. `vmmem`, `vmmemWSL`, and `vmmemwslc-*` are always collected for attribution and classified as `host`. The flat renderer hides them by default because they overlap with WSL/WSLC workload rows; `--show-wsl-host` exposes the raw rows for diagnostics.
+`MonitorConfig` carries the interval, flat limit, collector switches, and initial filtering choices. A sample proceeds as follows:
 
-### WSLC collector
+1. Capture the current `/proc`, additional-distro, and Windows cumulative snapshots.
+2. Wait for the configured sampling interval.
+3. Capture the corresponding second snapshots.
+4. Convert matched cumulative-time deltas to host-normalized CPU percentages.
+5. Collect WSLC and Docker point-in-time statistics when enabled.
+6. Build the attribution tree from raw host and child resources.
+7. Prepare the filtered, sorted, limited flat resource list.
+8. Return both views plus warnings in a `MonitorSnapshot`.
 
-Runs:
+The engine retains raw Windows WSL-host rows long enough to build attribution even when those rows are hidden from flat output.
+
+## Unified resource model
+
+`ResourceUsage` is the common row type. It records:
+
+- environment: Windows, WSL, WSLC, or Docker
+- resource kind: `process`, `container`, `infra`, or `host`
+- stable collector identity and optional PID
+- display name and optional source distribution
+- host-normalized CPU percentage
+- collector-provided memory bytes
+
+Classification is intentionally narrow. WSL `plan9` is infrastructure; ordinary WSL processes, including `init` and `systemd`, remain processes. Windows `vmmem`, `vmmemWSL`, and `vmmemwslc-*` processes are host resources used by attribution and hidden from the default flat view.
+
+Additional distributions are labelled through `source`. Process matching includes the source so identical PIDs in separate distributions do not collide.
+
+## CPU normalization
+
+All environments share a Windows host-wide CPU scale where all logical CPUs together equal 100%. For process snapshots:
 
 ```text
-wslc.exe stats --format json --no-trunc
+CPU% = delta cumulative CPU seconds / elapsed wall seconds
+       / Windows logical CPU count * 100
 ```
 
-The JSON schema observed with WSLC 2.9.4 contains `ID`, `Name`, `CPUPerc`, `MemUsage`, `NetIO`, `BlockIO`, and `PIDs`.
+WSLC and Docker percentages are normalized from their source conventions to the same denominator. Full formulas are in [CPU accounting](cpu-accounting.md).
 
-Phase 0.1 uses:
+## Attribution
 
-- full container ID
-- container name
-- `CPUPerc`
-- used-memory portion of `MemUsage`
-
-The WSLC collector is optional. If `wslc.exe` is not installed, monitoring continues with Windows + WSL only.
-
-### Docker collector
-
-Runs `docker stats --no-stream --no-trunc --format '{{json .}}'` and reads one JSON object per running container. `ID`, `Name`, `CPUPerc`, and the used portion of `MemUsage` become `Docker`/`container` resources. CPU is normalized by the Windows logical CPU count. A missing CLI or unavailable daemon quietly returns no rows; unexpected command or data failures warn without stopping other collectors. `--no-docker` disables collection.
-
-Phase 3 runs `docker top <id> -eo pid` for each collected container. Host PIDs are matched to current-WSL process resources. Matched processes are removed from the WSL VM's direct children and nested below their Docker container; the container CPU replaces those process values in the WSL parent's known-child sum. Each container gets its own clamped `unattributed` and sampling-skew values. Flat output is unchanged.
-
-### Resource model
-
-Phase 0 used a process-only output model. Phase 0.1 generalized the final row into `ResourceUsage` so a row can represent either a process or a container while preserving `pid` for process consumers.
-
-Phase 0.2 adds a resource type to every row through the JSON `kind` field and the table's `TYPE` column:
-
-- Windows processes: `process`
-- ordinary WSL processes: `process`
-- WSLC resources: `container`
-- the WSL `plan9` process: `infra`
-
-Classification is deliberately narrow: `init`, `systemd`, and other WSL processes remain `process`. `--hide-infra` filters `infra` rows before sorting and applying `--limit`, and affects both table and JSON output. Existing options and existing JSON fields remain unchanged.
-
-### Attribution model
-
-`src/attribution.rs` owns parent/child mapping and CPU arithmetic so future multi-distro/session work does not depend on CLI rendering code. Each group records:
-
-- the raw Windows host resource
-- mapped child resources
-- summed known-child CPU
-- `unattributed_cpu_percent`
-- `over_attributed_cpu_percent` for sampling skew
-- `mapping_status` (`resolved` or `unresolved`)
-
-The current distro's WSL resources are mapped to a unique `vmmem` or `vmmemWSL` host. Current/default CLI-session containers are mapped only when exactly one `vmmemwslc-*` host exists. Ambiguous mappings are never guessed: host groups are marked unresolved and children remain in `unmapped_children`.
-
-The calculation is:
+Attribution treats Windows WSL VM/session processes as parent observations and known WSL, WSLC, or Docker workloads as children:
 
 ```text
-known = sum(child CPU%)
-unattributed = max(host CPU% - known, 0)
-over_attributed = max(known - host CPU%, 0)
+host CPU = known child CPU + unattributed CPU
+unattributed CPU = max(host CPU - known child CPU, 0)
 ```
 
-Children are not rescaled. Linux snapshots, PowerShell snapshots, and `wslc stats` do not share exact sampling boundaries, so this is best-effort attribution. `over_attributed` makes that skew observable without manufacturing adjusted workload values.
+If child samples exceed the parent, attribution records the excess as `over_attributed_cpu_percent` while leaving `unattributed_cpu_percent` at zero. Children are not scaled to force equality. The values remain best-effort because collectors have different latency and snapshot times.
 
-With `--tree --hide-infra`, infrastructure child rows are suppressed only after attribution is calculated; their CPU remains part of `known_children_cpu_percent` and is not incorrectly moved into `unattributed`.
+Docker process attribution uses host PIDs reported by `docker top`. A matched current-WSL process is removed from the WSL host's direct child list and nested beneath its Docker container. The container value, rather than both container and matching process values, contributes to the WSL host known-child sum.
 
-`--tree` renders the model as text. `--tree --json` serializes the structured model. Plain `--json` remains the Phase 0.2 flat array for compatibility.
+WSLC containers map to one `vmmemwslc-*` host only when the association is unambiguous. Multiple possible hosts produce an unresolved mapping and ungrouped children; the implementation does not guess.
 
-Memory is intentionally absent from attribution arithmetic. Windows `WorkingSet64` and WSLC `MemUsage` are retained only on raw resources and are never subtracted.
+Memory attribution is deliberately absent because Windows working set, WSLC memory usage, and Docker memory statistics are not interchangeable accounting measures.
 
-## Scope boundaries
+## Output paths and compatibility
 
-### Multiple WSL distributions
+Flat text and flat JSON consume `MonitorSnapshot.resources`. Host resources are hidden unless `--show-wsl-host` is set; `--hide-infra`, sorting, and `--limit` are applied by the engine.
 
-Phase 4 enumerates running distributions with `wsl.exe --list --running --quiet`. The current distribution continues to use direct `/proc`; each additional distribution is sampled with `wsl.exe -d <name>` and tagged through the optional `source` field. Process identity includes this source, preventing identical PIDs across distributions from colliding. Remote collection is best-effort and adds timing skew.
+Tree text and tree JSON consume `MonitorSnapshot.tree`. Tree mode uses host rows internally regardless of `--show-wsl-host`. Plain `--json` remains a flat resource array for compatibility; `--tree --json` is a separate structured schema.
 
-WSLC stats remain limited to the current/default CLI session. Multiple `vmmemwslc-*` hosts are represented but containers are attached only with a unique mapping; ambiguity remains explicit and unresolved.
+The TUI renders the same text views from the same snapshot. Its `t`, `i`, and `h` keys change view/filter state, while collection switches and limits supplied on the command line remain active for the session.
 
-### Interactive terminal UI
+## Degradation and lifecycle
 
-Phase 5 uses ratatui with the crossterm backend. `src/tui.rs` owns navigation/toggle state and rendering. Refreshes invoke the same executable's one-shot flat or tree renderer, keeping collector behavior and accounting in one implementation rather than duplicating it in the UI. The child never receives `--interactive`, so recursion is impossible. A drop guard restores raw mode, the alternate screen, and cursor visibility on normal exit or propagated errors.
+The current WSL `/proc` collector and, unless `--wsl-only` is used, Windows host collection are required for a sample. Optional collectors degrade independently:
 
-Phase 5 intentionally does **not** solve:
+- additional-distribution failure: continue with current WSL and other sources
+- WSLC unavailable: continue without WSLC rows
+- Docker CLI/daemon unavailable: continue without Docker rows
+- ambiguous WSLC hosts: preserve flat rows and mark tree mapping unresolved
 
-- Docker processes that cannot be exposed as host PIDs by the active daemon
-- explanation of the components inside the `unattributed` bucket
-- disk/network/GPU accounting
-- interactive TUI
+Warnings are written to stderr in one-shot mode and surfaced in TUI status. `TerminalGuard` restores raw mode, the alternate screen, and cursor visibility when the TUI exits or unwinds through an error.
 
-## Roadmap
+## Known boundaries
 
-1. Phase 0: current WSL distro + Windows native processes
-2. Phase 0.1: current WSLC CLI-session container statistics
-3. Phase 0.2: resource type classification and infrastructure filtering
-4. Phase 1: WSL/WSLC host attribution and `unattributed` buckets
-5. Phase 2: Docker container statistics
-6. Phase 3: Docker process attribution
-7. Phase 4: multiple WSL distros and WSLC sessions
-8. Phase 5: ratatui interactive UI
-9. Phase 6: optional Windows GUI
+- Snapshots across collectors are not atomic.
+- Windows collection starts a PowerShell process for each cumulative snapshot.
+- Additional distributions are sampled serially through `wsl.exe` and have extra skew.
+- WSLC mapping covers the current/default CLI session conservatively.
+- Docker PID attribution is limited by PID visibility and available process metadata.
+- GUI presentation is outside the current CLI/TUI architecture.
