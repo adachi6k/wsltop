@@ -18,3 +18,9 @@ jobs:
         run: cargo test --all-targets
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Release build
+        run: cargo build --release
+      - name: Help smoke test
+        run: cargo run -- --help
+      - name: Version smoke test
+        run: cargo run -- --version
