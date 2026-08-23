@@ -1,4 +1,4 @@
-use crate::monitor::{Monitor, MonitorConfig};
+use crate::monitor::{Monitor, MonitorConfig, MonitorSnapshot};
 use crate::render;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
@@ -13,17 +13,21 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Terminal;
 use std::error::Error;
 use std::io::{self, stdout};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Error>> {
     let interval = config.interval;
     let mut terminal = TerminalGuard::new()?;
     let mut state = State::from_config(&config, initial_tree);
-    let mut monitor = Monitor::new(config);
-    refresh(&mut state, &mut monitor);
-    let mut last_refresh = Instant::now();
+    let worker = SamplingWorker::start(config);
 
     loop {
+        for result in worker.receiver.try_iter() {
+            state.apply_sample(result);
+        }
         terminal.terminal.draw(|frame| {
             let [header, body, footer] = Layout::vertical([
                 Constraint::Length(1),
@@ -69,14 +73,10 @@ pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Erro
                     break;
                 }
                 if matches!(key.code, KeyCode::Char('t' | 'i' | 'h' | '0')) {
-                    refresh(&mut state, &mut monitor);
-                    last_refresh = Instant::now();
+                    state.rebuild_lines();
+                    worker.update_filters(state.hide_infra, state.show_hosts);
                 }
             }
-        }
-        if last_refresh.elapsed() >= interval {
-            refresh(&mut state, &mut monitor);
-            last_refresh = Instant::now();
         }
     }
     Ok(())
@@ -91,6 +91,7 @@ struct State {
     show_hosts: bool,
     status: String,
     hide_zero: bool,
+    snapshot: Option<MonitorSnapshot>,
 }
 
 impl State {
@@ -99,6 +100,7 @@ impl State {
             tree,
             hide_infra: config.hide_infra,
             show_hosts: config.show_wsl_host,
+            status: "sampling...".to_string(),
             ..Self::default()
         }
     }
@@ -125,30 +127,89 @@ impl State {
     fn clamp_scroll(&mut self, height: usize) {
         self.scroll = self.scroll.min(self.lines.len().saturating_sub(height));
     }
+
+    fn apply_sample(&mut self, result: Result<MonitorSnapshot, String>) {
+        match result {
+            Ok(snapshot) => {
+                self.status = if snapshot.warnings.is_empty() {
+                    "updated".to_string()
+                } else {
+                    snapshot.warnings.join("; ")
+                };
+                self.snapshot = Some(snapshot);
+                self.rebuild_lines();
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn rebuild_lines(&mut self) {
+        let Some(snapshot) = &self.snapshot else {
+            return;
+        };
+        let output = if self.tree {
+            render::tree(snapshot)
+        } else {
+            render::flat(snapshot)
+        };
+        self.lines = output
+            .lines()
+            .filter(|line| !self.hide_zero || !line.contains(" 0.00%"))
+            .map(|line| Line::raw(line.to_string()))
+            .collect();
+    }
 }
 
-fn refresh(state: &mut State, monitor: &mut Monitor) {
-    monitor.config_mut().hide_infra = state.hide_infra;
-    monitor.config_mut().show_wsl_host = state.show_hosts;
-    match monitor.sample() {
-        Ok(snapshot) => {
-            let output = if state.tree {
-                render::tree(&snapshot)
-            } else {
-                render::flat(&snapshot)
-            };
-            state.lines = output
-                .lines()
-                .filter(|line| !state.hide_zero || !line.contains(" 0.00%"))
-                .map(|line| Line::raw(line.to_string()))
-                .collect();
-            state.status = if snapshot.warnings.is_empty() {
-                "updated".to_string()
-            } else {
-                snapshot.warnings.join("; ")
-            };
+struct SamplingWorker {
+    receiver: mpsc::Receiver<Result<MonitorSnapshot, String>>,
+    config: Arc<Mutex<MonitorConfig>>,
+    stop: Arc<AtomicBool>,
+}
+
+impl SamplingWorker {
+    fn start(config: MonitorConfig) -> Self {
+        let shared_config = Arc::new(Mutex::new(config));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = mpsc::channel();
+        let worker_config = Arc::clone(&shared_config);
+        let worker_stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            while !worker_stop.load(Ordering::Relaxed) {
+                let config = match worker_config.lock() {
+                    Ok(config) => config.clone(),
+                    Err(_) => break,
+                };
+                let retry_interval = config.interval;
+                let result = Monitor::new(config)
+                    .sample()
+                    .map_err(|error| error.to_string());
+                let failed = result.is_err();
+                if sender.send(result).is_err() {
+                    break;
+                }
+                if failed {
+                    thread::sleep(retry_interval);
+                }
+            }
+        });
+        Self {
+            receiver,
+            config: shared_config,
+            stop,
         }
-        Err(error) => state.status = error.to_string(),
+    }
+
+    fn update_filters(&self, hide_infra: bool, show_wsl_host: bool) {
+        if let Ok(mut config) = self.config.lock() {
+            config.hide_infra = hide_infra;
+            config.show_wsl_host = show_wsl_host;
+        }
+    }
+}
+
+impl Drop for SamplingWorker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
 
