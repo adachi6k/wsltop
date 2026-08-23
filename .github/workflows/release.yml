@@ -28,7 +28,7 @@ jobs:
           tar -C dist -czf dist/wsltop-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz wsltop-${{ github.ref_name }}-x86_64-unknown-linux-gnu
           cd dist
           sha256sum wsltop-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz > wsltop-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wsltop-${{ github.ref_name }}-x86_64-unknown-linux-gnu
           path: |
