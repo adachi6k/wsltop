@@ -9,8 +9,8 @@ Use a current stable Rust toolchain and the tracked dependency lockfile:
 ```console
 cargo build --locked
 cargo fmt --all -- --check
-cargo test --all-targets
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --release --locked
 ```
 

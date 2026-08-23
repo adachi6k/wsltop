@@ -8,8 +8,8 @@ Run from a clean checkout with the tracked lockfile:
 
 ```console
 cargo fmt --all -- --check
-cargo test --all-targets
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --release --locked
 cargo run --locked -- --help
 cargo run --locked -- --version
@@ -25,16 +25,17 @@ Unit tests cover CPU delta normalization, resource classification, attribution r
 | Current WSL distro | Run a known workload in the invoking distro | Process appears with no remote-distro source label |
 | Second WSL distro | Start another distro, run a workload, then `wsltop --once` | Workload appears labelled with its distro; PID collisions do not merge |
 | WSLC present | Run containers in the default WSLC session | Container rows appear as `WSLC container` |
-| WSLC absent | Run without `wslc.exe` installed | Warning is emitted; Windows, WSL, and Docker collection continue |
+| WSLC absent | Run without `wslc.exe` installed | WSLC rows are silently omitted; Windows, WSL, and Docker collection continue |
 | Multiple WSLC hosts | Make more than one `vmmemwslc-*` host visible | Tree reports session mapping unresolved and does not guess; flat containers remain |
 | Docker present | Run a busy container | Docker container appears and is host-normalized |
-| Docker CLI absent | Remove Docker CLI from `PATH` | Warning is emitted; non-Docker monitoring continues |
-| Docker daemon stopped | Stop/unreachable daemon | Warning is emitted; no Docker rows; other collectors continue |
+| Docker CLI absent | Remove Docker CLI from `PATH` | Docker rows are silently omitted; non-Docker monitoring continues |
+| Docker daemon stopped | Stop the daemon or make it unreachable with a recognized connection error | Docker rows are silently omitted; other collectors continue |
+| Unexpected optional collector error | Cause malformed output or an unrecognized command failure | Monitoring continues and the common warning path reports the failure in CLI/TUI |
 | Docker process attribution | Run identifiable processes in a busy container, `wsltop --tree` | Container nests matching processes; values are not double-counted as direct WSL children |
 | Tree output | `wsltop --tree` | WSL/WSLC hosts are parents with children and non-negative unattributed CPU |
 | Flat JSON | `wsltop --json` | Top-level value remains a resource array with `kind` fields |
 | Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, groups, residuals, and unresolved resources |
-| Interactive TUI | `wsltop --interactive` | Updates in place without spawning child `wsltop` processes; navigation/toggles work |
+| Interactive TUI | `wsltop --interactive` | Background samples run one configured interval apart without child processes; keyboard navigation remains responsive while collection runs |
 | Initial interactive options | Combine `--interactive` with interval, collector switches, limit, tree, infra, and host options | Initial state and all collection/filter choices are honored |
 | Invalid interactive JSON | `wsltop --interactive --json` | Exits with an explicit incompatibility error and restores terminal state |
 | Hide infrastructure | `wsltop --hide-infra` and toggle `i` in TUI | `plan9` infrastructure rows are hidden as selected |
@@ -74,8 +75,9 @@ Confirm that parent and child CPU are not summed when interpreting total machine
 
 Validate these failure paths deliberately:
 
-- WSLC not installed: continue with Windows and WSL data.
-- Docker CLI missing or daemon unavailable: continue without Docker rows.
+- WSLC not installed: silently continue with Windows and WSL data.
+- Docker CLI missing or a recognized daemon-unavailable error: silently continue without Docker rows.
+- Unexpected WSLC/Docker command, parse, or attribution error: continue and surface a common warning in CLI/TUI.
 - Additional distro exits or is unavailable mid-sample: warn and continue with remaining sources.
 - Multiple WSLC hosts: mark mapping unresolved and preserve ungrouped resources.
 - Collector warning in TUI: surface it in the status line without terminating refreshes.

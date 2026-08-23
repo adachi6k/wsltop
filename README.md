@@ -92,7 +92,7 @@ Options that affect collection or the initial view also apply to interactive mod
 
 ## Interactive TUI
 
-Start the terminal UI with `wsltop --interactive`. It calls the same in-process monitoring engine as one-shot mode; it does not launch a child `wsltop` on every refresh.
+Start the terminal UI with `wsltop --interactive`. A background worker calls the same in-process monitoring engine as one-shot mode, while the UI thread remains available for keyboard input and drawing. Each completed sample starts the next one immediately; the sampling interval is applied once inside the engine. The TUI does not launch child `wsltop` processes.
 
 Controls:
 
@@ -140,7 +140,9 @@ Raw WSL host processes stay hidden in default flat output to avoid accidental do
 
 WSLC collection uses the current/default CLI session. A single available `vmmemwslc-*` host can be associated with its containers. If multiple hosts make the mapping ambiguous, `wsltop` reports the mapping as unresolved and does not guess; flat WSLC rows remain available.
 
-Docker collection is optional. Container CPU and memory come from Docker statistics, while `docker top` PIDs are used to nest matching current-WSL processes under containers in the attribution tree. A missing CLI or stopped/unreachable daemon produces a warning and monitoring continues without Docker rows. Use `--no-docker` to disable the collector intentionally.
+Docker collection is optional. Container CPU and memory come from Docker statistics, while `docker top` PIDs are used to nest matching current-WSL processes under containers in the attribution tree. PID matching is restricted to resources from the current distribution; a process in another distribution with the same PID is not attributed to the container.
+
+A missing `wslc.exe`, missing Docker CLI, or recognized unavailable Docker daemon is treated as an expected absence: its rows are silently omitted and monitoring continues. Unexpected command, output, parse, or per-container attribution failures are reported through the common warning path. Use `--no-wslc` or `--no-docker` to disable a collector intentionally.
 
 ## Multiple WSL distributions
 
@@ -182,8 +184,8 @@ JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 
 ```console
 cargo fmt --all -- --check
-cargo test --all-targets
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --release --locked
 ```
 

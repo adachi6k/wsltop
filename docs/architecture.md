@@ -99,15 +99,16 @@ Flat text and flat JSON consume `MonitorSnapshot.resources`. Host resources are 
 
 Tree text and tree JSON consume `MonitorSnapshot.tree`. Tree mode uses host rows internally regardless of `--show-wsl-host`. Plain `--json` remains a flat resource array for compatibility; `--tree --json` is a separate structured schema.
 
-The TUI renders the same text views from the same snapshot. Its `t`, `i`, and `h` keys change view/filter state, while collection switches and limits supplied on the command line remain active for the session.
+The TUI renders the same text views from the same snapshot. A background sampling worker immediately begins the next sample after the previous one completes, so `Monitor::sample()` is the only source of the configured interval and the event/render thread remains responsive. Its `t`, `i`, and `h` keys change view/filter state, while collection switches and limits supplied on the command line remain active for the session.
 
 ## Degradation and lifecycle
 
 The current WSL `/proc` collector and, unless `--wsl-only` is used, Windows host collection are required for a sample. Optional collectors degrade independently:
 
 - additional-distribution failure: continue with current WSL and other sources
-- WSLC unavailable: continue without WSLC rows
-- Docker CLI/daemon unavailable: continue without Docker rows
+- missing WSLC executable: silently continue without WSLC rows
+- missing Docker CLI or recognized daemon-unavailable error: silently continue without Docker rows
+- unexpected optional-collector failure: continue without affected data and surface a warning
 - ambiguous WSLC hosts: preserve flat rows and mark tree mapping unresolved
 
 Warnings are written to stderr in one-shot mode and surfaced in TUI status. `TerminalGuard` restores raw mode, the alternate screen, and cursor visibility when the TUI exits or unwinds through an error.

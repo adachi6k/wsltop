@@ -9,9 +9,9 @@ Describe output, option, JSON, or accounting changes. State "none" when applicab
 ## Validation
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --all-targets`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] `cargo build --release`
+- [ ] `cargo test --locked --all-targets`
+- [ ] `cargo clippy --locked --all-targets --all-features -- -D warnings`
+- [ ] `cargo build --release --locked`
 - [ ] Windows + WSL real-host testing completed or not applicable
 
 List the real-host environment and scenarios tested when applicable.
