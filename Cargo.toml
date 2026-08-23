@@ -2,8 +2,12 @@
 name = "wsltop"
 version = "0.1.0"
 edition = "2021"
-description = "Unified Windows/WSL process CPU monitor for WSL2"
+description = "Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2"
 license = "MIT"
+repository = "https://github.com/adachi6k/wsltop"
+readme = "README.md"
+keywords = ["wsl", "wsl2", "windows", "docker", "monitor"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 libc = "0.2"
