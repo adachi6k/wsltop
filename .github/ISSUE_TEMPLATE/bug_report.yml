@@ -1,0 +1,63 @@
+name: Bug report
+description: Report incorrect behavior or a regression
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve wsltop. Remove secrets and private workload data from logs.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2, build ...
+    validations:
+      required: true
+  - type: input
+    id: wsl
+    attributes:
+      label: WSL version and distro
+      placeholder: wsl --version output and Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: wsltop
+    attributes:
+      label: wsltop version
+      placeholder: wsltop --version or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: optional_versions
+    attributes:
+      label: WSLC and Docker versions
+      description: Enter not installed when either component is absent.
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Include all wsltop options used.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or error
+      description: Redact usernames, container data, and other sensitive information.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true

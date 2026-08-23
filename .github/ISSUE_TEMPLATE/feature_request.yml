@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a focused improvement to wsltop
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What monitoring problem is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe CLI/TUI behavior, output, and compatibility expectations.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: environment
+    attributes:
+      label: Relevant environment
+      description: Windows, WSL, distro, WSLC, Docker, and wsltop versions where relevant.
