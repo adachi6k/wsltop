@@ -16,7 +16,7 @@ struct RawWslcStat {
     name: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct WslcUsage {
     pub resources: Vec<ResourceUsage>,
     pub process_resources: Vec<ContainerProcessUsage>,
@@ -29,6 +29,12 @@ pub struct WslcUsage {
 /// logical CPU is approximately 100%. wsltop divides that value by the Windows
 /// host logical CPU count so that all host logical CPUs busy is 100%.
 pub fn usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
+    let mut result = aggregate_usage(host_logical_cpu_count)?;
+    populate_processes(&mut result, host_logical_cpu_count);
+    Ok(result)
+}
+
+pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
     if host_logical_cpu_count == 0 {
         return Ok(WslcUsage::default());
     }
@@ -91,30 +97,51 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
         });
     }
 
-    let mut process_resources = Vec::with_capacity(result.len());
-    for resource in &result {
-        let processes = match container_processes(&resource.id, host_logical_cpu_count) {
-            Ok(processes) => processes,
-            Err(error) => {
-                warnings.push(format!(
+    Ok(WslcUsage {
+        resources: result,
+        process_resources: Vec::new(),
+        warnings,
+    })
+}
+
+pub fn populate_processes(result: &mut WslcUsage, host_logical_cpu_count: u32) {
+    result.process_resources.clear();
+    for start in (0..result.resources.len()).step_by(4) {
+        let end = (start + 4).min(result.resources.len());
+        let targets = &result.resources[start..end];
+        let collected = std::thread::scope(|scope| {
+            targets
+                .iter()
+                .map(|resource| {
+                    scope.spawn(move || {
+                        container_processes(&resource.id, host_logical_cpu_count)
+                            .map_err(|error| error.to_string())
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("WSLC detail worker panicked".to_string()))
+                })
+                .collect::<Vec<_>>()
+        });
+        for (resource, processes) in targets.iter().zip(collected) {
+            let processes = processes.unwrap_or_else(|error| {
+                result.warnings.push(format!(
                     "WSLC container {} process attribution unavailable: {error}",
                     resource.name
                 ));
                 Vec::new()
-            }
-        };
-        process_resources.push(ContainerProcessUsage {
-            resource: resource.clone(),
-            processes,
-            host_pids: Vec::new(),
-        });
+            });
+            result.process_resources.push(ContainerProcessUsage {
+                resource: resource.clone(),
+                processes,
+                host_pids: Vec::new(),
+            });
+        }
     }
-
-    Ok(WslcUsage {
-        resources: result,
-        process_resources,
-        warnings,
-    })
 }
 
 fn container_processes(

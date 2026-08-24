@@ -16,13 +16,19 @@ struct RawDockerStat {
     name: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DockerUsage {
     pub resources: Vec<ContainerProcessUsage>,
     pub warnings: Vec<String>,
 }
 
 pub fn usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>> {
+    let mut result = aggregate_usage(host_logical_cpu_count)?;
+    populate_processes(&mut result, host_logical_cpu_count);
+    Ok(result)
+}
+
+pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>> {
     if host_logical_cpu_count == 0 {
         return Ok(DockerUsage::default());
     }
@@ -51,31 +57,54 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>>
         .into());
     }
     let resources = parse_stats(&output.stdout, host_logical_cpu_count)?;
-    let mut result = Vec::with_capacity(resources.len());
-    let mut warnings = Vec::new();
-    for resource in resources {
-        let processes = match container_processes(&resource.id, host_logical_cpu_count) {
-            Ok(processes) => processes,
-            Err(error) => {
-                warnings.push(format!(
-                    "Docker container {} process attribution unavailable: {error}",
-                    resource.name
-                ));
-                Vec::new()
-            }
-        };
-        result.push(ContainerProcessUsage {
-            resource,
-            processes,
-            // docker top PIDs are daemon-namespace PIDs.  They must not be
-            // treated as current-WSL host PIDs without a separate proof.
-            host_pids: Vec::new(),
-        });
-    }
     Ok(DockerUsage {
-        resources: result,
-        warnings,
+        resources: resources
+            .into_iter()
+            .map(|resource| ContainerProcessUsage {
+                resource,
+                processes: Vec::new(),
+                host_pids: Vec::new(),
+            })
+            .collect(),
+        warnings: Vec::new(),
     })
+}
+
+pub fn populate_processes(result: &mut DockerUsage, host_logical_cpu_count: u32) {
+    for start in (0..result.resources.len()).step_by(4) {
+        let end = (start + 4).min(result.resources.len());
+        let targets: Vec<_> = result.resources[start..end]
+            .iter()
+            .map(|item| (item.resource.id.clone(), item.resource.name.clone()))
+            .collect();
+        let collected = std::thread::scope(|scope| {
+            targets
+                .iter()
+                .map(|(id, _)| {
+                    scope.spawn(move || {
+                        container_processes(id, host_logical_cpu_count)
+                            .map_err(|error| error.to_string())
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("Docker detail worker panicked".to_string()))
+                })
+                .collect::<Vec<_>>()
+        });
+        for (offset, processes) in collected.into_iter().enumerate() {
+            match processes {
+                Ok(processes) => result.resources[start + offset].processes = processes,
+                Err(error) => result.warnings.push(format!(
+                    "Docker container {} process attribution unavailable: {error}",
+                    targets[offset].1
+                )),
+            }
+        }
+    }
 }
 
 fn container_processes(

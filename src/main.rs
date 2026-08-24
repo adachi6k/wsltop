@@ -6,6 +6,7 @@ mod monitor;
 mod multiwsl;
 mod render;
 mod sampler;
+mod stream;
 mod tui;
 mod windows;
 mod wslc;

@@ -28,12 +28,13 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | `docker.rs` | Collect Docker statistics and Docker-namespace process observations |
 | `sampler.rs` | Convert cumulative process-time deltas into host-normalized `ResourceUsage` values |
 | `monitor.rs` | Orchestrate collectors, sampling interval, degradation warnings, flat filtering, and snapshot construction |
+| `stream.rs` | Run stateful, independently scheduled TUI collectors and aggregate partial events |
 | `attribution.rs` | Build WSL, WSLC, and Docker CPU attribution groups without double-counting |
 | `render.rs` | Render a `MonitorSnapshot` as the flat table or text tree |
 | `tui.rs` | Own terminal lifecycle, navigation, toggles, and refresh scheduling |
 | `main.rs` | Parse/validate CLI options and choose JSON, text, or interactive presentation |
 
-Collector logic is not duplicated between interfaces. `Monitor::sample()` is the only orchestration path used by the CLI and TUI, and the TUI refreshes it directly in-process.
+Collector parsing and accounting are shared between interfaces. `Monitor::sample()` preserves atomic one-shot and JSON behavior. The TUI uses the stateful streaming orchestrator, which publishes the same `MonitorSnapshot` type after each collector event.
 
 ## Sampling flow
 
@@ -49,6 +50,19 @@ Collector logic is not duplicated between interfaces. `Monitor::sample()` is the
 8. Return both views plus warnings in a `MonitorSnapshot`.
 
 The engine retains raw Windows WSL-host rows long enough to build attribution even when those rows are hidden from flat output.
+
+### Interactive streaming flow
+
+The TUI draws an empty loading frame immediately. Independent workers retain their prior cumulative snapshot and emit collector-level updates:
+
+1. Current WSL samples `/proc` after a 150 ms startup warmup, then at the normal interval.
+2. Windows samples cumulative process time independently at the normal interval. Its successfully discovered host CPU count is cached, avoiding repeated CIM queries.
+3. Additional WSL, WSLC, and Docker use a minimum two-second cadence.
+4. WSLC and Docker publish aggregate container statistics separately from optional process detail. Details run only when tree view or `--show-container-processes` requests them.
+5. Per-container detail commands run in bounded batches of at most four workers.
+6. The aggregator replaces only the source named by an event, rebuilds both views, and publishes a partial snapshot. An error records status but retains that source's last successful data.
+
+Collector threads do not wait for one another. This makes startup and refresh latency depend on each visible source rather than the slowest source. The event and aggregate boundary also permits future bounded per-container detail workers without changing attribution or rendering.
 
 ## Unified resource model
 
@@ -101,7 +115,7 @@ Flat text and flat JSON consume `MonitorSnapshot.resources`. Host resources are 
 
 Tree text and tree JSON consume `MonitorSnapshot.tree`. Tree mode uses host rows internally regardless of `--show-wsl-host`. Plain `--json` remains a flat resource array for compatibility; `--tree --json` is a separate structured schema.
 
-The TUI renders the same text views from the same snapshot. A background sampling worker immediately begins the next sample after the previous one completes, so `Monitor::sample()` is the only source of the configured interval and the event/render thread remains responsive. Its `t`, `i`, and `h` keys change view/filter state, while collection switches and limits supplied on the command line remain active for the session.
+The TUI renders the same text views from incrementally rebuilt snapshots. Its `t`, `i`, and `h` keys change view/filter state; `t` also enables or disables expensive container details unless flat details were explicitly requested. Collection switches and limits supplied on the command line remain active for the session.
 
 ## Degradation and lifecycle
 

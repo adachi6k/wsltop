@@ -1,5 +1,6 @@
-use crate::monitor::{Monitor, MonitorConfig, MonitorSnapshot};
+use crate::monitor::{MonitorConfig, MonitorSnapshot};
 use crate::render;
+use crate::stream;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -22,7 +23,7 @@ pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Erro
     let interval = config.interval;
     let mut terminal = TerminalGuard::new()?;
     let mut state = State::from_config(&config, initial_tree);
-    let worker = SamplingWorker::start(config);
+    let worker = SamplingWorker::start(config, initial_tree);
 
     loop {
         for result in worker.receiver.try_iter() {
@@ -75,6 +76,7 @@ pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Erro
                 if matches!(key.code, KeyCode::Char('t' | 'i' | 'h' | '0')) {
                     state.rebuild_lines();
                     worker.update_filters(state.hide_infra, state.show_hosts);
+                    worker.set_details(state.tree);
                 }
             }
         }
@@ -164,38 +166,25 @@ struct SamplingWorker {
     receiver: mpsc::Receiver<Result<MonitorSnapshot, String>>,
     config: Arc<Mutex<MonitorConfig>>,
     stop: Arc<AtomicBool>,
+    details: Arc<AtomicBool>,
 }
 
 impl SamplingWorker {
-    fn start(config: MonitorConfig) -> Self {
+    fn start(config: MonitorConfig, initial_tree: bool) -> Self {
+        let explicit_details = config.show_container_processes;
         let shared_config = Arc::new(Mutex::new(config));
         let stop = Arc::new(AtomicBool::new(false));
+        let details = Arc::new(AtomicBool::new(initial_tree || explicit_details));
         let (sender, receiver) = mpsc::channel();
         let worker_config = Arc::clone(&shared_config);
         let worker_stop = Arc::clone(&stop);
-        thread::spawn(move || {
-            while !worker_stop.load(Ordering::Relaxed) {
-                let config = match worker_config.lock() {
-                    Ok(config) => config.clone(),
-                    Err(_) => break,
-                };
-                let retry_interval = config.interval;
-                let result = Monitor::new(config)
-                    .sample()
-                    .map_err(|error| error.to_string());
-                let failed = result.is_err();
-                if sender.send(result).is_err() {
-                    break;
-                }
-                if failed {
-                    thread::sleep(retry_interval);
-                }
-            }
-        });
+        let worker_details = Arc::clone(&details);
+        thread::spawn(move || stream::run(worker_config, worker_details, worker_stop, sender));
         Self {
             receiver,
             config: shared_config,
             stop,
+            details,
         }
     }
 
@@ -204,6 +193,15 @@ impl SamplingWorker {
             config.hide_infra = hide_infra;
             config.show_wsl_host = show_wsl_host;
         }
+    }
+
+    fn set_details(&self, tree: bool) {
+        let explicit = self
+            .config
+            .lock()
+            .map(|config| config.show_container_processes)
+            .unwrap_or(false);
+        self.details.store(tree || explicit, Ordering::Relaxed);
     }
 }
 

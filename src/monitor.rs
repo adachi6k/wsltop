@@ -172,7 +172,7 @@ impl Monitor {
     }
 }
 
-fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config: &MonitorConfig) {
+pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config: &MonitorConfig) {
     if !config.show_wsl_host {
         resources.retain(|row| !attribution::is_host_resource(row));
     }

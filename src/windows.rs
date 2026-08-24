@@ -3,7 +3,10 @@ use serde::Deserialize;
 use std::error::Error;
 use std::io;
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Instant;
+
+static HOST_LOGICAL_CPU_COUNT: OnceLock<u32> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 struct RawWindowsSnapshot {
@@ -26,8 +29,11 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
     // hides them by default to avoid double-counting WSL load.
     let script = r#"
 $ErrorActionPreference = 'SilentlyContinue'
-$cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
-if ($cpuCount -le 0) { $cpuCount = [Environment]::ProcessorCount }
+$cpuCount = [int]$args[0]
+if ($cpuCount -le 0) {
+    $cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+    if ($cpuCount -le 0) { $cpuCount = [Environment]::ProcessorCount }
+}
 $items = @(Get-Process | ForEach-Object {
     $cpu = $_.CPU
     if ($null -eq $cpu) { $cpu = 0.0 }
@@ -44,8 +50,19 @@ $items = @(Get-Process | ForEach-Object {
 } | ConvertTo-Json -Compress -Depth 3
 "#;
 
+    let cached_cpu_count = HOST_LOGICAL_CPU_COUNT
+        .get()
+        .copied()
+        .unwrap_or(0)
+        .to_string();
     let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+            &cached_cpu_count,
+        ])
         .output()
         .map_err(|e| {
             io::Error::new(
@@ -66,6 +83,7 @@ $items = @(Get-Process | ForEach-Object {
     if raw.logical_cpu_count == 0 {
         return Err("Windows reported zero logical processors".into());
     }
+    let _ = HOST_LOGICAL_CPU_COUNT.set(raw.logical_cpu_count);
 
     let mut processes = Vec::with_capacity(raw.processes.len());
     for process in raw.processes {

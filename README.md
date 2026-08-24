@@ -137,7 +137,9 @@ Options that affect collection or the initial view also apply to interactive mod
 
 ## Interactive TUI
 
-Start the terminal UI with `wsltop --interactive`. A background worker calls the same in-process monitoring engine as one-shot mode, while the UI thread remains available for keyboard input and drawing. Each completed sample starts the next one immediately; the sampling interval is applied once inside the engine. The TUI does not launch child `wsltop` processes.
+Start the terminal UI with `wsltop --interactive`. It draws immediately and accepts partial collector updates instead of waiting for every source. Current-WSL `/proc` data uses a short 150 ms startup warmup, then the configured interval. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot delay local rows.
+
+The TUI retains each collector's last successful result. While collectors start, the footer reports `loading`; after a collector error its previous rows remain visible and the footer reports the error. Docker/WSLC aggregate rows are collected separately from internal process details. Details are requested by tree view or `--show-container-processes`, so the default flat view avoids per-container process commands. Switching to tree view enables them for the next container refresh.
 
 Controls:
 
@@ -212,7 +214,7 @@ JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 ## Limitations
 
 - Sampling is best effort. Linux, PowerShell, WSLC, Docker, and remote-distro snapshots are not captured atomically.
-- PowerShell process collection adds latency and is not yet a persistent collector.
+- PowerShell process collection adds latency, but runs independently of other interactive collectors; the Windows logical CPU count is cached after its first successful query.
 - WSLC session attribution is deliberately conservative when multiple host mappings are possible.
 - Docker process `%CPU` from `docker top` is a ps-style lifetime/decay average and may not align precisely with interval-sampled container or `/proc` CPU.
 - Memory values from Windows, WSLC, and Docker have different meanings and are not attributed by subtraction.
