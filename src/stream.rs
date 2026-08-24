@@ -284,26 +284,25 @@ fn sample_windows(
     cpus: Arc<AtomicU32>,
     interval: Duration,
 ) {
-    let mut before = match windows::snapshot() {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = sender.send(Event::Windows(Err(format!(
-                "Windows collector unavailable: {error}"
-            ))));
-            return;
-        }
-    };
-    let mut delay = STARTUP_WARMUP.min(interval);
+    let mut before: Option<crate::model::WindowsSnapshot> = None;
+    let mut delay = Duration::ZERO;
     while wait(&stop, delay) {
         match windows::snapshot() {
             Ok(after) => {
                 let count = after.host_logical_cpu_count;
                 cpus.store(count, Ordering::Relaxed);
-                let rows = sampler::calculate_usage(&before.snapshot, &after.snapshot, count);
-                before = after;
-                if sender.send(Event::Windows(Ok((rows, count)))).is_err() {
-                    break;
+                if let Some(old) = &before {
+                    let rows = sampler::calculate_usage(&old.snapshot, &after.snapshot, count);
+                    if sender.send(Event::Windows(Ok((rows, count)))).is_err() {
+                        break;
+                    }
                 }
+                before = Some(after);
+                delay = if before.is_some() && delay.is_zero() {
+                    STARTUP_WARMUP.min(interval)
+                } else {
+                    interval
+                };
             }
             Err(error) => {
                 if sender
@@ -314,9 +313,9 @@ fn sample_windows(
                 {
                     break;
                 }
+                delay = interval;
             }
         }
-        delay = interval;
     }
 }
 

@@ -27,42 +27,10 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
     // its CPU time increases while CPUs are idle and would invert the meaning of "usage".
     // vmmem/vmmemWSL/vmmemwslc-* are retained for attribution. The flat renderer
     // hides them by default to avoid double-counting WSL load.
-    let script = r#"
-$ErrorActionPreference = 'SilentlyContinue'
-$cpuCount = [int]$args[0]
-if ($cpuCount -le 0) {
-    $cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
-    if ($cpuCount -le 0) { $cpuCount = [Environment]::ProcessorCount }
-}
-$items = @(Get-Process | ForEach-Object {
-    $cpu = $_.CPU
-    if ($null -eq $cpu) { $cpu = 0.0 }
-    [PSCustomObject]@{
-        pid = [uint32]$_.Id
-        name = [string]$_.ProcessName
-        cpu_time_secs = [double]$cpu
-        memory_bytes = [uint64]$_.WorkingSet64
-    }
-})
-[PSCustomObject]@{
-    logical_cpu_count = $cpuCount
-    processes = $items
-} | ConvertTo-Json -Compress -Depth 3
-"#;
+    let script = snapshot_script(HOST_LOGICAL_CPU_COUNT.get().copied().unwrap_or(0));
 
-    let cached_cpu_count = HOST_LOGICAL_CPU_COUNT
-        .get()
-        .copied()
-        .unwrap_or(0)
-        .to_string();
     let output = Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-            &cached_cpu_count,
-        ])
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .map_err(|e| {
             io::Error::new(
@@ -112,4 +80,43 @@ $items = @(Get-Process | ForEach-Object {
         },
         host_logical_cpu_count: raw.logical_cpu_count,
     })
+}
+
+fn snapshot_script(cached_cpu_count: u32) -> String {
+    r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$cpuCount = [int]__WSLTOP_CPU_COUNT__
+if ($cpuCount -le 0) {
+    $cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+    if ($cpuCount -le 0) { $cpuCount = [Environment]::ProcessorCount }
+}
+$items = @(Get-Process | ForEach-Object {
+    $cpu = $_.CPU
+    if ($null -eq $cpu) { $cpu = 0.0 }
+    [PSCustomObject]@{
+        pid = [uint32]$_.Id
+        name = [string]$_.ProcessName
+        cpu_time_secs = [double]$cpu
+        memory_bytes = [uint64]$_.WorkingSet64
+    }
+})
+[PSCustomObject]@{
+    logical_cpu_count = $cpuCount
+    processes = $items
+} | ConvertTo-Json -Compress -Depth 3
+"#
+    .replace("__WSLTOP_CPU_COUNT__", &cached_cpu_count.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snapshot_script;
+
+    #[test]
+    fn embeds_cached_cpu_count_without_powershell_command_arguments() {
+        let script = snapshot_script(16);
+        assert!(script.contains("$cpuCount = [int]16"));
+        assert!(!script.contains("__WSLTOP_CPU_COUNT__"));
+        assert!(!script.contains("$args"));
+    }
 }
