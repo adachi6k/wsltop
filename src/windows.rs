@@ -88,8 +88,11 @@ $ErrorActionPreference = 'SilentlyContinue'
 $cpuCount = [int]__WSLTOP_CPU_COUNT__
 if ($cpuCount -le 0) {
     $cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
-    if ($cpuCount -le 0) { throw 'CIM did not report the Windows host logical CPU count' }
 }
+if ($cpuCount -le 0) {
+    $cpuCount = [int][Environment]::ProcessorCount
+}
+if ($cpuCount -le 0) { throw 'failed to determine the Windows host logical CPU count' }
 $items = @(Get-Process | ForEach-Object {
     $cpu = $_.CPU
     if ($null -eq $cpu) { $cpu = 0.0 }
@@ -116,6 +119,7 @@ mod tests {
     fn embeds_cached_cpu_count_without_powershell_command_arguments() {
         let script = snapshot_script(16);
         assert!(script.contains("$cpuCount = [int]16"));
+        assert!(script.contains("[Environment]::ProcessorCount"));
         assert!(!script.contains("__WSLTOP_CPU_COUNT__"));
         assert!(!script.contains("$args"));
     }

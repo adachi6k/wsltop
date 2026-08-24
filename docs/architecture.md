@@ -56,7 +56,7 @@ The engine retains raw Windows WSL-host rows long enough to build attribution ev
 The TUI draws an empty loading frame immediately. Independent workers retain their prior cumulative snapshot and emit collector-level updates:
 
 1. Current WSL samples `/proc` after a fixed 150 ms startup warmup, then at the normal interval. It retries an unavailable initial baseline and publishes independently using a clearly marked provisional WSL-visible CPU count until host discovery completes.
-2. Windows samples cumulative process time independently at the normal interval. Its first snapshot publishes the authoritative host CPU count; subsequent current-WSL samples switch to that scale, and the successful CIM result is cached. Failed initial snapshots are retried.
+2. Windows samples cumulative process time independently at the normal interval. Its first snapshot publishes the host CPU count returned by the collector script (CIM first, then `[Environment]::ProcessorCount` fallback); subsequent current-WSL samples switch to that scale, and the first successful value is cached. Failed initial snapshots are retried.
 3. Additional WSL, WSLC, and Docker use a minimum two-second cadence.
 4. WSLC and Docker publish aggregate container statistics separately from optional process detail. Details run only when tree view or `--show-container-processes` requests them; aggregate refreshes retain last-good details, and failed per-container detail commands do not erase them.
 5. Detail requests use a separate capacity-one queue per runtime. Per-container commands run in bounded batches of at most four workers and time out after five seconds, so detail latency cannot stall aggregate cadence or create an unbounded backlog.
