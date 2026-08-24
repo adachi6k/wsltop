@@ -89,7 +89,7 @@ Linux `/proc`, PowerShell, remote WSL, WSLC, and Docker snapshots are collected 
 
 Attribution is therefore best effort. A longer `--interval-ms` may reduce relative timing noise, but it also lowers temporal resolution.
 
-In the interactive TUI, current WSL and Windows collectors retain their own previous cumulative snapshot rather than restarting a complete global sample. During Windows host discovery, current-WSL rows are provisionally normalized with the WSL-visible logical CPU count and the TUI reports that status; later samples use the authoritative host count. Optional collectors publish independently and their latest successful values are combined. This lowers latency but does not make cross-collector timestamps atomic. One-shot and JSON modes retain the two-snapshot full-sample behavior.
+In the interactive TUI, current WSL and Windows collectors retain their own previous cumulative snapshot rather than restarting a complete global sample. During Windows host discovery, non-Windows rows are provisionally normalized with the WSL-visible logical CPU count and the TUI reports that status; later samples use the Windows-reported count. Optional collectors publish independently and their latest successful values are combined. This lowers latency but does not make cross-collector timestamps atomic. One-shot and JSON modes retain the two-snapshot full-sample behavior.
 
 ## Memory is not attributed
 

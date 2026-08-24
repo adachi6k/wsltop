@@ -77,6 +77,42 @@ impl Aggregate {
             self.host_cpu_authoritative = true;
             return;
         }
+        if let Event::WslcDetails(usage) = &event {
+            for current in &self.wslc.resources {
+                let Some(detail) = usage
+                    .process_resources
+                    .iter()
+                    .find(|item| item.resource.id == current.id)
+                else {
+                    continue;
+                };
+                if let Some(existing) = self
+                    .wslc
+                    .process_resources
+                    .iter_mut()
+                    .find(|item| item.resource.id == current.id)
+                {
+                    existing.processes.clone_from(&detail.processes);
+                } else {
+                    self.wslc.process_resources.push(detail.clone());
+                }
+            }
+            extend_unique(&mut self.wslc.warnings, &usage.warnings);
+            return;
+        }
+        if let Event::DockerDetails(usage) = &event {
+            for current in &mut self.docker.resources {
+                if let Some(detail) = usage
+                    .resources
+                    .iter()
+                    .find(|item| item.resource.id == current.resource.id)
+                {
+                    current.processes.clone_from(&detail.processes);
+                }
+            }
+            extend_unique(&mut self.docker.warnings, &usage.warnings);
+            return;
+        }
         self.pending.remove(name);
         let result = match event {
             Event::HostCpuCount(_) => unreachable!(),
@@ -96,10 +132,7 @@ impl Aggregate {
                     .collect();
                 self.wslc = usage;
             }),
-            Event::WslcDetails(usage) => {
-                self.wslc = usage;
-                Ok(())
-            }
+            Event::WslcDetails(_) => unreachable!(),
             Event::DockerAggregate(value) => value.map(|mut usage| {
                 for item in &mut usage.resources {
                     if let Some(old) = self
@@ -113,10 +146,7 @@ impl Aggregate {
                 }
                 self.docker = usage;
             }),
-            Event::DockerDetails(usage) => {
-                self.docker = usage;
-                Ok(())
-            }
+            Event::DockerDetails(_) => unreachable!(),
         };
         match result {
             Ok(()) => {
@@ -140,7 +170,7 @@ impl Aggregate {
         }
         if !config.wsl_only && !self.host_cpu_authoritative {
             warnings.push(
-                "current WSL CPU is provisional until the Windows host CPU count is available"
+                "non-Windows CPU is provisional until the Windows host CPU count is available"
                     .to_string(),
             );
         }
@@ -199,6 +229,14 @@ impl Aggregate {
     }
 }
 
+fn extend_unique(target: &mut Vec<String>, additions: &[String]) {
+    for warning in additions {
+        if !target.contains(warning) {
+            target.push(warning.clone());
+        }
+    }
+}
+
 fn append_processes(
     output: &mut Vec<ResourceUsage>,
     containers: &[crate::model::ContainerProcessUsage],
@@ -222,11 +260,7 @@ pub fn run(
         Ok(value) => value.clone(),
         Err(_) => return,
     };
-    let host_cpu_count = Arc::new(AtomicU32::new(if initial.wsl_only {
-        fallback_cpu_count()
-    } else {
-        0
-    }));
+    let host_cpu_count = Arc::new(AtomicU32::new(fallback_cpu_count()));
     let (sender, receiver) = mpsc::channel();
     spawn_linux(
         sender.clone(),
@@ -689,6 +723,14 @@ mod tests {
             "container",
         );
         let process = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
+        aggregate.apply(Event::DockerAggregate(Ok(DockerUsage {
+            resources: vec![ContainerProcessUsage {
+                resource: container.clone(),
+                processes: Vec::new(),
+                host_pids: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        })));
         aggregate.apply(Event::DockerDetails(DockerUsage {
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
@@ -706,5 +748,47 @@ mod tests {
             warnings: Vec::new(),
         })));
         assert_eq!(aggregate.docker.resources[0].processes.len(), 1);
+    }
+
+    #[test]
+    fn stale_docker_details_do_not_roll_back_aggregate_or_clear_error() {
+        let mut aggregate = Aggregate::new(&config());
+        let mut current = row(
+            EnvironmentKind::Docker,
+            ResourceKind::Container,
+            "container",
+        );
+        current.cpu_percent = 9.0;
+        aggregate.apply(Event::DockerAggregate(Ok(DockerUsage {
+            resources: vec![ContainerProcessUsage {
+                resource: current,
+                processes: Vec::new(),
+                host_pids: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        })));
+        aggregate.apply(Event::DockerAggregate(Err("new aggregate error".into())));
+
+        let stale = row(
+            EnvironmentKind::Docker,
+            ResourceKind::Container,
+            "container",
+        );
+        let detail = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
+        aggregate.apply(Event::DockerDetails(DockerUsage {
+            resources: vec![ContainerProcessUsage {
+                resource: stale,
+                processes: vec![detail],
+                host_pids: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        }));
+
+        assert_eq!(aggregate.docker.resources[0].resource.cpu_percent, 9.0);
+        assert_eq!(aggregate.docker.resources[0].processes.len(), 1);
+        assert_eq!(
+            aggregate.errors.get("Docker").unwrap(),
+            "new aggregate error"
+        );
     }
 }
