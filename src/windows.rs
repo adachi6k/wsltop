@@ -88,7 +88,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $cpuCount = [int]__WSLTOP_CPU_COUNT__
 if ($cpuCount -le 0) {
     $cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
-    if ($cpuCount -le 0) { $cpuCount = [Environment]::ProcessorCount }
+    if ($cpuCount -le 0) { throw 'CIM did not report the Windows host logical CPU count' }
 }
 $items = @(Get-Process | ForEach-Object {
     $cpu = $_.CPU

@@ -55,10 +55,10 @@ The engine retains raw Windows WSL-host rows long enough to build attribution ev
 
 The TUI draws an empty loading frame immediately. Independent workers retain their prior cumulative snapshot and emit collector-level updates:
 
-1. Current WSL samples `/proc` after a 150 ms startup warmup, then at the normal interval.
-2. Windows samples cumulative process time independently at the normal interval. Its successfully discovered host CPU count is cached, avoiding repeated CIM queries.
+1. Current WSL samples `/proc` after a fixed 150 ms startup warmup, then at the normal interval. It retries an unavailable initial baseline.
+2. Windows samples cumulative process time independently at the normal interval. Its first snapshot publishes the authoritative host CPU count before normalized rows are exposed; that successful CIM result is cached. Failed initial snapshots are retried.
 3. Additional WSL, WSLC, and Docker use a minimum two-second cadence.
-4. WSLC and Docker publish aggregate container statistics separately from optional process detail. Details run only when tree view or `--show-container-processes` requests them.
+4. WSLC and Docker publish aggregate container statistics separately from optional process detail. Details run only when tree view or `--show-container-processes` requests them; aggregate refreshes retain last-good details, and failed per-container detail commands do not erase them.
 5. Per-container detail commands run in bounded batches of at most four workers.
 6. The aggregator replaces only the source named by an event, rebuilds both views, and publishes a partial snapshot. An error records status but retains that source's last successful data.
 

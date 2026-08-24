@@ -105,6 +105,7 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
 }
 
 pub fn populate_processes(result: &mut WslcUsage, host_logical_cpu_count: u32) {
+    let previous = std::mem::take(&mut result.process_resources);
     result.process_resources.clear();
     for start in (0..result.resources.len()).step_by(4) {
         let end = (start + 4).min(result.resources.len());
@@ -133,7 +134,10 @@ pub fn populate_processes(result: &mut WslcUsage, host_logical_cpu_count: u32) {
                     "WSLC container {} process attribution unavailable: {error}",
                     resource.name
                 ));
-                Vec::new()
+                previous
+                    .iter()
+                    .find(|old| old.resource.id == resource.id)
+                    .map_or_else(Vec::new, |old| old.processes.clone())
             });
             result.process_resources.push(ContainerProcessUsage {
                 resource: resource.clone(),
