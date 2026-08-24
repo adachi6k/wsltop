@@ -330,6 +330,7 @@ fn spawn_linux(
         while wait(&stop, delay) {
             match linux::snapshot() {
                 Ok(after) => {
+                    let had_baseline = before.is_some();
                     let count = match cpus.load(Ordering::Relaxed) {
                         0 => fallback_cpu_count(),
                         count => count,
@@ -341,10 +342,10 @@ fn spawn_linux(
                         }
                     }
                     before = Some(after);
-                    delay = if delay.is_zero() {
-                        STARTUP_WARMUP
-                    } else {
+                    delay = if had_baseline {
                         interval
+                    } else {
+                        STARTUP_WARMUP
                     };
                 }
                 Err(error) => {
@@ -390,11 +391,7 @@ fn sample_windows(
                     }
                 }
                 before = Some(after);
-                delay = if before.is_some() && delay.is_zero() {
-                    STARTUP_WARMUP
-                } else {
-                    interval
-                };
+                delay = interval;
             }
             Err(error) => {
                 if sender

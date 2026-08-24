@@ -1,9 +1,20 @@
 use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+    // Put the command in its own process group so a timed-out shell cannot leave
+    // descendants holding stdout/stderr open after the direct child is killed.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -24,10 +35,16 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
             return collect_output(status, stdout_reader, stderr_reader);
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
+            // The process-group id is the child's pid because pre_exec created a
+            // new group. Killing the group also closes pipes inherited by children.
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
             let _ = child.wait();
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            // Do not make the timeout itself unbounded if a descendant escaped the
+            // process group or an unusual runtime kept a duplicate pipe open.
+            drop(stdout_reader);
+            drop(stderr_reader);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("command exceeded {} ms", timeout.as_millis()),
@@ -80,12 +97,14 @@ mod tests {
 
     #[test]
     fn terminates_timed_out_command() {
+        let started = std::time::Instant::now();
         let error = output_with_timeout(
-            Command::new("sh").args(["-c", "sleep 1"]),
+            Command::new("sh").args(["-c", "sleep 10 & wait"]),
             Duration::from_millis(10),
         )
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

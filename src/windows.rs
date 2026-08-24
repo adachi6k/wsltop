@@ -11,6 +11,7 @@ static HOST_LOGICAL_CPU_COUNT: OnceLock<u32> = OnceLock::new();
 #[derive(Debug, Deserialize)]
 struct RawWindowsSnapshot {
     logical_cpu_count: u32,
+    logical_cpu_count_from_cim: bool,
     processes: Vec<RawWindowsProcess>,
 }
 
@@ -51,7 +52,9 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
     if raw.logical_cpu_count == 0 {
         return Err("Windows reported zero logical processors".into());
     }
-    let _ = HOST_LOGICAL_CPU_COUNT.set(raw.logical_cpu_count);
+    if raw.logical_cpu_count_from_cim {
+        let _ = HOST_LOGICAL_CPU_COUNT.set(raw.logical_cpu_count);
+    }
 
     let mut processes = Vec::with_capacity(raw.processes.len());
     for process in raw.processes {
@@ -86,11 +89,14 @@ fn snapshot_script(cached_cpu_count: u32) -> String {
     r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $cpuCount = [int]__WSLTOP_CPU_COUNT__
+$cpuCountFromCim = $cpuCount -gt 0
 if ($cpuCount -le 0) {
     $cpuCount = [int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+    $cpuCountFromCim = $cpuCount -gt 0
 }
 if ($cpuCount -le 0) {
     $cpuCount = [int][Environment]::ProcessorCount
+    $cpuCountFromCim = $false
 }
 if ($cpuCount -le 0) { throw 'failed to determine the Windows host logical CPU count' }
 $items = @(Get-Process | ForEach-Object {
@@ -105,6 +111,7 @@ $items = @(Get-Process | ForEach-Object {
 })
 [PSCustomObject]@{
     logical_cpu_count = $cpuCount
+    logical_cpu_count_from_cim = $cpuCountFromCim
     processes = $items
 } | ConvertTo-Json -Compress -Depth 3
 "#
@@ -119,6 +126,7 @@ mod tests {
     fn embeds_cached_cpu_count_without_powershell_command_arguments() {
         let script = snapshot_script(16);
         assert!(script.contains("$cpuCount = [int]16"));
+        assert!(script.contains("logical_cpu_count_from_cim = $cpuCountFromCim"));
         assert!(script.contains("[Environment]::ProcessorCount"));
         assert!(!script.contains("__WSLTOP_CPU_COUNT__"));
         assert!(!script.contains("$args"));
