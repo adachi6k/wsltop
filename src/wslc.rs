@@ -1,8 +1,10 @@
+use crate::command;
 use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
 use std::process::Command;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct RawWslcStat {
@@ -152,9 +154,10 @@ fn container_processes(
     id: &str,
     host_logical_cpu_count: u32,
 ) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
-    let output = Command::new("wslc.exe")
-        .args(["exec", id, "ps", "-eo", "pid,ppid,pcpu,rss,comm,args"])
-        .output()?;
+    let output = command::output_with_timeout(
+        Command::new("wslc.exe").args(["exec", id, "ps", "-eo", "pid,ppid,pcpu,rss,comm,args"]),
+        Duration::from_secs(5),
+    )?;
     if !output.status.success() {
         return Err(format!(
             "wslc.exe exec ps failed: {}",

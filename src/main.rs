@@ -1,4 +1,5 @@
 mod attribution;
+mod command;
 mod docker;
 mod linux;
 mod model;

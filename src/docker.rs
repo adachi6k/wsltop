@@ -1,8 +1,10 @@
+use crate::command;
 use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
 use std::process::Command;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct RawDockerStat {
@@ -111,9 +113,10 @@ fn container_processes(
     id: &str,
     host_logical_cpu_count: u32,
 ) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
-    let output = Command::new("docker")
-        .args(["top", id, "-eo", "pid,ppid,pcpu,rss,comm,args"])
-        .output()?;
+    let output = command::output_with_timeout(
+        Command::new("docker").args(["top", id, "-eo", "pid,ppid,pcpu,rss,comm,args"]),
+        Duration::from_secs(5),
+    )?;
     if !output.status.success() {
         return Err(format!(
             "docker top failed: {}",
