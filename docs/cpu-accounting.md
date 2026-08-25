@@ -89,6 +89,8 @@ Linux `/proc`, PowerShell, remote WSL, WSLC, and Docker snapshots are collected 
 
 Attribution is therefore best effort. A longer `--interval-ms` may reduce relative timing noise, but it also lowers temporal resolution.
 
+In the interactive TUI, current WSL and Windows collectors retain their own previous cumulative snapshot rather than restarting a complete global sample. During Windows host discovery, non-Windows rows are provisionally normalized with the WSL-visible logical CPU count and the TUI reports that status. Every normalized event and retained container-detail cache records the CPU count it used; when the Windows count differs, provisional cached rows are invalidated and delayed or cached old-scale results are rejected before fresh samples repopulate them. Optional collectors publish independently and their latest successful values are combined. This lowers latency but does not make cross-collector timestamps atomic. One-shot and JSON modes retain the two-snapshot full-sample behavior.
+
 ## Memory is not attributed
 
 Windows `WorkingSet64`, WSLC `MemUsage`, Docker memory statistics, and Linux process resident memory have different scopes and sharing semantics. `wsltop` displays collector-provided memory values but never computes:

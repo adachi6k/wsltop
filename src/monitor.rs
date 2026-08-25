@@ -163,16 +163,34 @@ impl Monitor {
         if self.config.wsl_only {
             return Vec::new();
         }
-        multiwsl::snapshots().unwrap_or_else(|error| {
-            warnings.push(format!(
-                "additional WSL distro discovery unavailable: {error}"
-            ));
-            Vec::new()
-        })
+        match multiwsl::snapshots() {
+            Ok(batch) => {
+                for (source, error) in &batch.failures {
+                    push_unique_warning(
+                        warnings,
+                        format!("additional WSL {source} unavailable: {error}"),
+                    );
+                }
+                batch.snapshots
+            }
+            Err(error) => {
+                push_unique_warning(
+                    warnings,
+                    format!("additional WSL distro discovery unavailable: {error}"),
+                );
+                Vec::new()
+            }
+        }
     }
 }
 
-fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config: &MonitorConfig) {
+fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
+}
+
+pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config: &MonitorConfig) {
     if !config.show_wsl_host {
         resources.retain(|row| !attribution::is_host_resource(row));
     }
@@ -226,7 +244,7 @@ fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config: &MonitorCo
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_flat_resources, MonitorConfig};
+    use super::{prepare_flat_resources, push_unique_warning, MonitorConfig};
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
     use std::time::Duration;
 
@@ -274,6 +292,14 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|row| row.kind == ResourceKind::Infra));
         assert!(rows.iter().any(|row| row.kind == ResourceKind::Container));
+    }
+
+    #[test]
+    fn duplicate_collector_warnings_are_reported_once() {
+        let mut warnings = Vec::new();
+        push_unique_warning(&mut warnings, "same failure".into());
+        push_unique_warning(&mut warnings, "same failure".into());
+        assert_eq!(warnings, ["same failure"]);
     }
 
     #[test]

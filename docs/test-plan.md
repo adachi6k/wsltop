@@ -38,7 +38,9 @@ Unit tests cover CPU delta normalization, resource classification, attribution r
 | Tree output | `wsltop --tree` | WSL/WSLC hosts are parents with children and non-negative unattributed CPU |
 | Flat JSON | `wsltop --json` | Top-level value remains a resource array with `kind` fields |
 | Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, groups, residuals, and unresolved resources |
-| Interactive TUI | `wsltop --interactive` | Background samples run one configured interval apart without child processes; keyboard navigation remains responsive while collection runs |
+| Interactive TUI | `wsltop --interactive` | An immediate loading frame is followed by current-WSL data after the short warmup; slow optional collectors do not block it and keyboard navigation remains responsive |
+| Partial collector failure | Allow a collector to succeed, then fail it during TUI operation | Its last successful rows remain visible and the footer reports the error while other collectors continue updating |
+| Lazy container detail | Start in flat view without `--show-container-processes`, then press `t` | Aggregate container rows appear without per-container commands; process details arrive on the next slow refresh after tree view requests them |
 | Initial interactive options | Combine `--interactive` with interval, collector switches, limit, tree, infra, and host options | Initial state and all collection/filter choices are honored |
 | Invalid interactive JSON | `wsltop --interactive --json` | Exits with an explicit incompatibility error and restores terminal state |
 | Hide infrastructure | `wsltop --hide-infra` and toggle `i` in TUI | `plan9` infrastructure rows are hidden as selected |

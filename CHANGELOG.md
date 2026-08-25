@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Stateful, partial TUI collector updates with a 150 ms current-WSL startup warmup and independent Windows, additional-WSL, WSLC, and Docker scheduling.
+- Loading/error status with last-good collector data retained across transient failures.
+
+### Changed
+
+- Docker and WSLC aggregate collection is separated from lazily requested process detail; optional collectors use a lower interactive cadence and no longer block local rows.
+- The Windows host logical CPU count is cached after initial discovery instead of querying CIM for every process snapshot.
+
 ## [0.2.0] - 2026-08-24
 
 ### Added

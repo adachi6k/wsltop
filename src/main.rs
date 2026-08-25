@@ -1,4 +1,5 @@
 mod attribution;
+mod command;
 mod docker;
 mod linux;
 mod model;
@@ -6,6 +7,7 @@ mod monitor;
 mod multiwsl;
 mod render;
 mod sampler;
+mod stream;
 mod tui;
 mod windows;
 mod wslc;
