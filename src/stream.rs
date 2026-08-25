@@ -15,13 +15,24 @@ const SLOW_COLLECTOR_MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 enum Event {
     HostCpuCount(u32),
-    Linux(Result<Vec<ResourceUsage>, String>),
+    Linux(Normalized<Result<Vec<ResourceUsage>, String>>),
     Windows(Result<(Vec<ResourceUsage>, u32), String>),
-    ExtraWsl(Result<ExtraWslUpdate, String>),
-    WslcAggregate(Result<WslcUsage, String>),
-    WslcDetails(WslcUsage),
-    DockerAggregate(Result<DockerUsage, String>),
-    DockerDetails(DockerUsage),
+    ExtraWsl(Normalized<Result<ExtraWslUpdate, String>>),
+    WslcAggregate(Normalized<Result<WslcUsage, String>>),
+    WslcDetails(Normalized<WslcUsage>),
+    DockerAggregate(Normalized<Result<DockerUsage, String>>),
+    DockerDetails(Normalized<DockerUsage>),
+}
+
+struct Normalized<T> {
+    cpu_count: u32,
+    value: T,
+}
+
+impl<T> Normalized<T> {
+    fn new(cpu_count: u32, value: T) -> Self {
+        Self { cpu_count, value }
+    }
 }
 
 #[derive(Default)]
@@ -55,6 +66,7 @@ struct Aggregate {
     extra_wsl_errors: BTreeMap<String, String>,
     wslc: WslcUsage,
     docker: DockerUsage,
+    normalized_collectors: BTreeSet<&'static str>,
     pending: BTreeSet<&'static str>,
     errors: BTreeMap<&'static str, String>,
 }
@@ -62,18 +74,23 @@ struct Aggregate {
 impl Aggregate {
     fn new(config: &MonitorConfig) -> Self {
         let mut pending = BTreeSet::from(["current WSL"]);
+        let mut normalized_collectors = BTreeSet::from(["current WSL"]);
         if !config.wsl_only {
             pending.extend(["Windows", "additional WSL"]);
+            normalized_collectors.insert("additional WSL");
             if !config.no_wslc {
                 pending.insert("WSLC");
+                normalized_collectors.insert("WSLC");
             }
         }
         if !config.no_docker {
             pending.insert("Docker");
+            normalized_collectors.insert("Docker");
         }
         Self {
             host_cpu_count: fallback_cpu_count(),
             host_cpu_authoritative: config.wsl_only,
+            normalized_collectors,
             pending,
             ..Self::default()
         }
@@ -82,11 +99,23 @@ impl Aggregate {
     fn apply(&mut self, event: Event) {
         let name = event.name();
         if let Event::HostCpuCount(count) = &event {
+            if self.host_cpu_count != *count {
+                self.linux.clear();
+                self.extra_wsl.clear();
+                self.wslc = WslcUsage::default();
+                self.docker = DockerUsage::default();
+                self.pending
+                    .extend(self.normalized_collectors.iter().copied());
+            }
             self.host_cpu_count = *count;
             self.host_cpu_authoritative = true;
             return;
         }
-        if let Event::WslcDetails(usage) = &event {
+        if event.has_stale_normalization(self.host_cpu_authoritative, self.host_cpu_count) {
+            return;
+        }
+        if let Event::WslcDetails(normalized) = &event {
+            let usage = &normalized.value;
             for current in &self.wslc.resources {
                 let Some(detail) = usage
                     .process_resources
@@ -115,7 +144,8 @@ impl Aggregate {
             extend_unique(&mut self.wslc.warnings, &usage.warnings);
             return;
         }
-        if let Event::DockerDetails(usage) = &event {
+        if let Event::DockerDetails(normalized) = &event {
+            let usage = &normalized.value;
             for current in &mut self.docker.resources {
                 if let Some(detail) = usage
                     .resources
@@ -131,12 +161,12 @@ impl Aggregate {
         self.pending.remove(name);
         let result = match event {
             Event::HostCpuCount(_) => unreachable!(),
-            Event::Linux(value) => value.map(|rows| self.linux = rows),
+            Event::Linux(value) => value.value.map(|rows| self.linux = rows),
             Event::Windows(value) => value.map(|(rows, count)| {
                 self.windows = rows;
                 self.host_cpu_count = count;
             }),
-            Event::ExtraWsl(value) => value.map(|update| {
+            Event::ExtraWsl(value) => value.value.map(|update| {
                 self.extra_wsl
                     .retain(|source, _| update.running_sources.contains(source));
                 for source in update.successful_sources {
@@ -150,7 +180,7 @@ impl Aggregate {
                 }
                 self.extra_wsl_errors = update.failures;
             }),
-            Event::WslcAggregate(value) => value.map(|mut usage| {
+            Event::WslcAggregate(value) => value.value.map(|mut usage| {
                 usage.process_resources = self
                     .wslc
                     .process_resources
@@ -170,7 +200,7 @@ impl Aggregate {
                 self.wslc = usage;
             }),
             Event::WslcDetails(_) => unreachable!(),
-            Event::DockerAggregate(value) => value.map(|mut usage| {
+            Event::DockerAggregate(value) => value.value.map(|mut usage| {
                 for item in &mut usage.resources {
                     if let Some(old) = self
                         .docker
@@ -267,6 +297,23 @@ impl Aggregate {
             resources,
             tree,
             warnings,
+        }
+    }
+}
+
+impl Event {
+    fn has_stale_normalization(&self, authoritative: bool, current_count: u32) -> bool {
+        if !authoritative {
+            return false;
+        }
+        match self {
+            Self::Linux(value) => value.cpu_count != current_count,
+            Self::ExtraWsl(value) => value.cpu_count != current_count,
+            Self::WslcAggregate(value) => value.cpu_count != current_count,
+            Self::WslcDetails(value) => value.cpu_count != current_count,
+            Self::DockerAggregate(value) => value.cpu_count != current_count,
+            Self::DockerDetails(value) => value.cpu_count != current_count,
+            Self::HostCpuCount(_) | Self::Windows(_) => false,
         }
     }
 }
@@ -379,7 +426,10 @@ fn spawn_linux(
                     };
                     if let Some(old) = &before {
                         let rows = sampler::calculate_usage(old, &after, count);
-                        if sender.send(Event::Linux(Ok(rows))).is_err() {
+                        if sender
+                            .send(Event::Linux(Normalized::new(count, Ok(rows))))
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -391,7 +441,11 @@ fn spawn_linux(
                     };
                 }
                 Err(error) => {
-                    if sender.send(Event::Linux(Err(error.to_string()))).is_err() {
+                    let count = cpus.load(Ordering::Relaxed);
+                    if sender
+                        .send(Event::Linux(Normalized::new(count, Err(error.to_string()))))
+                        .is_err()
+                    {
                         break;
                     }
                     delay = interval;
@@ -461,15 +515,17 @@ fn spawn_extra_wsl(
         let mut before = match multiwsl::snapshots() {
             Ok(value) => value.snapshots,
             Err(error) => {
-                let _ = sender.send(Event::ExtraWsl(Err(format!(
-                    "additional WSL unavailable: {error}"
-                ))));
+                let _ = sender.send(Event::ExtraWsl(Normalized::new(
+                    cpus.load(Ordering::Relaxed),
+                    Err(format!("additional WSL unavailable: {error}")),
+                )));
                 Vec::new()
             }
         };
         while wait(&stop, cadence) {
             match multiwsl::snapshots() {
                 Ok(after) => {
+                    let count = cpus.load(Ordering::Relaxed);
                     let mut rows = Vec::new();
                     let running_sources: BTreeSet<String> = after
                         .snapshots
@@ -488,11 +544,7 @@ fn spawn_extra_wsl(
                             .iter()
                             .find(|(candidate, _)| candidate == name)
                         {
-                            rows.extend(sampler::calculate_usage(
-                                old,
-                                new,
-                                cpus.load(Ordering::Relaxed),
-                            ));
+                            rows.extend(sampler::calculate_usage(old, new, count));
                         }
                     }
                     before.retain(|(name, _)| running_sources.contains(name));
@@ -504,12 +556,15 @@ fn spawn_extra_wsl(
                         }
                     }
                     if sender
-                        .send(Event::ExtraWsl(Ok(ExtraWslUpdate {
-                            rows,
-                            running_sources,
-                            successful_sources,
-                            failures: after.failures.into_iter().collect(),
-                        })))
+                        .send(Event::ExtraWsl(Normalized::new(
+                            count,
+                            Ok(ExtraWslUpdate {
+                                rows,
+                                running_sources,
+                                successful_sources,
+                                failures: after.failures.into_iter().collect(),
+                            }),
+                        )))
                         .is_err()
                     {
                         break;
@@ -517,9 +572,10 @@ fn spawn_extra_wsl(
                 }
                 Err(error) => {
                     if sender
-                        .send(Event::ExtraWsl(Err(format!(
-                            "additional WSL unavailable: {error}"
-                        ))))
+                        .send(Event::ExtraWsl(Normalized::new(
+                            cpus.load(Ordering::Relaxed),
+                            Err(format!("additional WSL unavailable: {error}")),
+                        )))
                         .is_err()
                     {
                         break;
@@ -555,7 +611,10 @@ fn spawn_wslc(
                 .collect();
             wslc::populate_processes(&mut usage, count);
             last_details = usage.clone();
-            if detail_events.send(Event::WslcDetails(usage)).is_err() {
+            if detail_events
+                .send(Event::WslcDetails(Normalized::new(count, usage)))
+                .is_err()
+            {
                 break;
             }
         }
@@ -566,7 +625,10 @@ fn spawn_wslc(
             match wslc::aggregate_usage(count) {
                 Ok(usage) => {
                     if sender
-                        .send(Event::WslcAggregate(Ok(usage.clone())))
+                        .send(Event::WslcAggregate(Normalized::new(
+                            count,
+                            Ok(usage.clone()),
+                        )))
                         .is_err()
                     {
                         break;
@@ -577,9 +639,10 @@ fn spawn_wslc(
                 }
                 Err(error) => {
                     if sender
-                        .send(Event::WslcAggregate(Err(format!(
-                            "WSLC collector unavailable: {error}"
-                        ))))
+                        .send(Event::WslcAggregate(Normalized::new(
+                            count,
+                            Err(format!("WSLC collector unavailable: {error}")),
+                        )))
                         .is_err()
                     {
                         break;
@@ -621,7 +684,10 @@ fn spawn_docker(
             }
             docker::populate_processes(&mut usage, count);
             last_details = usage.clone();
-            if detail_events.send(Event::DockerDetails(usage)).is_err() {
+            if detail_events
+                .send(Event::DockerDetails(Normalized::new(count, usage)))
+                .is_err()
+            {
                 break;
             }
         }
@@ -632,7 +698,10 @@ fn spawn_docker(
             match docker::aggregate_usage(count) {
                 Ok(usage) => {
                     if sender
-                        .send(Event::DockerAggregate(Ok(usage.clone())))
+                        .send(Event::DockerAggregate(Normalized::new(
+                            count,
+                            Ok(usage.clone()),
+                        )))
                         .is_err()
                     {
                         break;
@@ -643,9 +712,10 @@ fn spawn_docker(
                 }
                 Err(error) => {
                     if sender
-                        .send(Event::DockerAggregate(Err(format!(
-                            "Docker collector unavailable: {error}"
-                        ))))
+                        .send(Event::DockerAggregate(Normalized::new(
+                            count,
+                            Err(format!("Docker collector unavailable: {error}")),
+                        )))
                         .is_err()
                     {
                         break;
@@ -687,7 +757,7 @@ fn fallback_cpu_count() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Aggregate, Event, ExtraWslUpdate};
+    use super::{fallback_cpu_count, Aggregate, Event, ExtraWslUpdate, Normalized};
     use crate::docker::DockerUsage;
     use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
     use crate::monitor::MonitorConfig;
@@ -724,6 +794,10 @@ mod tests {
         }
     }
 
+    fn normalized<T>(value: T) -> Normalized<T> {
+        Normalized::new(fallback_cpu_count(), value)
+    }
+
     #[test]
     fn partial_success_clears_loading_without_discarding_other_data() {
         let mut aggregate = Aggregate::new(&config());
@@ -739,7 +813,7 @@ mod tests {
             cpu_percent: 2.0,
             memory_bytes: 1,
         };
-        aggregate.apply(Event::Linux(Ok(vec![row])));
+        aggregate.apply(Event::Linux(normalized(Ok(vec![row]))));
         let snapshot = aggregate.snapshot(&config());
         assert_eq!(snapshot.resources.len(), 1);
         assert!(snapshot
@@ -757,8 +831,8 @@ mod tests {
     #[test]
     fn collector_error_preserves_last_good_data() {
         let mut aggregate = Aggregate::new(&config());
-        aggregate.apply(Event::Linux(Ok(Vec::new())));
-        aggregate.apply(Event::Linux(Err("failed".into())));
+        aggregate.apply(Event::Linux(normalized(Ok(Vec::new()))));
+        aggregate.apply(Event::Linux(normalized(Err("failed".into()))));
         assert!(aggregate
             .snapshot(&config())
             .warnings
@@ -771,17 +845,17 @@ mod tests {
         let mut aggregate = Aggregate::new(&config());
         let mut process = row(EnvironmentKind::Wsl, ResourceKind::Process, "42");
         process.source = Some("Ubuntu-2".into());
-        aggregate.apply(Event::ExtraWsl(Ok(ExtraWslUpdate {
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(ExtraWslUpdate {
             rows: vec![process],
             running_sources: BTreeSet::from(["Ubuntu-2".into()]),
             successful_sources: BTreeSet::from(["Ubuntu-2".into()]),
             failures: BTreeMap::new(),
-        })));
-        aggregate.apply(Event::ExtraWsl(Ok(ExtraWslUpdate {
+        }))));
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(ExtraWslUpdate {
             running_sources: BTreeSet::from(["Ubuntu-2".into()]),
             failures: BTreeMap::from([("Ubuntu-2".into(), "remote /proc failed".into())]),
             ..ExtraWslUpdate::default()
-        })));
+        }))));
 
         let snapshot = aggregate.snapshot(&config());
         assert!(snapshot
@@ -812,6 +886,53 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_host_count_invalidates_and_rejects_old_scale_rows() {
+        let mut aggregate = Aggregate::new(&config());
+        let fallback = aggregate.host_cpu_count;
+        let authoritative = fallback.saturating_add(1);
+        let process = row(EnvironmentKind::Wsl, ResourceKind::Process, "old-scale");
+        aggregate.apply(Event::Linux(Normalized::new(
+            fallback,
+            Ok(vec![process.clone()]),
+        )));
+        assert_eq!(aggregate.linux.len(), 1);
+
+        aggregate.apply(Event::HostCpuCount(authoritative));
+        assert!(aggregate.linux.is_empty());
+        assert!(aggregate.pending.contains("current WSL"));
+
+        aggregate.apply(Event::Linux(Normalized::new(
+            fallback,
+            Ok(vec![process.clone()]),
+        )));
+        assert!(aggregate.linux.is_empty());
+        assert!(aggregate.pending.contains("current WSL"));
+
+        aggregate.apply(Event::Linux(Normalized::new(
+            authoritative,
+            Ok(vec![process]),
+        )));
+        assert_eq!(aggregate.linux.len(), 1);
+        assert!(!aggregate.pending.contains("current WSL"));
+    }
+
+    #[test]
+    fn unchanged_authoritative_host_count_keeps_correctly_scaled_rows() {
+        let mut aggregate = Aggregate::new(&config());
+        let count = aggregate.host_cpu_count;
+        aggregate.apply(Event::Linux(Normalized::new(
+            count,
+            Ok(vec![row(
+                EnvironmentKind::Wsl,
+                ResourceKind::Process,
+                "same-scale",
+            )]),
+        )));
+        aggregate.apply(Event::HostCpuCount(count));
+        assert_eq!(aggregate.linux.len(), 1);
+    }
+
+    #[test]
     fn docker_aggregate_refresh_preserves_last_process_details() {
         let mut aggregate = Aggregate::new(&config());
         let container = row(
@@ -820,30 +941,30 @@ mod tests {
             "container",
         );
         let process = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
-        aggregate.apply(Event::DockerAggregate(Ok(DockerUsage {
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: Vec::new(),
                 host_pids: Vec::new(),
             }],
             warnings: Vec::new(),
-        })));
-        aggregate.apply(Event::DockerDetails(DockerUsage {
+        }))));
+        aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: vec![process],
                 host_pids: Vec::new(),
             }],
             warnings: Vec::new(),
-        }));
-        aggregate.apply(Event::DockerAggregate(Ok(DockerUsage {
+        })));
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
             resources: vec![ContainerProcessUsage {
                 resource: container,
                 processes: Vec::new(),
                 host_pids: Vec::new(),
             }],
             warnings: Vec::new(),
-        })));
+        }))));
         assert_eq!(aggregate.docker.resources[0].processes.len(), 1);
     }
 
@@ -856,15 +977,17 @@ mod tests {
             "container",
         );
         current.cpu_percent = 9.0;
-        aggregate.apply(Event::DockerAggregate(Ok(DockerUsage {
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
             resources: vec![ContainerProcessUsage {
                 resource: current,
                 processes: Vec::new(),
                 host_pids: Vec::new(),
             }],
             warnings: Vec::new(),
-        })));
-        aggregate.apply(Event::DockerAggregate(Err("new aggregate error".into())));
+        }))));
+        aggregate.apply(Event::DockerAggregate(normalized(Err(
+            "new aggregate error".into(),
+        ))));
 
         let stale = row(
             EnvironmentKind::Docker,
@@ -872,14 +995,14 @@ mod tests {
             "container",
         );
         let detail = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
-        aggregate.apply(Event::DockerDetails(DockerUsage {
+        aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
             resources: vec![ContainerProcessUsage {
                 resource: stale,
                 processes: vec![detail],
                 host_pids: Vec::new(),
             }],
             warnings: Vec::new(),
-        }));
+        })));
 
         assert_eq!(aggregate.docker.resources[0].resource.cpu_percent, 9.0);
         assert_eq!(aggregate.docker.resources[0].processes.len(), 1);
@@ -898,11 +1021,11 @@ mod tests {
             "container",
         );
         current.cpu_percent = 9.0;
-        aggregate.apply(Event::WslcAggregate(Ok(WslcUsage {
+        aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
             resources: vec![current],
             process_resources: Vec::new(),
             warnings: Vec::new(),
-        })));
+        }))));
 
         let stale = row(
             EnvironmentKind::WslContainer,
@@ -914,7 +1037,7 @@ mod tests {
             ResourceKind::Process,
             "process",
         );
-        aggregate.apply(Event::WslcDetails(WslcUsage {
+        aggregate.apply(Event::WslcDetails(normalized(WslcUsage {
             resources: vec![stale.clone()],
             process_resources: vec![ContainerProcessUsage {
                 resource: stale,
@@ -922,7 +1045,7 @@ mod tests {
                 host_pids: Vec::new(),
             }],
             warnings: Vec::new(),
-        }));
+        })));
         assert_eq!(
             aggregate.wslc.process_resources[0].resource.cpu_percent,
             9.0
@@ -934,11 +1057,11 @@ mod tests {
             "container",
         );
         newer.cpu_percent = 12.0;
-        aggregate.apply(Event::WslcAggregate(Ok(WslcUsage {
+        aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
             resources: vec![newer],
             process_resources: Vec::new(),
             warnings: Vec::new(),
-        })));
+        }))));
         assert_eq!(
             aggregate.wslc.process_resources[0].resource.cpu_percent,
             12.0
