@@ -1,5 +1,6 @@
 use crate::monitor::{MonitorConfig, MonitorSnapshot};
 use crate::render;
+use crate::render::CpuScale;
 use crate::stream;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
@@ -19,10 +20,14 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Error>> {
+pub fn run(
+    config: MonitorConfig,
+    initial_tree: bool,
+    cpu_scale: CpuScale,
+) -> Result<(), Box<dyn Error>> {
     let interval = config.interval;
     let mut terminal = TerminalGuard::new()?;
-    let mut state = State::from_config(&config, initial_tree);
+    let mut state = State::from_config(&config, initial_tree, cpu_scale);
     let worker = SamplingWorker::start(config, initial_tree);
 
     loop {
@@ -39,9 +44,10 @@ pub fn run(config: MonitorConfig, initial_tree: bool) -> Result<(), Box<dyn Erro
             frame.render_widget(
                 Paragraph::new(Line::styled(
                     format!(
-                        " wsltop {} | {} | refresh {}ms ",
+                        " wsltop {} | {} | CPU {} | refresh {}ms ",
                         env!("CARGO_PKG_VERSION"),
                         if state.tree { "tree" } else { "flat" },
+                        state.cpu_scale.label(),
                         interval.as_millis()
                     ),
                     Style::default().fg(Color::Black).bg(Color::Cyan),
@@ -94,15 +100,17 @@ struct State {
     status: String,
     hide_zero: bool,
     snapshot: Option<MonitorSnapshot>,
+    cpu_scale: CpuScale,
 }
 
 impl State {
-    fn from_config(config: &MonitorConfig, tree: bool) -> Self {
+    fn from_config(config: &MonitorConfig, tree: bool, cpu_scale: CpuScale) -> Self {
         Self {
             tree,
             hide_infra: config.hide_infra,
             show_hosts: config.show_wsl_host,
             status: "sampling...".to_string(),
+            cpu_scale,
             ..Self::default()
         }
     }
@@ -150,9 +158,9 @@ impl State {
             return;
         };
         let output = if self.tree {
-            render::tree(snapshot)
+            render::tree(snapshot, self.cpu_scale)
         } else {
-            render::flat(snapshot)
+            render::flat(snapshot, self.cpu_scale)
         };
         self.lines = output
             .lines()
@@ -243,6 +251,7 @@ impl Drop for TerminalGuard {
 mod tests {
     use super::State;
     use crate::monitor::MonitorConfig;
+    use crate::render::CpuScale;
     use crossterm::event::KeyCode;
     use std::time::Duration;
     #[test]
@@ -269,9 +278,10 @@ mod tests {
             show_container_processes: false,
             container_process_limit: 5,
         };
-        let state = State::from_config(&config, true);
+        let state = State::from_config(&config, true, CpuScale::Core);
         assert!(state.tree);
         assert!(state.hide_infra);
         assert!(state.show_hosts);
+        assert_eq!(state.cpu_scale, CpuScale::Core);
     }
 }

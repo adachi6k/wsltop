@@ -90,6 +90,8 @@ CPU% = delta cumulative CPU seconds / elapsed wall seconds
 
 WSLC and Docker percentages are normalized from their source conventions to the same denominator. Full formulas are in [CPU accounting](cpu-accounting.md).
 
+The resource model and attribution tree always retain this host-wide scale. Human-readable rendering applies the selected `core` or `host` display multiplier at the final formatting boundary; it does not mutate snapshots, ordering, residual calculations, or JSON serialization.
+
 ## Attribution
 
 Attribution treats Windows WSL VM/session processes as parent observations and known WSL, WSLC, or Docker workloads as children:

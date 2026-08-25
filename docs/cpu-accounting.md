@@ -1,8 +1,10 @@
 # CPU Accounting
 
-`wsltop` reports every CPU percentage on a common host-wide scale: all logical CPUs on the Windows host together equal 100%.
+`wsltop` calculates and stores every CPU percentage on a common host-wide scale: all logical CPUs on the Windows host together equal 100%.
 
 This matches Task Manager-style whole-machine reasoning and makes Windows, WSL, WSLC, and Docker values comparable. It differs from tools that report one fully occupied CPU as 100% regardless of host CPU count.
+
+Human-readable text and TUI output default to `--cpu-scale core`, which multiplies the stored value by the host logical CPU count so one fully busy logical CPU appears as 100%, like Linux `top`. Values can exceed 100%. `--cpu-scale host` displays the stored whole-host value directly. JSON always remains host-wide for compatibility, and all attribution and residual calculations occur before display conversion.
 
 ## Expected values
 
