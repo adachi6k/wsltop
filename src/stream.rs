@@ -1,6 +1,6 @@
 use crate::attribution;
 use crate::docker::DockerUsage;
-use crate::model::ResourceUsage;
+use crate::model::{ContainerProcessUsage, ResourceUsage};
 use crate::monitor::{prepare_flat_resources, MonitorConfig, MonitorSnapshot};
 use crate::wslc::WslcUsage;
 use crate::{docker, linux, multiwsl, sampler, windows, wslc};
@@ -101,9 +101,15 @@ impl Aggregate {
                     .iter_mut()
                     .find(|item| item.resource.id == current.id)
                 {
+                    existing.resource.clone_from(current);
                     existing.processes.clone_from(&detail.processes);
+                    existing.host_pids.clone_from(&detail.host_pids);
                 } else {
-                    self.wslc.process_resources.push(detail.clone());
+                    self.wslc.process_resources.push(ContainerProcessUsage {
+                        resource: current.clone(),
+                        processes: detail.processes.clone(),
+                        host_pids: detail.host_pids.clone(),
+                    });
                 }
             }
             extend_unique(&mut self.wslc.warnings, &usage.warnings);
@@ -149,8 +155,17 @@ impl Aggregate {
                     .wslc
                     .process_resources
                     .iter()
-                    .filter(|old| usage.resources.iter().any(|row| row.id == old.resource.id))
-                    .cloned()
+                    .filter_map(|old| {
+                        usage
+                            .resources
+                            .iter()
+                            .find(|current| current.id == old.resource.id)
+                            .map(|current| ContainerProcessUsage {
+                                resource: current.clone(),
+                                processes: old.processes.clone(),
+                                host_pids: old.host_pids.clone(),
+                            })
+                    })
                     .collect();
                 self.wslc = usage;
             }),
@@ -676,6 +691,7 @@ mod tests {
     use crate::docker::DockerUsage;
     use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
     use crate::monitor::MonitorConfig;
+    use crate::wslc::WslcUsage;
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
@@ -871,5 +887,62 @@ mod tests {
             aggregate.errors.get("Docker").unwrap(),
             "new aggregate error"
         );
+    }
+
+    #[test]
+    fn wslc_details_always_use_the_latest_aggregate_resource() {
+        let mut aggregate = Aggregate::new(&config());
+        let mut current = row(
+            EnvironmentKind::WslContainer,
+            ResourceKind::Container,
+            "container",
+        );
+        current.cpu_percent = 9.0;
+        aggregate.apply(Event::WslcAggregate(Ok(WslcUsage {
+            resources: vec![current],
+            process_resources: Vec::new(),
+            warnings: Vec::new(),
+        })));
+
+        let stale = row(
+            EnvironmentKind::WslContainer,
+            ResourceKind::Container,
+            "container",
+        );
+        let process = row(
+            EnvironmentKind::WslContainer,
+            ResourceKind::Process,
+            "process",
+        );
+        aggregate.apply(Event::WslcDetails(WslcUsage {
+            resources: vec![stale.clone()],
+            process_resources: vec![ContainerProcessUsage {
+                resource: stale,
+                processes: vec![process],
+                host_pids: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        }));
+        assert_eq!(
+            aggregate.wslc.process_resources[0].resource.cpu_percent,
+            9.0
+        );
+
+        let mut newer = row(
+            EnvironmentKind::WslContainer,
+            ResourceKind::Container,
+            "container",
+        );
+        newer.cpu_percent = 12.0;
+        aggregate.apply(Event::WslcAggregate(Ok(WslcUsage {
+            resources: vec![newer],
+            process_resources: Vec::new(),
+            warnings: Vec::new(),
+        })));
+        assert_eq!(
+            aggregate.wslc.process_resources[0].resource.cpu_percent,
+            12.0
+        );
+        assert_eq!(aggregate.wslc.process_resources[0].processes.len(), 1);
     }
 }
