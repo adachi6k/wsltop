@@ -3,7 +3,40 @@ use crate::model::{EnvironmentKind, ResourceUsage};
 use crate::monitor::MonitorSnapshot;
 use std::fmt::Write;
 
-pub fn flat(snapshot: &MonitorSnapshot) -> String {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CpuScale {
+    #[default]
+    Core,
+    Host,
+}
+
+impl CpuScale {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "core" => Ok(Self::Core),
+            "host" => Ok(Self::Host),
+            _ => Err(format!(
+                "invalid CPU scale {value:?}; expected core or host"
+            )),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Core => "1 core = 100%",
+            Self::Host => "whole host = 100%",
+        }
+    }
+
+    fn value(self, host_wide: f64, cpus: u32) -> f64 {
+        match self {
+            Self::Core => host_wide * cpus as f64,
+            Self::Host => host_wide,
+        }
+    }
+}
+
+pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
     let mut out = String::new();
     let show_container_processes = snapshot.resources.iter().any(|row| {
         matches!(
@@ -14,8 +47,9 @@ pub fn flat(snapshot: &MonitorSnapshot) -> String {
     });
     let _ = writeln!(
         out,
-        "Host logical CPUs: {}",
-        snapshot.host_logical_cpu_count
+        "Host logical CPUs: {} | CPU scale: {}",
+        snapshot.host_logical_cpu_count,
+        scale.label()
     );
     let _ = writeln!(
         out,
@@ -37,7 +71,7 @@ pub fn flat(snapshot: &MonitorSnapshot) -> String {
             "{:<7} {:<9} {:>6.2}% {:>9} {:>12}  {}",
             env_name(row.environment),
             row.kind.as_str(),
-            row.cpu_percent,
+            scale.value(row.cpu_percent, snapshot.host_logical_cpu_count),
             format_bytes(row.memory_bytes),
             display_id(row),
             display_name(row)
@@ -69,7 +103,7 @@ pub fn flat(snapshot: &MonitorSnapshot) -> String {
                         "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    |- {}",
                         "",
                         "process",
-                        process.cpu_percent,
+                        scale.value(process.cpu_percent, snapshot.host_logical_cpu_count),
                         format_bytes(process.memory_bytes),
                         display_id(process),
                         process.name
@@ -91,7 +125,7 @@ pub fn flat(snapshot: &MonitorSnapshot) -> String {
                         "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    |- {} more processes",
                         "",
                         "processes",
-                        omitted_cpu,
+                        scale.value(omitted_cpu, snapshot.host_logical_cpu_count),
                         "-",
                         "-",
                         omitted.len()
@@ -100,13 +134,27 @@ pub fn flat(snapshot: &MonitorSnapshot) -> String {
                 let _ = writeln!(
                     out,
                     "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    `- unattributed",
-                    "", "residual", group.unattributed_cpu_percent, "-", "-"
+                    "",
+                    "residual",
+                    scale.value(
+                        group.unattributed_cpu_percent,
+                        snapshot.host_logical_cpu_count
+                    ),
+                    "-",
+                    "-"
                 );
                 if group.over_attributed_cpu_percent > 0.0 {
                     let _ = writeln!(
                         out,
                         "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    `- over-attributed",
-                        "", "residual", group.over_attributed_cpu_percent, "-", "-"
+                        "",
+                        "residual",
+                        scale.value(
+                            group.over_attributed_cpu_percent,
+                            snapshot.host_logical_cpu_count
+                        ),
+                        "-",
+                        "-"
                     );
                 }
             }
@@ -115,12 +163,15 @@ pub fn flat(snapshot: &MonitorSnapshot) -> String {
     out
 }
 
-pub fn tree(snapshot: &MonitorSnapshot) -> String {
-    tree_model(&snapshot.tree, snapshot.host_logical_cpu_count)
+pub fn tree(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
+    tree_model(&snapshot.tree, snapshot.host_logical_cpu_count, scale)
 }
 
-fn tree_model(tree: &AttributionTree, cpus: u32) -> String {
-    let mut out = format!("Host logical CPUs: {cpus}\n\n");
+fn tree_model(tree: &AttributionTree, cpus: u32, scale: CpuScale) -> String {
+    let mut out = format!(
+        "Host logical CPUs: {cpus} | CPU scale: {}\n\n",
+        scale.label()
+    );
     for group in &tree.groups {
         let unresolved = if group.mapping_status == MappingStatus::Unresolved {
             " [session mapping unresolved]"
@@ -130,7 +181,9 @@ fn tree_model(tree: &AttributionTree, cpus: u32) -> String {
         let _ = writeln!(
             out,
             "{:<42} {:>7.2}%{}",
-            group.name, group.cpu_percent, unresolved
+            group.name,
+            scale.value(group.cpu_percent, cpus),
+            unresolved
         );
         for child in &group.children {
             let _ = writeln!(
@@ -138,7 +191,7 @@ fn tree_model(tree: &AttributionTree, cpus: u32) -> String {
                 "|- {:<10} {:<27} {:>7.2}%",
                 child.kind.as_str(),
                 display_name(child),
-                child.cpu_percent
+                scale.value(child.cpu_percent, cpus)
             );
             if matches!(
                 child.environment,
@@ -157,13 +210,17 @@ fn tree_model(tree: &AttributionTree, cpus: u32) -> String {
                         let _ = writeln!(
                             out,
                             "|  |- {:<7} {:<24} {:>7.2}%",
-                            "process", process.name, process.cpu_percent
+                            "process",
+                            process.name,
+                            scale.value(process.cpu_percent, cpus)
                         );
                     }
                     let _ = writeln!(
                         out,
                         "|  `- {:<7} {:<24} {:>7.2}%",
-                        "unattributed", "", docker.unattributed_cpu_percent
+                        "unattributed",
+                        "",
+                        scale.value(docker.unattributed_cpu_percent, cpus)
                     );
                 }
             }
@@ -171,13 +228,15 @@ fn tree_model(tree: &AttributionTree, cpus: u32) -> String {
         let _ = writeln!(
             out,
             "`- {:<10} {:<27} {:>7.2}%\n",
-            "unattributed", "", group.unattributed_cpu_percent
+            "unattributed",
+            "",
+            scale.value(group.unattributed_cpu_percent, cpus)
         );
         if group.over_attributed_cpu_percent > 0.0 {
             let _ = writeln!(
                 out,
                 "   sampling skew (children exceed host by {:.2}%)\n",
-                group.over_attributed_cpu_percent
+                scale.value(group.over_attributed_cpu_percent, cpus)
             );
         }
     }
@@ -189,7 +248,7 @@ fn tree_model(tree: &AttributionTree, cpus: u32) -> String {
                 "   {:<10} {:<27} {:>7.2}%",
                 child.kind.as_str(),
                 display_name(child),
-                child.cpu_percent
+                scale.value(child.cpu_percent, cpus)
             );
         }
     }
@@ -218,25 +277,29 @@ fn tree_model(tree: &AttributionTree, cpus: u32) -> String {
                 "{container_prefix} {:<10} {:<27} {:>7.2}%",
                 "container",
                 display_name(&docker.container),
-                docker.container.cpu_percent
+                scale.value(docker.container.cpu_percent, cpus)
             );
             for process in &docker.children {
                 let _ = writeln!(
                     out,
                     "   |- {:<7} {:<27} {:>7.2}%",
-                    "process", process.name, process.cpu_percent
+                    "process",
+                    process.name,
+                    scale.value(process.cpu_percent, cpus)
                 );
             }
             let _ = writeln!(
                 out,
                 "   `- {:<7} {:<27} {:>7.2}%",
-                "unattributed", "", docker.unattributed_cpu_percent
+                "unattributed",
+                "",
+                scale.value(docker.unattributed_cpu_percent, cpus)
             );
             if docker.over_attributed_cpu_percent > 0.0 {
                 let _ = writeln!(
                     out,
                     "      sampling skew (processes exceed container by {:.2}%)",
-                    docker.over_attributed_cpu_percent
+                    scale.value(docker.over_attributed_cpu_percent, cpus)
                 );
             }
         }
@@ -287,8 +350,10 @@ fn format_bytes(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::display_name;
+    use super::{display_name, flat, tree, CpuScale};
+    use crate::attribution::{AttributionTree, DockerAttributionGroup};
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+    use crate::monitor::MonitorSnapshot;
 
     #[test]
     fn shortens_docker_container_source_in_text_output() {
@@ -309,5 +374,54 @@ mod tests {
 
         assert_eq!(display_name(&row), "[68dae66282ff] simx");
         assert_eq!(row.source.as_deref().unwrap().len(), 64);
+    }
+
+    fn snapshot(row: ResourceUsage) -> MonitorSnapshot {
+        MonitorSnapshot {
+            host_logical_cpu_count: 16,
+            resources: vec![row.clone()],
+            tree: AttributionTree {
+                host_logical_cpu_count: 16,
+                groups: Vec::new(),
+                unmapped_children: Vec::new(),
+                docker_groups: vec![DockerAttributionGroup {
+                    container: row,
+                    children: Vec::new(),
+                    unattributed_cpu_percent: 0.0,
+                    over_attributed_cpu_percent: 0.0,
+                }],
+                wslc_groups: Vec::new(),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn renders_flat_and_tree_in_the_selected_cpu_scale() {
+        let row = ResourceUsage {
+            environment: EnvironmentKind::Docker,
+            source: None,
+            kind: ResourceKind::Container,
+            id: "container".into(),
+            pid: None,
+            ppid: None,
+            name: "work".into(),
+            args: None,
+            cpu_percent: 6.25,
+            memory_bytes: 0,
+        };
+        let snapshot = snapshot(row);
+
+        let core_flat = flat(&snapshot, CpuScale::Core);
+        let core_tree = tree(&snapshot, CpuScale::Core);
+        assert!(core_flat.contains("1 core = 100%"));
+        assert!(core_flat.contains("100.00%"));
+        assert!(core_tree.contains("100.00%"));
+
+        let host_flat = flat(&snapshot, CpuScale::Host);
+        let host_tree = tree(&snapshot, CpuScale::Host);
+        assert!(host_flat.contains("whole host = 100%"));
+        assert!(host_flat.contains("  6.25%"));
+        assert!(host_tree.contains("  6.25%"));
     }
 }

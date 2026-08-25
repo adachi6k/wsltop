@@ -130,6 +130,7 @@ wsltop [OPTIONS]
 --no-docker            Disable Docker collection
 --show-container-processes Include Docker/WSLC processes in flat output
 --container-process-limit N Show at most N processes per container (default: 5)
+--cpu-scale core|host CPU display scale for text/TUI output (default: core)
 --hide-infra           Hide infrastructure rows
 ```
 
@@ -154,9 +155,11 @@ Controls:
 
 Terminal raw mode, alternate-screen state, and cursor visibility are restored on normal exit and propagated errors.
 
-## CPU accounting
+## CPU display and accounting
 
-Every CPU percentage uses one common denominator: all logical CPUs reported by the Windows host equal 100%. On a 16-logical-CPU host, one fully busy CPU is therefore approximately 6.25%, and four fully busy CPUs are approximately 25%.
+Text and TUI output default to the familiar Linux `top` convention where one fully busy logical CPU is 100%; multi-threaded workloads can exceed 100%. Use `--cpu-scale host` for the Task Manager-style whole-host display where all Windows host logical CPUs together equal 100%.
+
+Internally, every CPU percentage remains on the common host-wide denominator. Display scaling is applied only while rendering, so sorting, attribution, residual accounting, and JSON values do not change.
 
 Windows and WSL process percentages come from deltas of cumulative processor time. WSLC and Docker percentages are normalized from their collector-specific values onto the same host scale. See [CPU accounting](docs/cpu-accounting.md) for formulas and caveats.
 
@@ -165,12 +168,12 @@ Windows and WSL process percentages come from deltas of cumulative processor tim
 Use `--tree` to treat `vmmem`, `vmmemWSL`, and `vmmemwslc-*` as parent resources:
 
 ```text
-Host logical CPUs: 16
+Host logical CPUs: 16 | CPU scale: 1 core = 100%
 
-WSL VM                                    8.20%
-|- infra      plan9                       2.70%
-|- process    codex                       0.20%
-`- unattributed                           5.30%
+WSL VM                                  131.20%
+|- infra      plan9                      43.20%
+|- process    codex                       3.20%
+`- unattributed                          84.80%
 ```
 
 The remainder is clamped at zero:
@@ -201,7 +204,7 @@ The current distribution is sampled directly from `/proc`. Other running distrib
 
 ## JSON output
 
-`--json` preserves the flat resource-array schema. Each resource includes fields such as `environment`, `kind`, identity, CPU percentage, and memory bytes.
+`--json` preserves the flat resource-array schema and host-wide CPU values. Each resource includes fields such as `environment`, `kind`, identity, CPU percentage, and memory bytes. `--cpu-scale core` is rejected with JSON because display scaling does not alter machine-readable values; omitted scale or `--cpu-scale host` is accepted.
 
 ```console
 wsltop --once --json
