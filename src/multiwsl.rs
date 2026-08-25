@@ -3,7 +3,13 @@ use std::error::Error;
 use std::process::Command;
 use std::time::Instant;
 
-pub fn snapshots() -> Result<Vec<(String, Snapshot)>, Box<dyn Error>> {
+#[derive(Default)]
+pub struct SnapshotBatch {
+    pub snapshots: Vec<(String, Snapshot)>,
+    pub failures: Vec<(String, String)>,
+}
+
+pub fn snapshots() -> Result<SnapshotBatch, Box<dyn Error>> {
     let current = std::env::var("WSL_DISTRO_NAME").ok();
     let output = Command::new("wsl.exe")
         .args(["--list", "--running", "--quiet"])
@@ -12,13 +18,14 @@ pub fn snapshots() -> Result<Vec<(String, Snapshot)>, Box<dyn Error>> {
         return Err("wsl.exe distro discovery failed".into());
     }
     let names = decode_wsl_text(&output.stdout);
-    let mut result = Vec::new();
+    let mut result = SnapshotBatch::default();
     for name in names.lines().map(str::trim).filter(|name| !name.is_empty()) {
         if current.as_deref() == Some(name) {
             continue;
         }
-        if let Ok(snapshot) = snapshot(name) {
-            result.push((name.to_string(), snapshot));
+        match snapshot(name) {
+            Ok(snapshot) => result.snapshots.push((name.to_string(), snapshot)),
+            Err(error) => result.failures.push((name.to_string(), error.to_string())),
         }
     }
     Ok(result)

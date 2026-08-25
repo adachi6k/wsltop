@@ -17,11 +17,19 @@ enum Event {
     HostCpuCount(u32),
     Linux(Result<Vec<ResourceUsage>, String>),
     Windows(Result<(Vec<ResourceUsage>, u32), String>),
-    ExtraWsl(Result<Vec<ResourceUsage>, String>),
+    ExtraWsl(Result<ExtraWslUpdate, String>),
     WslcAggregate(Result<WslcUsage, String>),
     WslcDetails(WslcUsage),
     DockerAggregate(Result<DockerUsage, String>),
     DockerDetails(DockerUsage),
+}
+
+#[derive(Default)]
+struct ExtraWslUpdate {
+    rows: Vec<ResourceUsage>,
+    running_sources: BTreeSet<String>,
+    successful_sources: BTreeSet<String>,
+    failures: BTreeMap<String, String>,
 }
 
 impl Event {
@@ -43,7 +51,8 @@ struct Aggregate {
     host_cpu_authoritative: bool,
     linux: Vec<ResourceUsage>,
     windows: Vec<ResourceUsage>,
-    extra_wsl: Vec<ResourceUsage>,
+    extra_wsl: BTreeMap<String, Vec<ResourceUsage>>,
+    extra_wsl_errors: BTreeMap<String, String>,
     wslc: WslcUsage,
     docker: DockerUsage,
     pending: BTreeSet<&'static str>,
@@ -121,7 +130,20 @@ impl Aggregate {
                 self.windows = rows;
                 self.host_cpu_count = count;
             }),
-            Event::ExtraWsl(value) => value.map(|rows| self.extra_wsl = rows),
+            Event::ExtraWsl(value) => value.map(|update| {
+                self.extra_wsl
+                    .retain(|source, _| update.running_sources.contains(source));
+                for source in update.successful_sources {
+                    let rows = update
+                        .rows
+                        .iter()
+                        .filter(|row| row.source.as_deref() == Some(source.as_str()))
+                        .cloned()
+                        .collect();
+                    self.extra_wsl.insert(source, rows);
+                }
+                self.extra_wsl_errors = update.failures;
+            }),
             Event::WslcAggregate(value) => value.map(|mut usage| {
                 usage.process_resources = self
                     .wslc
@@ -160,6 +182,11 @@ impl Aggregate {
 
     fn snapshot(&self, config: &MonitorConfig) -> MonitorSnapshot {
         let mut warnings: Vec<String> = self.errors.values().cloned().collect();
+        warnings.extend(
+            self.extra_wsl_errors
+                .iter()
+                .map(|(source, error)| format!("additional WSL {source} unavailable: {error}")),
+        );
         warnings.extend(self.wslc.warnings.iter().cloned());
         warnings.extend(self.docker.warnings.iter().cloned());
         if !self.pending.is_empty() {
@@ -179,7 +206,7 @@ impl Aggregate {
         }
 
         let mut linux = self.linux.clone();
-        linux.extend(self.extra_wsl.clone());
+        linux.extend(self.extra_wsl.values().flatten().cloned());
         let hosts: Vec<_> = self
             .windows
             .iter()
@@ -417,7 +444,7 @@ fn spawn_extra_wsl(
     thread::spawn(move || {
         let cadence = interval.max(SLOW_COLLECTOR_MIN_INTERVAL);
         let mut before = match multiwsl::snapshots() {
-            Ok(value) => value,
+            Ok(value) => value.snapshots,
             Err(error) => {
                 let _ = sender.send(Event::ExtraWsl(Err(format!(
                     "additional WSL unavailable: {error}"
@@ -429,9 +456,22 @@ fn spawn_extra_wsl(
             match multiwsl::snapshots() {
                 Ok(after) => {
                     let mut rows = Vec::new();
+                    let running_sources: BTreeSet<String> = after
+                        .snapshots
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .chain(after.failures.iter().map(|(name, _)| name.clone()))
+                        .collect();
+                    let successful_sources: BTreeSet<String> = after
+                        .snapshots
+                        .iter()
+                        .map(|(name, _)| name.clone())
+                        .collect();
                     for (name, old) in &before {
-                        if let Some((_, new)) =
-                            after.iter().find(|(candidate, _)| candidate == name)
+                        if let Some((_, new)) = after
+                            .snapshots
+                            .iter()
+                            .find(|(candidate, _)| candidate == name)
                         {
                             rows.extend(sampler::calculate_usage(
                                 old,
@@ -440,8 +480,23 @@ fn spawn_extra_wsl(
                             ));
                         }
                     }
-                    before = after;
-                    if sender.send(Event::ExtraWsl(Ok(rows))).is_err() {
+                    before.retain(|(name, _)| running_sources.contains(name));
+                    for (name, snapshot) in after.snapshots {
+                        if let Some((_, old)) = before.iter_mut().find(|(old, _)| old == &name) {
+                            *old = snapshot;
+                        } else {
+                            before.push((name, snapshot));
+                        }
+                    }
+                    if sender
+                        .send(Event::ExtraWsl(Ok(ExtraWslUpdate {
+                            rows,
+                            running_sources,
+                            successful_sources,
+                            failures: after.failures.into_iter().collect(),
+                        })))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -617,10 +672,11 @@ fn fallback_cpu_count() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Aggregate, Event};
+    use super::{Aggregate, Event, ExtraWslUpdate};
     use crate::docker::DockerUsage;
     use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
     use crate::monitor::MonitorConfig;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     fn config() -> MonitorConfig {
@@ -692,6 +748,34 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning == "failed"));
+    }
+
+    #[test]
+    fn additional_wsl_failure_preserves_only_that_distros_last_good_rows() {
+        let mut aggregate = Aggregate::new(&config());
+        let mut process = row(EnvironmentKind::Wsl, ResourceKind::Process, "42");
+        process.source = Some("Ubuntu-2".into());
+        aggregate.apply(Event::ExtraWsl(Ok(ExtraWslUpdate {
+            rows: vec![process],
+            running_sources: BTreeSet::from(["Ubuntu-2".into()]),
+            successful_sources: BTreeSet::from(["Ubuntu-2".into()]),
+            failures: BTreeMap::new(),
+        })));
+        aggregate.apply(Event::ExtraWsl(Ok(ExtraWslUpdate {
+            running_sources: BTreeSet::from(["Ubuntu-2".into()]),
+            failures: BTreeMap::from([("Ubuntu-2".into(), "remote /proc failed".into())]),
+            ..ExtraWslUpdate::default()
+        })));
+
+        let snapshot = aggregate.snapshot(&config());
+        assert!(snapshot
+            .resources
+            .iter()
+            .any(|row| { row.source.as_deref() == Some("Ubuntu-2") && row.id == "42" }));
+        assert!(snapshot
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Ubuntu-2") && warning.contains("remote /proc")));
     }
 
     #[test]

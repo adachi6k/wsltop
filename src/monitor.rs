@@ -163,12 +163,20 @@ impl Monitor {
         if self.config.wsl_only {
             return Vec::new();
         }
-        multiwsl::snapshots().unwrap_or_else(|error| {
-            warnings.push(format!(
-                "additional WSL distro discovery unavailable: {error}"
-            ));
-            Vec::new()
-        })
+        match multiwsl::snapshots() {
+            Ok(batch) => {
+                warnings.extend(batch.failures.iter().map(|(source, error)| {
+                    format!("additional WSL {source} unavailable: {error}")
+                }));
+                batch.snapshots
+            }
+            Err(error) => {
+                warnings.push(format!(
+                    "additional WSL distro discovery unavailable: {error}"
+                ));
+                Vec::new()
+            }
+        }
     }
 }
 

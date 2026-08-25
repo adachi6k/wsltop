@@ -30,9 +30,15 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
     let stdout_reader = thread::spawn(move || read_all(stdout));
     let stderr_reader = thread::spawn(move || read_all(stderr));
     let started = Instant::now();
+    let mut status = None;
     loop {
-        if let Some(status) = child.try_wait()? {
-            return collect_output(status, stdout_reader, stderr_reader);
+        if status.is_none() {
+            status = child.try_wait()?;
+        }
+        if let Some(status) = status {
+            if stdout_reader.is_finished() && stderr_reader.is_finished() {
+                return collect_output(status, stdout_reader, stderr_reader);
+            }
         }
         if started.elapsed() >= timeout {
             // The process-group id is the child's pid because pre_exec created a
@@ -101,6 +107,18 @@ mod tests {
         let error = output_with_timeout(
             Command::new("sh").args(["-c", "sleep 10 & wait"]),
             Duration::from_millis(10),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn timeout_includes_pipes_inherited_by_a_descendant() {
+        let started = std::time::Instant::now();
+        let error = output_with_timeout(
+            Command::new("sh").args(["-c", "sleep 10 &"]),
+            Duration::from_millis(50),
         )
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::TimedOut);
