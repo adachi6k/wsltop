@@ -66,6 +66,8 @@ struct Aggregate {
     extra_wsl_errors: BTreeMap<String, String>,
     wslc: WslcUsage,
     docker: DockerUsage,
+    wslc_detail_warnings: Vec<String>,
+    docker_detail_warnings: Vec<String>,
     normalized_collectors: BTreeSet<&'static str>,
     pending: BTreeSet<&'static str>,
     errors: BTreeMap<&'static str, String>,
@@ -104,6 +106,8 @@ impl Aggregate {
                 self.extra_wsl.clear();
                 self.wslc = WslcUsage::default();
                 self.docker = DockerUsage::default();
+                self.wslc_detail_warnings.clear();
+                self.docker_detail_warnings.clear();
                 self.pending
                     .extend(self.normalized_collectors.iter().copied());
             }
@@ -141,7 +145,7 @@ impl Aggregate {
                     });
                 }
             }
-            extend_unique(&mut self.wslc.warnings, &usage.warnings);
+            self.wslc_detail_warnings.clone_from(&usage.warnings);
             return;
         }
         if let Event::DockerDetails(normalized) = &event {
@@ -155,7 +159,7 @@ impl Aggregate {
                     current.processes.clone_from(&detail.processes);
                 }
             }
-            extend_unique(&mut self.docker.warnings, &usage.warnings);
+            self.docker_detail_warnings.clone_from(&usage.warnings);
             return;
         }
         self.pending.remove(name);
@@ -233,7 +237,9 @@ impl Aggregate {
                 .map(|(source, error)| format!("additional WSL {source} unavailable: {error}")),
         );
         warnings.extend(self.wslc.warnings.iter().cloned());
+        warnings.extend(self.wslc_detail_warnings.iter().cloned());
         warnings.extend(self.docker.warnings.iter().cloned());
+        warnings.extend(self.docker_detail_warnings.iter().cloned());
         if !self.pending.is_empty() {
             warnings.push(format!(
                 "loading: {}",
@@ -318,14 +324,6 @@ impl Event {
     }
 }
 
-fn extend_unique(target: &mut Vec<String>, additions: &[String]) {
-    for warning in additions {
-        if !target.contains(warning) {
-            target.push(warning.clone());
-        }
-    }
-}
-
 fn append_processes(
     output: &mut Vec<ResourceUsage>,
     containers: &[crate::model::ContainerProcessUsage],
@@ -336,6 +334,47 @@ fn append_processes(
         rows.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent));
         rows.truncate(limit);
         output.extend(rows);
+    }
+}
+
+fn reuse_wslc_processes(
+    usage: &mut WslcUsage,
+    cached: Option<&Normalized<WslcUsage>>,
+    cpu_count: u32,
+) {
+    usage.process_resources = cached
+        .filter(|old| old.cpu_count == cpu_count)
+        .map(|old| {
+            old.value
+                .process_resources
+                .iter()
+                .filter(|old| usage.resources.iter().any(|row| row.id == old.resource.id))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+}
+
+fn reuse_docker_processes(
+    usage: &mut DockerUsage,
+    cached: Option<&Normalized<DockerUsage>>,
+    cpu_count: u32,
+) {
+    let Some(old) = cached.filter(|old| old.cpu_count == cpu_count) else {
+        for item in &mut usage.resources {
+            item.processes.clear();
+        }
+        return;
+    };
+    for item in &mut usage.resources {
+        if let Some(old) = old
+            .value
+            .resources
+            .iter()
+            .find(|old| old.resource.id == item.resource.id)
+        {
+            item.processes.clone_from(&old.processes);
+        }
     }
 }
 
@@ -597,20 +636,16 @@ fn spawn_wslc(
     let detail_events = sender.clone();
     let detail_stop = Arc::clone(&stop);
     thread::spawn(move || {
-        let mut last_details = WslcUsage::default();
+        let mut last_details: Option<Normalized<WslcUsage>> = None;
         while !detail_stop.load(Ordering::Relaxed) {
             let Ok((mut usage, count)) = detail_receiver.recv_timeout(Duration::from_millis(100))
             else {
                 continue;
             };
-            usage.process_resources = last_details
-                .process_resources
-                .iter()
-                .filter(|old| usage.resources.iter().any(|row| row.id == old.resource.id))
-                .cloned()
-                .collect();
+            reuse_wslc_processes(&mut usage, last_details.as_ref(), count);
+            usage.warnings.clear();
             wslc::populate_processes(&mut usage, count);
-            last_details = usage.clone();
+            last_details = Some(Normalized::new(count, usage.clone()));
             if detail_events
                 .send(Event::WslcDetails(Normalized::new(count, usage)))
                 .is_err()
@@ -667,23 +702,16 @@ fn spawn_docker(
     let detail_events = sender.clone();
     let detail_stop = Arc::clone(&stop);
     thread::spawn(move || {
-        let mut last_details = DockerUsage::default();
+        let mut last_details: Option<Normalized<DockerUsage>> = None;
         while !detail_stop.load(Ordering::Relaxed) {
             let Ok((mut usage, count)) = detail_receiver.recv_timeout(Duration::from_millis(100))
             else {
                 continue;
             };
-            for item in &mut usage.resources {
-                if let Some(old) = last_details
-                    .resources
-                    .iter()
-                    .find(|old| old.resource.id == item.resource.id)
-                {
-                    item.processes.clone_from(&old.processes);
-                }
-            }
+            reuse_docker_processes(&mut usage, last_details.as_ref(), count);
+            usage.warnings.clear();
             docker::populate_processes(&mut usage, count);
-            last_details = usage.clone();
+            last_details = Some(Normalized::new(count, usage.clone()));
             if detail_events
                 .send(Event::DockerDetails(Normalized::new(count, usage)))
                 .is_err()
@@ -757,7 +785,10 @@ fn fallback_cpu_count() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{fallback_cpu_count, Aggregate, Event, ExtraWslUpdate, Normalized};
+    use super::{
+        fallback_cpu_count, reuse_docker_processes, reuse_wslc_processes, Aggregate, Event,
+        ExtraWslUpdate, Normalized,
+    };
     use crate::docker::DockerUsage;
     use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
     use crate::monitor::MonitorConfig;
@@ -930,6 +961,96 @@ mod tests {
         )));
         aggregate.apply(Event::HostCpuCount(count));
         assert_eq!(aggregate.linux.len(), 1);
+    }
+
+    #[test]
+    fn detail_workers_reuse_cache_only_on_the_same_cpu_scale() {
+        let container = row(
+            EnvironmentKind::WslContainer,
+            ResourceKind::Container,
+            "container",
+        );
+        let process = row(
+            EnvironmentKind::WslContainer,
+            ResourceKind::Process,
+            "process",
+        );
+        let cached_wslc = Normalized::new(
+            8,
+            WslcUsage {
+                resources: vec![container.clone()],
+                process_resources: vec![ContainerProcessUsage {
+                    resource: container.clone(),
+                    processes: vec![process.clone()],
+                    host_pids: Vec::new(),
+                }],
+                warnings: Vec::new(),
+            },
+        );
+        let mut fresh_wslc = WslcUsage {
+            resources: vec![container],
+            ..WslcUsage::default()
+        };
+        reuse_wslc_processes(&mut fresh_wslc, Some(&cached_wslc), 16);
+        assert!(fresh_wslc.process_resources.is_empty());
+
+        let docker_container = row(EnvironmentKind::Docker, ResourceKind::Container, "docker");
+        let cached_docker = Normalized::new(
+            8,
+            DockerUsage {
+                resources: vec![ContainerProcessUsage {
+                    resource: docker_container.clone(),
+                    processes: vec![process],
+                    host_pids: Vec::new(),
+                }],
+                warnings: Vec::new(),
+            },
+        );
+        let mut fresh_docker = DockerUsage {
+            resources: vec![ContainerProcessUsage {
+                resource: docker_container,
+                processes: Vec::new(),
+                host_pids: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        };
+        reuse_docker_processes(&mut fresh_docker, Some(&cached_docker), 16);
+        assert!(fresh_docker.resources[0].processes.is_empty());
+    }
+
+    #[test]
+    fn aggregate_refresh_does_not_clear_detail_status() {
+        let mut aggregate = Aggregate::new(&config());
+        let container = row(
+            EnvironmentKind::Docker,
+            ResourceKind::Container,
+            "container",
+        );
+        let usage = || DockerUsage {
+            resources: vec![ContainerProcessUsage {
+                resource: container.clone(),
+                processes: Vec::new(),
+                host_pids: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        };
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(usage()))));
+        let mut detail = usage();
+        detail.warnings.push("Docker detail unavailable".into());
+        aggregate.apply(Event::DockerDetails(normalized(detail)));
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(usage()))));
+        assert!(aggregate
+            .snapshot(&config())
+            .warnings
+            .iter()
+            .any(|warning| warning == "Docker detail unavailable"));
+
+        aggregate.apply(Event::DockerDetails(normalized(usage())));
+        assert!(!aggregate
+            .snapshot(&config())
+            .warnings
+            .iter()
+            .any(|warning| warning == "Docker detail unavailable"));
     }
 
     #[test]
