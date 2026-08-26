@@ -172,6 +172,44 @@ fn tree_model(tree: &AttributionTree, cpus: u32, scale: CpuScale) -> String {
         "Host logical CPUs: {cpus} | CPU scale: {}\n\n",
         scale.label()
     );
+    if !tree.windows_applications.is_empty() {
+        out.push_str("Windows applications\n");
+        for (index, application) in tree.windows_applications.iter().enumerate() {
+            let prefix = if index + 1 == tree.windows_applications.len() {
+                "`-"
+            } else {
+                "|-"
+            };
+            let _ = writeln!(
+                out,
+                "{prefix} {:<11} {:<27} {:>7.2}%",
+                "application",
+                application.resource.name,
+                scale.value(application.resource.cpu_percent, cpus)
+            );
+            let contributors: Vec<_> = application
+                .processes
+                .iter()
+                .filter(|process| process.cpu_percent > 0.0)
+                .collect();
+            for (process_index, process) in contributors.iter().enumerate() {
+                let child = if process_index + 1 == contributors.len() {
+                    "`-"
+                } else {
+                    "|-"
+                };
+                let _ = writeln!(
+                    out,
+                    "   {child} {:<7} {:<27} {:>7.2}%  pid {}",
+                    "process",
+                    process.name,
+                    scale.value(process.cpu_percent, cpus),
+                    process.pid.unwrap_or_default()
+                );
+            }
+        }
+        out.push('\n');
+    }
     for group in &tree.groups {
         let unresolved = if group.mapping_status == MappingStatus::Unresolved {
             " [session mapping unresolved]"
@@ -324,6 +362,9 @@ fn display_name(row: &ResourceUsage) -> String {
     )
 }
 fn display_id(row: &ResourceUsage) -> String {
+    if row.kind == crate::model::ResourceKind::Application {
+        return "-".to_string();
+    }
     row.pid
         .map_or_else(|| row.id.chars().take(12).collect(), |pid| pid.to_string())
 }
@@ -352,7 +393,7 @@ fn format_bytes(bytes: u64) -> String {
 mod tests {
     use super::{display_name, flat, tree, CpuScale};
     use crate::attribution::{AttributionTree, DockerAttributionGroup};
-    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use crate::monitor::MonitorSnapshot;
 
     #[test]
@@ -380,6 +421,7 @@ mod tests {
         MonitorSnapshot {
             host_logical_cpu_count: 16,
             resources: vec![row.clone()],
+            pid_resources: vec![row.clone()],
             tree: AttributionTree {
                 host_logical_cpu_count: 16,
                 groups: Vec::new(),
@@ -391,6 +433,7 @@ mod tests {
                     over_attributed_cpu_percent: 0.0,
                 }],
                 wslc_groups: Vec::new(),
+                windows_applications: Vec::new(),
             },
             warnings: Vec::new(),
         }
@@ -423,5 +466,43 @@ mod tests {
         assert!(host_flat.contains("whole host = 100%"));
         assert!(host_flat.contains("  6.25%"));
         assert!(host_tree.contains("  6.25%"));
+    }
+
+    #[test]
+    fn tree_nests_windows_processes_under_the_application_total() {
+        let mut process = ResourceUsage {
+            environment: EnvironmentKind::Windows,
+            source: None,
+            kind: ResourceKind::Process,
+            id: "42".into(),
+            pid: Some(42),
+            ppid: None,
+            name: "msedgewebview2".into(),
+            args: None,
+            cpu_percent: 2.0,
+            memory_bytes: 1,
+        };
+        let mut application = process.clone();
+        application.kind = ResourceKind::Application;
+        application.id = "windows-app:ms-teams".into();
+        application.pid = None;
+        application.name = "Teams".into();
+        let mut snapshot = snapshot(application.clone());
+        snapshot.tree.windows_applications = vec![WindowsApplicationUsage {
+            resource: application,
+            processes: vec![process.clone()],
+        }];
+
+        let output = tree(&snapshot, CpuScale::Host);
+        assert!(output.contains("Windows applications"));
+        assert!(output.contains("application Teams"));
+        assert!(output.contains("msedgewebview2"));
+        assert!(output.contains("pid 42"));
+
+        process.cpu_percent = 99.0;
+        assert_eq!(
+            snapshot.tree.windows_applications[0].resource.cpu_percent,
+            2.0
+        );
     }
 }

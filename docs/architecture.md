@@ -23,6 +23,7 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | --- | --- |
 | `linux.rs` | Snapshot processes from the current distribution's `/proc` |
 | `windows.rs` | Snapshot Windows process cumulative CPU time and working sets through PowerShell |
+| `windows_app.rs` | Conservatively group Windows PIDs using executable, parent, command-line, and package evidence |
 | `multiwsl.rs` | Discover and snapshot additional running WSL distributions |
 | `wslc.rs` | Collect current/default WSLC container statistics and in-container process observations |
 | `docker.rs` | Collect Docker statistics and Docker-namespace process observations |
@@ -61,6 +62,7 @@ The TUI draws an empty loading frame immediately. Independent workers retain the
 4. WSLC and Docker publish aggregate container statistics separately from optional process detail. Details run only when tree view or `--show-container-processes` requests them; aggregate refreshes retain same-scale last-good details, and failed per-container detail commands do not erase them. Detail caches carry their normalization CPU count, while aggregate and detail warnings remain separate so an aggregate success cannot hide an unresolved detail failure.
 5. Detail requests use a separate capacity-one queue per runtime. Per-container commands run in bounded batches of at most four workers and time out after five seconds, so detail latency cannot stall aggregate cadence or create an unbounded backlog.
 6. The aggregator replaces only the source named by an aggregate event, rebuilds both views, and publishes a partial snapshot. Delayed detail events merge process lists only into containers still present in the latest aggregate and never clear aggregate errors or roll back CPU/memory. An error records status but retains that source's last successful data.
+7. Windows application metadata runs in its own bounded worker. CPU events never wait for CIM metadata; the aggregator combines current PID CPU with the last successful metadata snapshot.
 
 Collector threads do not wait for one another. This makes startup and refresh latency depend on each visible source rather than the slowest source. The event and aggregate boundary also permits future bounded per-container detail workers without changing attribution or rendering.
 
@@ -91,6 +93,8 @@ CPU% = delta cumulative CPU seconds / elapsed wall seconds
 WSLC and Docker percentages are normalized from their source conventions to the same denominator. Full formulas are in [CPU accounting](cpu-accounting.md).
 
 The resource model and attribution tree always retain this host-wide scale. Human-readable rendering applies the selected `core` or `host` display multiplier at the final formatting boundary; it does not mutate snapshots, ordering, residual calculations, or JSON serialization.
+
+Windows application totals are also derived after sampling by summing unchanged PID observations. Human-readable flat output ranks the derived application once, tree output exposes its member PIDs, and flat JSON continues serializing the separately retained PID-level resource list. WebView2 parent traversal requires the parent PID and executable identity to agree with the current CPU snapshot; stale or ambiguous metadata falls back without manufacturing ownership.
 
 ## Attribution
 

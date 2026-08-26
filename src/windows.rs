@@ -1,10 +1,12 @@
+use crate::command;
 use crate::model::{EnvironmentKind, ProcessKey, ProcessSample, Snapshot, WindowsSnapshot};
+use crate::windows_app::{WindowsMetadata, WindowsProcessMetadata};
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
 use std::process::Command;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 static HOST_LOGICAL_CPU_COUNT: OnceLock<u32> = OnceLock::new();
 
@@ -21,6 +23,50 @@ struct RawWindowsProcess {
     name: String,
     cpu_time_secs: f64,
     memory_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawMetadataSnapshot {
+    processes: Vec<WindowsProcessMetadata>,
+}
+
+pub fn application_metadata() -> Result<WindowsMetadata, Box<dyn Error>> {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$items = @(Get-CimInstance Win32_Process | ForEach-Object {
+    [PSCustomObject]@{
+        pid = [uint32]$_.ProcessId
+        parent_pid = [uint32]$_.ParentProcessId
+        name = [string]$_.Name
+        executable_path = if ($null -eq $_.ExecutablePath) { $null } else { [string]$_.ExecutablePath }
+        command_line = if ($null -eq $_.CommandLine) { $null } else { [string]$_.CommandLine }
+    }
+})
+[PSCustomObject]@{ processes = $items } | ConvertTo-Json -Compress -Depth 3
+"#;
+    let output = command::output_with_timeout(
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script]),
+        Duration::from_secs(5),
+    )
+    .map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("Windows application metadata command failed: {error}"),
+        )
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Windows application metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let raw: RawMetadataSnapshot = serde_json::from_slice(&output.stdout)?;
+    Ok(raw
+        .processes
+        .into_iter()
+        .map(|process| (process.pid, process))
+        .collect())
 }
 
 pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {

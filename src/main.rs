@@ -10,6 +10,7 @@ mod sampler;
 mod stream;
 mod tui;
 mod windows;
+mod windows_app;
 mod wslc;
 
 use crate::monitor::{Monitor, MonitorConfig};
@@ -77,7 +78,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         if options.tree {
             println!("{}", serde_json::to_string_pretty(&snapshot.tree)?);
         } else {
-            println!("{}", serde_json::to_string_pretty(&snapshot.resources)?);
+            println!("{}", serde_json::to_string_pretty(&snapshot.pid_resources)?);
         }
     } else if options.tree {
         print!("{}", render::tree(&snapshot, options.cpu_scale));

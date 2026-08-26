@@ -16,13 +16,14 @@ cargo run --locked -- --help
 cargo run --locked -- --version
 ```
 
-Unit tests cover CPU delta normalization, resource classification, attribution remainder/clamping, WSLC ambiguity, Docker/WSLC process parsing and nesting, host normalization, malformed-output degradation, and grouped flat filtering. Help and version smoke tests must exit before any WSL/Windows runtime collection.
+Unit tests cover CPU delta normalization, resource classification, attribution remainder/clamping, Windows application/WebView2 grouping, WSLC ambiguity, Docker/WSLC process parsing and nesting, host normalization, malformed-output degradation, and grouped flat filtering. Help and version smoke tests must exit before any WSL/Windows runtime collection.
 
 ## Real-host feature matrix
 
 | Case | Setup / command | Expected result |
 | --- | --- | --- |
 | Windows native processes | `wsltop --once` with interop enabled | Windows rows appear and use host-wide CPU normalization |
+| Windows application grouping | Run Teams, Chrome, ChatGPT, and SearchHost/WebView2 workloads | Flat/TUI ranks application totals once; tree nests contributing PIDs; SearchHost-owned and ambiguous WebView2 helpers are not assigned to Teams |
 | Current WSL distro | Run a known workload in the invoking distro | Process appears with no remote-distro source label |
 | Second WSL distro | Start another distro, run a workload, then `wsltop --once` | Workload appears labelled with its distro; PID collisions do not merge |
 | WSLC present | Run containers in the default WSLC session | Container rows appear as `WSLC container` |
@@ -36,8 +37,8 @@ Unit tests cover CPU delta normalization, resource classification, attribution r
 | Docker process attribution | Run identifiable processes in a busy Docker Desktop container, then use `--show-container-processes` and `--tree` | Container nests Docker-native processes under an independent Docker group and is not attached to the current WSL VM |
 | Grouped flat limits | Use `--show-container-processes --container-process-limit 2 --limit 5` | Five top-level resources are ranked by their own CPU; each selected container shows at most two processes plus omitted/residual rows |
 | Tree output | `wsltop --tree` | WSL/WSLC hosts are parents with children and non-negative unattributed CPU |
-| Flat JSON | `wsltop --json` | Top-level value remains a resource array with `kind` fields |
-| Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, groups, residuals, and unresolved resources |
+| Flat JSON | `wsltop --json` | Top-level value remains the compatible PID-level resource array with `kind` fields |
+| Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, additive Windows application groups, attribution groups, residuals, and unresolved resources |
 | Interactive TUI | `wsltop --interactive` | An immediate loading frame is followed by current-WSL data after the short warmup; slow optional collectors do not block it and keyboard navigation remains responsive |
 | Partial collector failure | Allow a collector to succeed, then fail it during TUI operation | Its last successful rows remain visible and the footer reports the error while other collectors continue updating |
 | Lazy container detail | Start in flat view without `--show-container-processes`, then press `t` | Aggregate container rows appear without per-container commands; process details arrive on the next slow refresh after tree view requests them |

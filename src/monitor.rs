@@ -1,6 +1,6 @@
 use crate::attribution::{self, AttributionTree};
 use crate::model::{ResourceKind, ResourceUsage};
-use crate::{docker, linux, multiwsl, sampler, windows, wslc};
+use crate::{docker, linux, multiwsl, sampler, windows, windows_app, wslc};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::thread;
@@ -26,6 +26,7 @@ pub struct Monitor {
 pub struct MonitorSnapshot {
     pub host_logical_cpu_count: u32,
     pub resources: Vec<ResourceUsage>,
+    pub pid_resources: Vec<ResourceUsage>,
     pub tree: AttributionTree,
     pub warnings: Vec<String>,
 }
@@ -112,6 +113,12 @@ impl Monitor {
             .filter(|row| attribution::is_host_resource(row))
             .cloned()
             .collect();
+        let applications = windows::application_metadata()
+            .map(|metadata| windows_app::group_processes(&windows_usage, &metadata))
+            .unwrap_or_else(|error| {
+                warnings.push(format!("Windows application metadata unavailable: {error}"));
+                windows_app::group_processes(&windows_usage, &Default::default())
+            });
         let mut tree = attribution::build_tree_with_docker(
             host_cpu_count,
             &hosts,
@@ -120,6 +127,7 @@ impl Monitor {
             &docker_usage,
         );
         attribution::attach_wslc_processes(&mut tree, &wslc_usage.process_resources);
+        tree.windows_applications.clone_from(&applications);
         if self.config.hide_infra {
             attribution::hide_infra(&mut tree);
         }
@@ -150,10 +158,22 @@ impl Monitor {
             }));
         }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
+        let mut pid_resources = resources.clone();
+        prepare_flat_resources(&mut pid_resources, &self.config);
+        resources.retain(|row| {
+            row.environment != crate::model::EnvironmentKind::Windows
+                || row.kind != ResourceKind::Process
+        });
+        resources.extend(
+            applications
+                .into_iter()
+                .map(|application| application.resource),
+        );
         prepare_flat_resources(&mut resources, &self.config);
         Ok(MonitorSnapshot {
             host_logical_cpu_count: host_cpu_count,
             resources,
+            pid_resources,
             tree,
             warnings,
         })

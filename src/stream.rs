@@ -2,8 +2,9 @@ use crate::attribution;
 use crate::docker::DockerUsage;
 use crate::model::{ContainerProcessUsage, ResourceUsage};
 use crate::monitor::{prepare_flat_resources, MonitorConfig, MonitorSnapshot};
+use crate::windows_app::WindowsMetadata;
 use crate::wslc::WslcUsage;
-use crate::{docker, linux, multiwsl, sampler, windows, wslc};
+use crate::{docker, linux, multiwsl, sampler, windows, windows_app, wslc};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -17,6 +18,7 @@ enum Event {
     HostCpuCount(u32),
     Linux(Normalized<Result<Vec<ResourceUsage>, String>>),
     Windows(Result<(Vec<ResourceUsage>, u32), String>),
+    WindowsMetadata(Result<WindowsMetadata, String>),
     ExtraWsl(Normalized<Result<ExtraWslUpdate, String>>),
     WslcAggregate(Normalized<Result<WslcUsage, String>>),
     WslcDetails(Normalized<WslcUsage>),
@@ -49,6 +51,7 @@ impl Event {
             Self::HostCpuCount(_) => "Windows host CPU",
             Self::Linux(_) => "current WSL",
             Self::Windows(_) => "Windows",
+            Self::WindowsMetadata(_) => "Windows applications",
             Self::ExtraWsl(_) => "additional WSL",
             Self::WslcAggregate(_) | Self::WslcDetails(_) => "WSLC",
             Self::DockerAggregate(_) | Self::DockerDetails(_) => "Docker",
@@ -62,6 +65,7 @@ struct Aggregate {
     host_cpu_authoritative: bool,
     linux: Vec<ResourceUsage>,
     windows: Vec<ResourceUsage>,
+    windows_metadata: WindowsMetadata,
     extra_wsl: BTreeMap<String, Vec<ResourceUsage>>,
     extra_wsl_errors: BTreeMap<String, String>,
     wslc: WslcUsage,
@@ -78,7 +82,7 @@ impl Aggregate {
         let mut pending = BTreeSet::from(["current WSL"]);
         let mut normalized_collectors = BTreeSet::from(["current WSL"]);
         if !config.wsl_only {
-            pending.extend(["Windows", "additional WSL"]);
+            pending.extend(["Windows", "Windows applications", "additional WSL"]);
             normalized_collectors.insert("additional WSL");
             if !config.no_wslc {
                 pending.insert("WSLC");
@@ -169,6 +173,9 @@ impl Aggregate {
             Event::Windows(value) => value.map(|(rows, count)| {
                 self.windows = rows;
                 self.host_cpu_count = count;
+            }),
+            Event::WindowsMetadata(value) => value.map(|metadata| {
+                self.windows_metadata = metadata;
             }),
             Event::ExtraWsl(value) => value.value.map(|update| {
                 self.extra_wsl
@@ -272,6 +279,8 @@ impl Aggregate {
             &self.docker.resources,
         );
         attribution::attach_wslc_processes(&mut tree, &self.wslc.process_resources);
+        let applications = windows_app::group_processes(&self.windows, &self.windows_metadata);
+        tree.windows_applications.clone_from(&applications);
         if config.hide_infra {
             attribution::hide_infra(&mut tree);
         }
@@ -297,10 +306,22 @@ impl Aggregate {
                 .iter()
                 .map(|item| item.resource.clone()),
         );
+        let mut pid_resources = resources.clone();
+        prepare_flat_resources(&mut pid_resources, config);
+        resources.retain(|row| {
+            row.environment != crate::model::EnvironmentKind::Windows
+                || row.kind != crate::model::ResourceKind::Process
+        });
+        resources.extend(
+            applications
+                .into_iter()
+                .map(|application| application.resource),
+        );
         prepare_flat_resources(&mut resources, config);
         MonitorSnapshot {
             host_logical_cpu_count: self.host_cpu_count,
             resources,
+            pid_resources,
             tree,
             warnings,
         }
@@ -319,7 +340,7 @@ impl Event {
             Self::WslcDetails(value) => value.cpu_count != current_count,
             Self::DockerAggregate(value) => value.cpu_count != current_count,
             Self::DockerDetails(value) => value.cpu_count != current_count,
-            Self::HostCpuCount(_) | Self::Windows(_) => false,
+            Self::HostCpuCount(_) | Self::Windows(_) | Self::WindowsMetadata(_) => false,
         }
     }
 }
@@ -403,6 +424,7 @@ pub fn run(
             Arc::clone(&host_cpu_count),
             initial.interval,
         );
+        spawn_windows_metadata(sender.clone(), Arc::clone(&stop));
         spawn_extra_wsl(
             sender.clone(),
             Arc::clone(&stop),
@@ -501,6 +523,25 @@ fn spawn_windows(
     interval: Duration,
 ) {
     thread::spawn(move || sample_windows(sender, stop, cpus, interval));
+}
+
+fn spawn_windows_metadata(sender: mpsc::Sender<Event>, stop: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let event = match windows::application_metadata() {
+                Ok(metadata) => Event::WindowsMetadata(Ok(metadata)),
+                Err(error) => Event::WindowsMetadata(Err(format!(
+                    "Windows application metadata unavailable: {error}"
+                ))),
+            };
+            if sender.send(event).is_err() {
+                break;
+            }
+            if !wait(&stop, Duration::from_secs(10)) {
+                break;
+            }
+        }
+    });
 }
 
 fn sample_windows(
@@ -792,6 +833,7 @@ mod tests {
     use crate::docker::DockerUsage;
     use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
     use crate::monitor::MonitorConfig;
+    use crate::windows_app::{WindowsMetadata, WindowsProcessMetadata};
     use crate::wslc::WslcUsage;
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
@@ -961,6 +1003,70 @@ mod tests {
         )));
         aggregate.apply(Event::HostCpuCount(count));
         assert_eq!(aggregate.linux.len(), 1);
+    }
+
+    #[test]
+    fn windows_applications_are_ranked_once_while_pid_rows_remain_for_json() {
+        let mut options = config();
+        options.limit = 1;
+        let mut aggregate = Aggregate::new(&options);
+        let mut first = row(EnvironmentKind::Windows, ResourceKind::Process, "10");
+        first.pid = Some(10);
+        first.name = "chrome".into();
+        first.cpu_percent = 3.0;
+        let mut second = row(EnvironmentKind::Windows, ResourceKind::Process, "11");
+        second.pid = Some(11);
+        second.name = "chrome".into();
+        second.cpu_percent = 2.0;
+        aggregate.apply(Event::Windows(Ok((vec![first, second], 16))));
+        aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::new())));
+
+        let snapshot = aggregate.snapshot(&options);
+        assert_eq!(snapshot.resources.len(), 1);
+        assert_eq!(snapshot.resources[0].kind, ResourceKind::Application);
+        assert_eq!(snapshot.resources[0].name, "Chrome");
+        assert_eq!(snapshot.resources[0].cpu_percent, 5.0);
+        assert!(snapshot
+            .pid_resources
+            .iter()
+            .all(|row| row.kind == ResourceKind::Process));
+        assert_eq!(snapshot.tree.windows_applications[0].processes.len(), 2);
+    }
+
+    #[test]
+    fn windows_metadata_error_retains_last_good_application_ownership() {
+        let mut aggregate = Aggregate::new(&config());
+        let mut teams = row(EnvironmentKind::Windows, ResourceKind::Process, "10");
+        teams.pid = Some(10);
+        teams.name = "ms-teams".into();
+        let mut webview = row(EnvironmentKind::Windows, ResourceKind::Process, "11");
+        webview.pid = Some(11);
+        webview.name = "msedgewebview2".into();
+        aggregate.apply(Event::Windows(Ok((vec![teams, webview], 16))));
+        aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::from([(
+            11,
+            WindowsProcessMetadata {
+                pid: 11,
+                parent_pid: 10,
+                name: "msedgewebview2.exe".into(),
+                executable_path: None,
+                command_line: None,
+            },
+        )]))));
+        aggregate.apply(Event::WindowsMetadata(Err("metadata failed".into())));
+
+        let snapshot = aggregate.snapshot(&config());
+        let teams = snapshot
+            .tree
+            .windows_applications
+            .iter()
+            .find(|application| application.resource.name == "Teams")
+            .unwrap();
+        assert_eq!(teams.processes.len(), 2);
+        assert!(snapshot
+            .warnings
+            .iter()
+            .any(|warning| warning == "metadata failed"));
     }
 
     #[test]

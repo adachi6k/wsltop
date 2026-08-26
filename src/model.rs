@@ -18,6 +18,7 @@ pub enum EnvironmentKind {
 #[serde(rename_all = "lowercase")]
 pub enum ResourceKind {
     Process,
+    Application,
     Container,
     Infra,
     Host,
@@ -27,6 +28,7 @@ impl ResourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Process => "process",
+            Self::Application => "application",
             Self::Container => "container",
             Self::Infra => "infra",
             Self::Host => "host",
@@ -108,6 +110,12 @@ pub struct ContainerProcessUsage {
     /// Host PIDs are only populated after the daemon has been proven to share
     /// the current WSL host PID namespace.
     pub host_pids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WindowsApplicationUsage {
+    pub resource: ResourceUsage,
+    pub processes: Vec<ResourceUsage>,
 }
 
 #[cfg(test)]
