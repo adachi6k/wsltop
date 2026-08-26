@@ -94,7 +94,7 @@ WSLC and Docker percentages are normalized from their source conventions to the 
 
 The resource model and attribution tree always retain this host-wide scale. Human-readable rendering applies the selected `core` or `host` display multiplier at the final formatting boundary; it does not mutate snapshots, ordering, residual calculations, or JSON serialization.
 
-Windows application totals are also derived after sampling by summing unchanged PID observations. Human-readable flat output ranks the derived application once, tree output exposes its member PIDs, and flat JSON continues serializing the separately retained PID-level resource list. WebView2 parent traversal requires the parent PID and executable identity to agree with the current CPU snapshot; stale or ambiguous metadata falls back without manufacturing ownership.
+Windows application totals are also derived after sampling by summing unchanged PID observations. Human-readable flat output ranks the derived application once, tree output exposes its member PIDs, and flat JSON continues serializing the separately retained PID-level resource list. WebView2 ownership metadata is accepted only when PID, executable identity, and Windows process creation time agree with the current CPU snapshot; the internal creation identity is not serialized. Parent traversal applies the same checks, and stale, inaccessible, or ambiguous metadata falls back without manufacturing ownership.
 
 ## Attribution
 

@@ -7,6 +7,8 @@ pub struct WindowsProcessMetadata {
     pub pid: u32,
     pub parent_pid: u32,
     pub name: String,
+    #[serde(default)]
+    pub start_id: u64,
     pub executable_path: Option<String>,
     pub command_line: Option<String>,
 }
@@ -47,6 +49,7 @@ pub fn group_processes(
                     kind: ResourceKind::Application,
                     id: format!("windows-app:{key}"),
                     pid: None,
+                    start_id: None,
                     ppid: None,
                     name: display,
                     args: None,
@@ -83,10 +86,11 @@ fn application_identity(
     let Some(pid) = process.pid else {
         return canonical_identity(&process.name);
     };
-    let Some(process_metadata) = metadata
-        .get(&pid)
-        .filter(|item| executable_stem(&item.name) == base)
-    else {
+    let Some(process_metadata) = metadata.get(&pid).filter(|item| {
+        executable_stem(&item.name) == base
+            && item.start_id != 0
+            && process.start_id == Some(item.start_id)
+    }) else {
         return canonical_identity(&process.name);
     };
     if let Some(owner) = process_metadata
@@ -116,10 +120,11 @@ fn application_identity(
         let Some(parent_row) = rows.get(&parent_pid) else {
             break;
         };
-        let Some(parent_metadata) = metadata
-            .get(&parent_pid)
-            .filter(|item| executable_stem(&item.name) == executable_stem(&parent_row.name))
-        else {
+        let Some(parent_metadata) = metadata.get(&parent_pid).filter(|item| {
+            executable_stem(&item.name) == executable_stem(&parent_row.name)
+                && item.start_id != 0
+                && parent_row.start_id == Some(item.start_id)
+        }) else {
             break;
         };
         let owner = executable_stem(&parent_row.name);
@@ -170,7 +175,15 @@ fn executable_display_name(name: &str) -> String {
 
 fn webview_exe_name(command_line: &str) -> Option<String> {
     let marker = "--webview-exe-name=";
-    let start = command_line.to_ascii_lowercase().find(marker)? + marker.len();
+    let lower = command_line.to_ascii_lowercase();
+    let start = lower.match_indices(marker).find_map(|(index, _)| {
+        (index == 0
+            || lower[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_ascii_whitespace()))
+        .then_some(index + marker.len())
+    })?;
     let value = command_line[start..].trim_start();
     let value = if let Some(value) = value.strip_prefix('"') {
         value.split('"').next()?
@@ -182,7 +195,7 @@ fn webview_exe_name(command_line: &str) -> Option<String> {
 
 fn packaged_application(path: &str) -> Option<String> {
     let lower = path.to_ascii_lowercase();
-    let package = lower.split("windowsapps\\").nth(1)?.split('_').next()?;
+    let package = lower.split("\\windowsapps\\").nth(1)?.split('_').next()?;
     match package {
         "msteams" => Some("Teams".into()),
         "openai.chatgpt-desktop" => Some("ChatGPT".into()),
@@ -202,6 +215,7 @@ mod tests {
             kind: ResourceKind::Process,
             id: pid.to_string(),
             pid: Some(pid),
+            start_id: Some(pid as u64),
             ppid: None,
             name: name.into(),
             args: None,
@@ -215,6 +229,7 @@ mod tests {
             pid,
             parent_pid,
             name: name.into(),
+            start_id: pid as u64,
             executable_path: None,
             command_line: None,
         }
@@ -284,6 +299,54 @@ mod tests {
             &WindowsMetadata::from([(21, stale)]),
         );
         assert_eq!(groups[0].resource.name, "WebView2");
+    }
+
+    #[test]
+    fn same_executable_metadata_is_not_trusted_across_process_generations() {
+        let mut stale = metadata(21, 10, "msedgewebview2.exe");
+        stale.start_id = 20;
+        stale.command_line = Some("--webview-exe-name=ms-teams.exe".into());
+        let groups = group_processes(
+            &[row(21, "msedgewebview2", 1.0)],
+            &WindowsMetadata::from([(21, stale)]),
+        );
+        assert_eq!(groups[0].resource.name, "WebView2");
+    }
+
+    #[test]
+    fn embedded_webview_option_marker_is_not_ownership_evidence() {
+        let mut current = metadata(21, 0, "msedgewebview2.exe");
+        current.command_line =
+            Some(r"msedgewebview2.exe --log-path=C:\--webview-exe-name=ms-teams.exe".into());
+        let groups = group_processes(
+            &[row(21, "msedgewebview2", 1.0)],
+            &WindowsMetadata::from([(21, current)]),
+        );
+        assert_eq!(groups[0].resource.name, "WebView2");
+    }
+
+    #[test]
+    fn similarly_named_windowsapps_directory_is_not_package_evidence() {
+        let mut current = metadata(21, 0, "msedgewebview2.exe");
+        current.executable_path =
+            Some(r"C:\NotWindowsApps\MSTeams_1.0_x64\msedgewebview2.exe".into());
+        let groups = group_processes(
+            &[row(21, "msedgewebview2", 1.0)],
+            &WindowsMetadata::from([(21, current)]),
+        );
+        assert_eq!(groups[0].resource.name, "WebView2");
+    }
+
+    #[test]
+    fn actual_windowsapps_component_is_package_evidence() {
+        let mut current = metadata(21, 0, "msedgewebview2.exe");
+        current.executable_path =
+            Some(r"C:\Program Files\WindowsApps\MSTeams_1.0_x64\msedgewebview2.exe".into());
+        let groups = group_processes(
+            &[row(21, "msedgewebview2", 1.0)],
+            &WindowsMetadata::from([(21, current)]),
+        );
+        assert_eq!(groups[0].resource.name, "Teams");
     }
 
     #[test]

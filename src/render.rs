@@ -53,10 +53,10 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
     );
     let _ = writeln!(
         out,
-        "{:<7} {:<9} {:>7} {:>9} {:>12} COMMAND",
+        "{:<7} {:<11} {:>7} {:>9} {:>12} COMMAND",
         "ENV", "TYPE", "CPU%", "MEM", "ID/PID"
     );
-    let _ = writeln!(out, "{}", "-".repeat(84));
+    let _ = writeln!(out, "{}", "-".repeat(86));
     for row in &snapshot.resources {
         if matches!(
             row.environment,
@@ -68,7 +68,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
         }
         let _ = writeln!(
             out,
-            "{:<7} {:<9} {:>6.2}% {:>9} {:>12}  {}",
+            "{:<7} {:<11} {:>6.2}% {:>9} {:>12}  {}",
             env_name(row.environment),
             row.kind.as_str(),
             scale.value(row.cpu_percent, snapshot.host_logical_cpu_count),
@@ -100,7 +100,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                 for process in &displayed {
                     let _ = writeln!(
                         out,
-                        "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    |- {}",
+                        "{:<7} {:<11} {:>6.2}% {:>9} {:>12}    |- {}",
                         "",
                         "process",
                         scale.value(process.cpu_percent, snapshot.host_logical_cpu_count),
@@ -122,7 +122,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                     let omitted_cpu: f64 = omitted.iter().map(|process| process.cpu_percent).sum();
                     let _ = writeln!(
                         out,
-                        "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    |- {} more processes",
+                        "{:<7} {:<11} {:>6.2}% {:>9} {:>12}    |- {} more processes",
                         "",
                         "processes",
                         scale.value(omitted_cpu, snapshot.host_logical_cpu_count),
@@ -133,7 +133,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                 }
                 let _ = writeln!(
                     out,
-                    "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    `- unattributed",
+                    "{:<7} {:<11} {:>6.2}% {:>9} {:>12}    `- unattributed",
                     "",
                     "residual",
                     scale.value(
@@ -146,7 +146,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                 if group.over_attributed_cpu_percent > 0.0 {
                     let _ = writeln!(
                         out,
-                        "{:<7} {:<9} {:>6.2}% {:>9} {:>12}    `- over-attributed",
+                        "{:<7} {:<11} {:>6.2}% {:>9} {:>12}    `- over-attributed",
                         "",
                         "residual",
                         scale.value(
@@ -172,10 +172,15 @@ fn tree_model(tree: &AttributionTree, cpus: u32, scale: CpuScale) -> String {
         "Host logical CPUs: {cpus} | CPU scale: {}\n\n",
         scale.label()
     );
-    if !tree.windows_applications.is_empty() {
+    let active_applications: Vec<_> = tree
+        .windows_applications
+        .iter()
+        .filter(|application| application.resource.cpu_percent > 0.0)
+        .collect();
+    if !active_applications.is_empty() {
         out.push_str("Windows applications\n");
-        for (index, application) in tree.windows_applications.iter().enumerate() {
-            let prefix = if index + 1 == tree.windows_applications.len() {
+        for (index, application) in active_applications.iter().enumerate() {
+            let prefix = if index + 1 == active_applications.len() {
                 "`-"
             } else {
                 "|-"
@@ -406,6 +411,7 @@ mod tests {
             kind: ResourceKind::Process,
             id: "container:33390".to_string(),
             pid: Some(33390),
+            start_id: None,
             ppid: Some(1),
             name: "simx".to_string(),
             args: Some("simx".to_string()),
@@ -447,6 +453,7 @@ mod tests {
             kind: ResourceKind::Container,
             id: "container".into(),
             pid: None,
+            start_id: None,
             ppid: None,
             name: "work".into(),
             args: None,
@@ -469,6 +476,37 @@ mod tests {
     }
 
     #[test]
+    fn flat_application_and_other_rows_share_cpu_column_alignment() {
+        let application = ResourceUsage {
+            environment: EnvironmentKind::Windows,
+            source: None,
+            kind: ResourceKind::Application,
+            id: "windows-app:test".into(),
+            pid: None,
+            start_id: None,
+            ppid: None,
+            name: "Test".into(),
+            args: None,
+            cpu_percent: 6.25,
+            memory_bytes: 1,
+        };
+        let mut container = application.clone();
+        container.environment = EnvironmentKind::Docker;
+        container.kind = ResourceKind::Container;
+        container.id = "container".into();
+        let mut snapshot = snapshot(container.clone());
+        snapshot.resources = vec![application.clone(), container];
+
+        let output = flat(&snapshot, CpuScale::Host);
+        let rows: Vec<_> = output
+            .lines()
+            .filter(|line| line.starts_with("Windows") || line.starts_with("Docker"))
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].find("  6.25%"), rows[1].find("  6.25%"));
+    }
+
+    #[test]
     fn tree_nests_windows_processes_under_the_application_total() {
         let mut process = ResourceUsage {
             environment: EnvironmentKind::Windows,
@@ -476,6 +514,7 @@ mod tests {
             kind: ResourceKind::Process,
             id: "42".into(),
             pid: Some(42),
+            start_id: Some(42),
             ppid: None,
             name: "msedgewebview2".into(),
             args: None,
@@ -504,5 +543,34 @@ mod tests {
             snapshot.tree.windows_applications[0].resource.cpu_percent,
             2.0
         );
+    }
+
+    #[test]
+    fn tree_hides_zero_cpu_windows_applications_without_hiding_json_model() {
+        let mut application = ResourceUsage {
+            environment: EnvironmentKind::Windows,
+            source: None,
+            kind: ResourceKind::Application,
+            id: "windows-app:idle".into(),
+            pid: None,
+            start_id: None,
+            ppid: None,
+            name: "IdleApp".into(),
+            args: None,
+            cpu_percent: 0.0,
+            memory_bytes: 1,
+        };
+        let mut snapshot = snapshot(application.clone());
+        snapshot.tree.windows_applications = vec![WindowsApplicationUsage {
+            resource: application.clone(),
+            processes: Vec::new(),
+        }];
+
+        assert!(!tree(&snapshot, CpuScale::Host).contains("Windows applications"));
+        assert_eq!(snapshot.tree.windows_applications.len(), 1);
+
+        application.cpu_percent = 1.0;
+        snapshot.tree.windows_applications[0].resource = application;
+        assert!(tree(&snapshot, CpuScale::Host).contains("IdleApp"));
     }
 }

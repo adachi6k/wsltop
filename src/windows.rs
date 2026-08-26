@@ -21,6 +21,7 @@ struct RawWindowsSnapshot {
 struct RawWindowsProcess {
     pid: u32,
     name: String,
+    start_id: u64,
     cpu_time_secs: f64,
     memory_bytes: u64,
 }
@@ -40,6 +41,7 @@ $items = @(Get-CimInstance Win32_Process | ForEach-Object {
         name = [string]$_.Name
         executable_path = if ($null -eq $_.ExecutablePath) { $null } else { [string]$_.ExecutablePath }
         command_line = if ($null -eq $_.CommandLine) { $null } else { [string]$_.CommandLine }
+        start_id = if ($null -eq $_.CreationDate) { 0 } else { try { [uint64]([DateTime]$_.CreationDate).ToFileTimeUtc() } catch { 0 } }
     }
 })
 [PSCustomObject]@{ processes = $items } | ConvertTo-Json -Compress -Depth 3
@@ -112,9 +114,7 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
                 environment: EnvironmentKind::Windows,
                 source: None,
                 pid: process.pid,
-                // StartTime is not requested because access can fail for protected processes.
-                // A negative CPU delta is treated as PID reuse by the sampler.
-                start_id: 0,
+                start_id: process.start_id,
             },
             name: process.name,
             cpu_time_secs: process.cpu_time_secs,
@@ -148,9 +148,11 @@ if ($cpuCount -le 0) { throw 'failed to determine the Windows host logical CPU c
 $items = @(Get-Process | ForEach-Object {
     $cpu = $_.CPU
     if ($null -eq $cpu) { $cpu = 0.0 }
+    $startId = try { [uint64]$_.StartTime.ToFileTimeUtc() } catch { 0 }
     [PSCustomObject]@{
         pid = [uint32]$_.Id
         name = [string]$_.ProcessName
+        start_id = $startId
         cpu_time_secs = [double]$cpu
         memory_bytes = [uint64]$_.WorkingSet64
     }
@@ -173,6 +175,8 @@ mod tests {
         let script = snapshot_script(16);
         assert!(script.contains("$cpuCount = [int]16"));
         assert!(script.contains("logical_cpu_count_from_cim = $cpuCountFromCim"));
+        assert!(script.contains("StartTime.ToFileTimeUtc()"));
+        assert!(script.contains("start_id = $startId"));
         assert!(script.contains("[Environment]::ProcessorCount"));
         assert!(!script.contains("__WSLTOP_CPU_COUNT__"));
         assert!(!script.contains("$args"));

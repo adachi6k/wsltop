@@ -860,6 +860,7 @@ mod tests {
             kind,
             id: id.into(),
             pid: None,
+            start_id: None,
             ppid: None,
             name: id.into(),
             args: None,
@@ -881,6 +882,7 @@ mod tests {
             kind: ResourceKind::Process,
             id: "1".into(),
             pid: Some(1),
+            start_id: None,
             ppid: None,
             name: "work".into(),
             args: None,
@@ -1039,9 +1041,11 @@ mod tests {
         let mut aggregate = Aggregate::new(&config());
         let mut teams = row(EnvironmentKind::Windows, ResourceKind::Process, "10");
         teams.pid = Some(10);
+        teams.start_id = Some(10);
         teams.name = "ms-teams".into();
         let mut webview = row(EnvironmentKind::Windows, ResourceKind::Process, "11");
         webview.pid = Some(11);
+        webview.start_id = Some(11);
         webview.name = "msedgewebview2".into();
         aggregate.apply(Event::Windows(Ok((vec![teams, webview], 16))));
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::from([
@@ -1051,6 +1055,7 @@ mod tests {
                     pid: 10,
                     parent_pid: 1,
                     name: "ms-teams.exe".into(),
+                    start_id: 10,
                     executable_path: None,
                     command_line: None,
                 },
@@ -1061,6 +1066,7 @@ mod tests {
                     pid: 11,
                     parent_pid: 10,
                     name: "msedgewebview2.exe".into(),
+                    start_id: 11,
                     executable_path: None,
                     command_line: None,
                 },

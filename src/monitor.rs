@@ -304,6 +304,7 @@ mod tests {
             kind,
             id: name.to_string(),
             pid: Some(1),
+            start_id: None,
             ppid: None,
             name: name.to_string(),
             args: None,
