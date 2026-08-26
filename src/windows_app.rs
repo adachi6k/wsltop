@@ -142,9 +142,24 @@ fn canonical_identity(name: &str) -> (String, String) {
         "chatgpt" | "chatgpt classic" => ("chatgpt", "ChatGPT"),
         "searchhost" => ("searchhost", "SearchHost"),
         "msedgewebview2" => ("webview2", "WebView2"),
-        _ => return (raw, name.trim_end_matches(".exe").to_string()),
+        _ => return (raw, executable_display_name(name)),
     };
     (key.to_string(), display.to_string())
+}
+
+fn executable_display_name(name: &str) -> String {
+    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let suffix_start = basename.len().saturating_sub(4);
+    let has_exe_suffix = basename
+        .as_bytes()
+        .get(suffix_start..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".exe"));
+    let without_extension = if has_exe_suffix {
+        basename.get(..suffix_start).unwrap_or(basename)
+    } else {
+        basename
+    };
+    without_extension.to_string()
 }
 
 fn webview_exe_name(command_line: &str) -> Option<String> {
@@ -171,7 +186,7 @@ fn packaged_application(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{group_processes, WindowsMetadata, WindowsProcessMetadata};
+    use super::{canonical_identity, group_processes, WindowsMetadata, WindowsProcessMetadata};
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
 
     fn row(pid: u32, name: &str, cpu: f64) -> ResourceUsage {
@@ -252,6 +267,14 @@ mod tests {
     fn ambiguous_webview_remains_conservative() {
         let groups = group_processes(&[row(21, "msedgewebview2", 1.0)], &WindowsMetadata::new());
         assert_eq!(groups[0].resource.name, "WebView2");
+    }
+
+    #[test]
+    fn default_identity_hides_path_and_case_insensitive_exe_suffix() {
+        assert_eq!(
+            canonical_identity(r"C:\Program Files\Example App\Example.EXE"),
+            ("example".into(), "Example".into())
+        );
     }
 
     #[test]

@@ -113,12 +113,16 @@ impl Monitor {
             .filter(|row| attribution::is_host_resource(row))
             .cloned()
             .collect();
-        let applications = windows::application_metadata()
-            .map(|metadata| windows_app::group_processes(&windows_usage, &metadata))
-            .unwrap_or_else(|error| {
-                warnings.push(format!("Windows application metadata unavailable: {error}"));
-                windows_app::group_processes(&windows_usage, &Default::default())
-            });
+        let applications = if should_collect_windows_metadata(&self.config, &windows_usage) {
+            windows::application_metadata()
+                .map(|metadata| windows_app::group_processes(&windows_usage, &metadata))
+                .unwrap_or_else(|error| {
+                    warnings.push(format!("Windows application metadata unavailable: {error}"));
+                    windows_app::group_processes(&windows_usage, &Default::default())
+                })
+        } else {
+            Vec::new()
+        };
         let mut tree = attribution::build_tree_with_docker(
             host_cpu_count,
             &hosts,
@@ -127,7 +131,7 @@ impl Monitor {
             &docker_usage,
         );
         attribution::attach_wslc_processes(&mut tree, &wslc_usage.process_resources);
-        tree.windows_applications.clone_from(&applications);
+        tree.windows_applications = applications;
         if self.config.hide_infra {
             attribution::hide_infra(&mut tree);
         }
@@ -165,9 +169,9 @@ impl Monitor {
                 || row.kind != ResourceKind::Process
         });
         resources.extend(
-            applications
-                .into_iter()
-                .map(|application| application.resource),
+            tree.windows_applications
+                .iter()
+                .map(|application| application.resource.clone()),
         );
         prepare_flat_resources(&mut resources, &self.config);
         Ok(MonitorSnapshot {
@@ -202,6 +206,13 @@ impl Monitor {
             }
         }
     }
+}
+
+fn should_collect_windows_metadata(
+    config: &MonitorConfig,
+    windows_usage: &[ResourceUsage],
+) -> bool {
+    !config.wsl_only && !windows_usage.is_empty()
 }
 
 fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
@@ -264,7 +275,9 @@ pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config:
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_flat_resources, push_unique_warning, MonitorConfig};
+    use super::{
+        prepare_flat_resources, push_unique_warning, should_collect_windows_metadata, MonitorConfig,
+    };
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
     use std::time::Duration;
 
@@ -295,6 +308,18 @@ mod tests {
             cpu_percent: 1.0,
             memory_bytes: 0,
         }
+    }
+
+    #[test]
+    fn wsl_only_skips_windows_metadata_collection() {
+        let mut config = config();
+        config.wsl_only = true;
+        let windows = vec![resource(
+            EnvironmentKind::Windows,
+            ResourceKind::Process,
+            "Teams",
+        )];
+        assert!(!should_collect_windows_metadata(&config, &windows));
     }
 
     #[test]

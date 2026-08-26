@@ -279,8 +279,8 @@ impl Aggregate {
             &self.docker.resources,
         );
         attribution::attach_wslc_processes(&mut tree, &self.wslc.process_resources);
-        let applications = windows_app::group_processes(&self.windows, &self.windows_metadata);
-        tree.windows_applications.clone_from(&applications);
+        tree.windows_applications =
+            windows_app::group_processes(&self.windows, &self.windows_metadata);
         if config.hide_infra {
             attribution::hide_infra(&mut tree);
         }
@@ -313,9 +313,9 @@ impl Aggregate {
                 || row.kind != crate::model::ResourceKind::Process
         });
         resources.extend(
-            applications
-                .into_iter()
-                .map(|application| application.resource),
+            tree.windows_applications
+                .iter()
+                .map(|application| application.resource.clone()),
         );
         prepare_flat_resources(&mut resources, config);
         MonitorSnapshot {
