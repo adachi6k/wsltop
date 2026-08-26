@@ -54,6 +54,7 @@ fn validate_options(options: &Options) -> Result<(), Box<dyn Error>> {
 }
 
 fn run(options: Options) -> Result<(), Box<dyn Error>> {
+    let collect_windows_applications = needs_windows_applications(&options);
     let config = MonitorConfig {
         interval: options.interval,
         limit: options.limit,
@@ -64,6 +65,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         hide_infra: options.hide_infra,
         show_container_processes: options.show_container_processes,
         container_process_limit: options.container_process_limit,
+        collect_windows_applications,
     };
     if options.interactive {
         return tui::run(config, options.tree, options.cpu_scale);
@@ -87,6 +89,10 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn needs_windows_applications(options: &Options) -> bool {
+    options.interactive || !options.json || options.tree
 }
 
 fn parse_args() -> Result<Options, Box<dyn Error>> {
@@ -218,5 +224,14 @@ mod tests {
 
         let explicit_core = parse_args_from(["--json", "--cpu-scale", "core"]).unwrap();
         assert!(validate_options(&explicit_core).is_err());
+    }
+
+    #[test]
+    fn flat_json_does_not_request_windows_application_metadata() {
+        let flat_json = parse_args_from(["--json"]).unwrap();
+        assert!(!super::needs_windows_applications(&flat_json));
+
+        let tree_json = parse_args_from(["--json", "--tree"]).unwrap();
+        assert!(super::needs_windows_applications(&tree_json));
     }
 }

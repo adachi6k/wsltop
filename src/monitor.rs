@@ -17,6 +17,7 @@ pub struct MonitorConfig {
     pub hide_infra: bool,
     pub show_container_processes: bool,
     pub container_process_limit: usize,
+    pub collect_windows_applications: bool,
 }
 
 pub struct Monitor {
@@ -212,7 +213,7 @@ fn should_collect_windows_metadata(
     config: &MonitorConfig,
     windows_usage: &[ResourceUsage],
 ) -> bool {
-    !config.wsl_only && !windows_usage.is_empty()
+    config.collect_windows_applications && !config.wsl_only && !windows_usage.is_empty()
 }
 
 fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
@@ -292,6 +293,7 @@ mod tests {
             hide_infra: false,
             show_container_processes: false,
             container_process_limit: 5,
+            collect_windows_applications: true,
         }
     }
 
@@ -314,6 +316,18 @@ mod tests {
     fn wsl_only_skips_windows_metadata_collection() {
         let mut config = config();
         config.wsl_only = true;
+        let windows = vec![resource(
+            EnvironmentKind::Windows,
+            ResourceKind::Process,
+            "Teams",
+        )];
+        assert!(!should_collect_windows_metadata(&config, &windows));
+    }
+
+    #[test]
+    fn pid_only_output_skips_windows_metadata_collection() {
+        let mut config = config();
+        config.collect_windows_applications = false;
         let windows = vec![resource(
             EnvironmentKind::Windows,
             ResourceKind::Process,

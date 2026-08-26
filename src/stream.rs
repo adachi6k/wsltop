@@ -849,6 +849,7 @@ mod tests {
             hide_infra: false,
             show_container_processes: false,
             container_process_limit: 5,
+            collect_windows_applications: true,
         }
     }
 
