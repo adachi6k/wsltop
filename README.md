@@ -59,18 +59,18 @@ The flat view is a host-wide activity ranking. Windows and WSL processes appear 
 ```text
 wsltop 0.2.0 | flat | refresh 3000ms
 
-ENV     TYPE         CPU%       MEM       ID/PID COMMAND
-------------------------------------------------------------------------------------
-Docker  container  11.99%      520M 68dae66282ff  act-CI-simulate...
-        process    11.75%      157M        34692    |- simx
-        residual   0.24%          -            -    `- unattributed
-WSLC    container   5.94%      348M 5e0c144e6a3c  mighty_flinders
-        process     5.71%       31M          806    |- cc1plus
-        process     0.19%        6M          470    |- ninja
-        residual    0.04%          -            -    `- unattributed
-Windows application 4.82%     1.24G            -  Teams
-Windows application 2.37%     1.68G            -  Chrome
-WSL     infra       0.05%        4M            5  plan9
+ENV     TYPE         CPU%      TIME+       MEM       ID/PID COMMAND
+-------------------------------------------------------------------------------------------------
+Docker  container  11.99%          -      520M 68dae66282ff  act-CI-simulate...
+        process    11.75%    62:03.46      157M        34692    |- simx
+        residual   0.24%          -          -            -    `- unattributed
+WSLC    container   5.94%          -      348M 5e0c144e6a3c  mighty_flinders
+        process     5.71%     4:12.08       31M          806    |- cc1plus
+        process     0.19%     0:03.20        6M          470    |- ninja
+        residual    0.04%          -          -            -    `- unattributed
+Windows application 4.82%   103:27.51     1.24G            -  Teams
+Windows application 2.37%   248:10.03     1.68G            -  Chrome
+WSL     infra       0.05%     0:14.82        4M            5  plan9
 ```
 
 In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. Windows rows are ranked by application, so multi-process applications such as Teams and Chrome appear once. By default, at most five processes are shown per container and additional processes are summarized.
@@ -166,6 +166,8 @@ Internally, every CPU percentage remains on the common host-wide denominator. Di
 
 Windows and WSL process percentages come from deltas of cumulative processor time. WSLC and Docker percentages are normalized from their collector-specific values onto the same host scale. See [CPU accounting](docs/cpu-accounting.md) for formulas and caveats.
 
+`TIME+` is cumulative CPU time consumed, formatted as unbounded minutes, seconds, and hundredths (`MM:SS.hh`), as in Linux `top`; it is not wall-clock process age. Windows application TIME+ is the sum of its currently observed member processes. Process rows report TIME+ where their collector exposes it. Container totals and residual rows show `-` because wsltop does not infer cumulative time from point-in-time container percentages.
+
 ## Attribution tree
 
 Use `--tree` to treat `vmmem`, `vmmemWSL`, and `vmmemwslc-*` as parent resources:
@@ -193,7 +195,7 @@ Raw WSL host processes stay hidden in default flat output to avoid accidental do
 
 WSLC collection uses the current/default CLI session. A single available `vmmemwslc-*` host can be associated with its containers. If multiple hosts make the mapping ambiguous, `wsltop` reports the mapping as unresolved and does not guess; flat WSLC rows remain available.
 
-Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container.
+Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,time,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container. If the process backend does not support `time`, wsltop retries the older column set and leaves TIME+ unavailable instead of dropping the container detail.
 
 Docker Desktop containers run in Docker Desktop's own Linux VM, so they are shown under an independent top-level `Docker` group. They are not manufactured as children of the current WSL VM. The legacy current-WSL PID-matching path is used only if sharing of the host PID namespace has been positively established; the current Docker Desktop path does not make that claim. Use `--show-container-processes` to add Docker and WSLC process rows while preserving existing container rows and the default flat schema (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
 
@@ -211,7 +213,7 @@ The current distribution is sampled directly from `/proc`. Other running distrib
 
 ## JSON output
 
-`--json` preserves the PID-level flat resource-array schema and host-wide CPU values. Windows application rows are a human-readable view and do not replace existing Windows PID objects in flat JSON. Each resource includes fields such as `environment`, `kind`, identity, CPU percentage, and memory bytes. `--cpu-scale core` is rejected with JSON because display scaling does not alter machine-readable values; omitted scale or `--cpu-scale host` is accepted.
+`--json` preserves the PID-level flat resource-array schema and host-wide CPU values. Windows application rows are a human-readable view and do not replace existing Windows PID objects in flat JSON. Each resource includes fields such as `environment`, `kind`, identity, CPU percentage, and memory bytes. When known, cumulative CPU time is added as `cpu_time_seconds`; the field is omitted when unavailable. `--cpu-scale core` is rejected with JSON because display scaling does not alter machine-readable values; omitted scale or `--cpu-scale host` is accepted.
 
 ```console
 wsltop --once --json

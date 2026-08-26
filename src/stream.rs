@@ -869,6 +869,7 @@ mod tests {
             name: id.into(),
             args: None,
             cpu_percent: 1.0,
+            cpu_time_seconds: None,
             memory_bytes: 1,
         }
     }
@@ -891,6 +892,7 @@ mod tests {
             name: "work".into(),
             args: None,
             cpu_percent: 2.0,
+            cpu_time_seconds: None,
             memory_bytes: 1,
         };
         aggregate.apply(Event::Linux(normalized(Ok(vec![row]))));

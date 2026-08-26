@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file. The format 
 - Loading/error status with last-good collector data retained across transient failures.
 - `--cpu-scale core|host` for top-style per-core or Task Manager-style whole-host human-readable CPU display.
 - Conservative Windows application aggregation with WebView2 ownership evidence and tree-level PID detail.
+- Top-style `TIME+` cumulative CPU time for Windows, WSL, Docker, and WSLC processes, plus summed Windows application totals.
 
 ### Changed
 
@@ -18,6 +19,7 @@ All notable changes to this project will be documented in this file. The format 
 - The Windows host logical CPU count is cached after initial discovery instead of querying CIM for every process snapshot.
 - Text and TUI output default to one fully busy logical CPU equaling 100%; internal accounting and JSON remain host-wide.
 - Human-readable flat/TUI output ranks Windows applications once while flat JSON preserves PID-level compatibility; interactive metadata discovery is independently scheduled and retains last-good state.
+- Resource JSON optionally includes additive `cpu_time_seconds`; unsupported container process backends retain detail rows without TIME+.
 
 ## [0.2.0] - 2026-08-24
 

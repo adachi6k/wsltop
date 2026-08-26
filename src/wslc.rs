@@ -96,6 +96,7 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
             name: container.name,
             args: None,
             cpu_percent: cpu_native / host_logical_cpu_count as f64,
+            cpu_time_seconds: None,
             memory_bytes,
         });
     }
@@ -155,18 +156,28 @@ fn container_processes(
     id: &str,
     host_logical_cpu_count: u32,
 ) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
-    let output = command::output_with_timeout(
-        Command::new("wslc.exe").args(["exec", id, "ps", "-eo", "pid,ppid,pcpu,rss,comm,args"]),
-        Duration::from_secs(5),
-    )?;
-    if !output.status.success() {
-        return Err(format!(
-            "wslc.exe exec ps failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
+    let mut last_error = String::new();
+    for columns in [
+        "pid,ppid,pcpu,rss,time,comm,args",
+        "pid,ppid,pcpu,rss,comm,args",
+    ] {
+        let output = command::output_with_timeout(
+            Command::new("wslc.exe").args(["exec", id, "ps", "-eo", columns]),
+            Duration::from_secs(5),
+        )?;
+        if output.status.success() {
+            match parse_processes(&output.stdout, id, host_logical_cpu_count) {
+                Ok(processes) => return Ok(processes),
+                Err(error) => last_error = error.to_string(),
+            }
+        } else {
+            last_error = format!(
+                "wslc.exe exec ps failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
     }
-    parse_processes(&output.stdout, id, host_logical_cpu_count)
+    Err(last_error.into())
 }
 
 fn parse_processes(
@@ -192,11 +203,16 @@ fn parse_processes(
     {
         return Err("unsupported WSLC ps columns".into());
     }
+    let has_time = header
+        .get(4)
+        .is_some_and(|column| column.eq_ignore_ascii_case("TIME"));
+    let command_index = if has_time { 5 } else { 4 };
+    let args_index = command_index + 1;
     lines
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
-            if fields.len() < 6 {
+            if fields.len() <= args_index {
                 return Some(Err(format!("malformed WSLC process row: {line:?}").into()));
             }
             let pid = match fields[0].parse::<u32>() {
@@ -208,7 +224,7 @@ fn parse_processes(
                 Err(error) => return Some(Err(error.into())),
             };
             // Exclude the short-lived ps injected by this collector.
-            if ppid == 0 && fields[4] == "ps" {
+            if ppid == 0 && fields[command_index] == "ps" {
                 return None;
             }
             let cpu = match fields[2].parse::<f64>() {
@@ -219,6 +235,14 @@ fn parse_processes(
                 Ok(rss) => rss,
                 Err(error) => return Some(Err(error.into())),
             };
+            let cpu_time_seconds = if has_time {
+                match parse_cpu_time(fields[4]) {
+                    Ok(value) => Some(value),
+                    Err(error) => return Some(Err(error)),
+                }
+            } else {
+                None
+            };
             Some(Ok(ResourceUsage {
                 environment: EnvironmentKind::WslContainer,
                 source: Some(container_id.to_string()),
@@ -227,13 +251,36 @@ fn parse_processes(
                 pid: Some(pid),
                 start_id: None,
                 ppid: Some(ppid),
-                name: fields[4].to_string(),
-                args: Some(fields[5..].join(" ")),
+                name: fields[command_index].to_string(),
+                args: Some(fields[args_index..].join(" ")),
                 cpu_percent: cpu / host_cpu_count as f64,
+                cpu_time_seconds,
                 memory_bytes: rss_kib.saturating_mul(1024),
             }))
         })
         .collect()
+}
+
+fn parse_cpu_time(value: &str) -> Result<f64, Box<dyn Error>> {
+    let (days, clock) = value
+        .split_once('-')
+        .map_or(Ok((0_u64, value)), |(days, clock)| {
+            Ok::<_, Box<dyn Error>>((days.parse::<u64>()?, clock))
+        })?;
+    let fields: Vec<_> = clock.split(':').collect();
+    let seconds = match fields.as_slice() {
+        [minutes, seconds] => minutes.parse::<u64>()? as f64 * 60.0 + seconds.parse::<f64>()?,
+        [hours, minutes, seconds] => {
+            hours.parse::<u64>()? as f64 * 3600.0
+                + minutes.parse::<u64>()? as f64 * 60.0
+                + seconds.parse::<f64>()?
+        }
+        _ => return Err("invalid process CPU time".into()),
+    } + days as f64 * 86_400.0;
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err("invalid process CPU time".into());
+    }
+    Ok(seconds)
 }
 
 fn parse_percent(value: &str) -> Result<f64, Box<dyn Error>> {
@@ -291,7 +338,9 @@ fn parse_size_bytes(value: &str) -> Result<u64, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_memory_usage, parse_percent, parse_processes, parse_size_bytes};
+    use super::{
+        parse_cpu_time, parse_memory_usage, parse_percent, parse_processes, parse_size_bytes,
+    };
 
     #[test]
     fn parses_wslc_cpu_percent() {
@@ -322,5 +371,15 @@ mod tests {
         assert_eq!(rows[0].name, "cc1plus");
         assert_eq!(rows[0].cpu_percent, 1.0);
         assert_eq!(rows[0].memory_bytes, 1024 * 1024);
+        assert_eq!(rows[0].cpu_time_seconds, None);
+    }
+
+    #[test]
+    fn parses_wslc_process_cpu_time() {
+        let input =
+            b"PID PPID %CPU RSS TIME COMMAND COMMAND\n1 0 16.0 1024 12:34 cc1plus cc1plus -O2\n";
+        let rows = parse_processes(input, "abc", 16).unwrap();
+        assert_eq!(rows[0].cpu_time_seconds, Some(754.0));
+        assert_eq!(parse_cpu_time("01:02:03").unwrap(), 3_723.0);
     }
 }

@@ -326,6 +326,7 @@ mod tests {
             name: name.to_string(),
             args: None,
             cpu_percent: 1.0,
+            cpu_time_seconds: None,
             memory_bytes: 0,
         }
     }

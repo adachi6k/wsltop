@@ -113,18 +113,28 @@ fn container_processes(
     id: &str,
     host_logical_cpu_count: u32,
 ) -> Result<Vec<ResourceUsage>, Box<dyn Error>> {
-    let output = command::output_with_timeout(
-        Command::new("docker").args(["top", id, "-eo", "pid,ppid,pcpu,rss,comm,args"]),
-        Duration::from_secs(5),
-    )?;
-    if !output.status.success() {
-        return Err(format!(
-            "docker top failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
+    let mut last_error = String::new();
+    for columns in [
+        "pid,ppid,pcpu,rss,time,comm,args",
+        "pid,ppid,pcpu,rss,comm,args",
+    ] {
+        let output = command::output_with_timeout(
+            Command::new("docker").args(["top", id, "-eo", columns]),
+            Duration::from_secs(5),
+        )?;
+        if output.status.success() {
+            match parse_top(&output.stdout, id, host_logical_cpu_count) {
+                Ok(processes) => return Ok(processes),
+                Err(error) => last_error = error.to_string(),
+            }
+        } else {
+            last_error = format!(
+                "docker top failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
     }
-    parse_top(&output.stdout, id, host_logical_cpu_count)
+    Err(last_error.into())
 }
 
 fn parse_top(
@@ -150,11 +160,16 @@ fn parse_top(
     {
         return Err("unsupported docker top columns".into());
     }
+    let has_time = header
+        .get(4)
+        .is_some_and(|column| column.eq_ignore_ascii_case("TIME"));
+    let command_index = if has_time { 5 } else { 4 };
+    let args_index = command_index + 1;
     lines
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
-            if fields.len() < 6 {
+            if fields.len() <= args_index {
                 return Err(format!("malformed docker top process row: {line:?}").into());
             }
             let pid = fields[0].parse::<u32>()?;
@@ -164,8 +179,13 @@ fn parse_top(
             if !cpu.is_finite() || cpu < 0.0 {
                 return Err("invalid docker top CPU percentage".into());
             }
-            let command = fields[4];
-            let args = fields[5..].join(" ");
+            let cpu_time_seconds = if has_time {
+                Some(parse_cpu_time(fields[4])?)
+            } else {
+                None
+            };
+            let command = fields[command_index];
+            let args = fields[args_index..].join(" ");
             Ok(ResourceUsage {
                 environment: EnvironmentKind::Docker,
                 source: Some(container_id.to_string()),
@@ -177,10 +197,33 @@ fn parse_top(
                 name: command.to_string(),
                 args: Some(args),
                 cpu_percent: cpu / host_cpu_count as f64,
+                cpu_time_seconds,
                 memory_bytes: rss_kib.saturating_mul(1024),
             })
         })
         .collect()
+}
+
+fn parse_cpu_time(value: &str) -> Result<f64, Box<dyn Error>> {
+    let (days, clock) = value
+        .split_once('-')
+        .map_or(Ok((0_u64, value)), |(days, clock)| {
+            Ok::<_, Box<dyn Error>>((days.parse::<u64>()?, clock))
+        })?;
+    let fields: Vec<_> = clock.split(':').collect();
+    let seconds = match fields.as_slice() {
+        [minutes, seconds] => minutes.parse::<u64>()? as f64 * 60.0 + seconds.parse::<f64>()?,
+        [hours, minutes, seconds] => {
+            hours.parse::<u64>()? as f64 * 3600.0
+                + minutes.parse::<u64>()? as f64 * 60.0
+                + seconds.parse::<f64>()?
+        }
+        _ => return Err("invalid process CPU time".into()),
+    } + days as f64 * 86_400.0;
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err("invalid process CPU time".into());
+    }
+    Ok(seconds)
 }
 
 fn daemon_unavailable(stderr: &[u8]) -> bool {
@@ -208,6 +251,7 @@ fn parse_stats(input: &[u8], host_cpu_count: u32) -> Result<Vec<ResourceUsage>, 
                 name: raw.name,
                 args: None,
                 cpu_percent: parse_percent(&raw.cpu_percent)? / host_cpu_count as f64,
+                cpu_time_seconds: None,
                 memory_bytes: parse_memory(&raw.memory_usage)?,
             })
         })
@@ -246,7 +290,7 @@ fn parse_memory(value: &str) -> Result<u64, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{daemon_unavailable, parse_stats, parse_top};
+    use super::{daemon_unavailable, parse_cpu_time, parse_stats, parse_top};
     use crate::model::{EnvironmentKind, ResourceKind};
 
     #[test]
@@ -285,6 +329,16 @@ mod tests {
         assert_eq!(rows[0].args.as_deref(), Some("cc1plus -O2 source.cc"));
         assert_eq!(rows[0].cpu_percent, 31.2);
         assert_eq!(rows[0].memory_bytes, 2_097_152);
+        assert_eq!(rows[0].cpu_time_seconds, None);
+    }
+
+    #[test]
+    fn parses_docker_top_cpu_time() {
+        let input = b"PID PPID %CPU RSS TIME COMMAND COMMAND\n42 1 499.2 2048 01:02:03 cc1plus cc1plus -O2 source.cc\n";
+        let rows = parse_top(input, "abcdef", 16).unwrap();
+        assert_eq!(rows[0].name, "cc1plus");
+        assert_eq!(rows[0].cpu_time_seconds, Some(3_723.0));
+        assert_eq!(parse_cpu_time("2-01:02:03").unwrap(), 176_523.0);
     }
 
     #[test]

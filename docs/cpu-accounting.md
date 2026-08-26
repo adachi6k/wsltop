@@ -30,6 +30,8 @@ CPU% = delta_cpu_seconds / elapsed_seconds
 
 Windows cumulative time comes from `Get-Process .CPU`. Current-WSL cumulative time comes from `/proc/<pid>/stat`; additional distributions provide equivalent values through `wsl.exe -d` collection.
 
+The same cumulative value is exposed as `TIME+` in text/TUI output. It is CPU time consumed, not elapsed wall-clock age, and is formatted as unbounded minutes plus seconds and hundredths (`MM:SS.hh`). Windows application TIME+ sums the currently observed member processes, so it may decrease when a member exits. JSON exposes the underlying value as optional `cpu_time_seconds`.
+
 Negative deltas are treated as process replacement/PID reuse and do not become negative usage. Process identity includes environment, PID, and source where available.
 
 With `--wsl-only`, Windows collection is skipped and the WSL-visible logical CPU count is used as a fallback. The command warns because exact Windows-host normalization cannot be guaranteed in that mode.
@@ -40,19 +42,21 @@ With `--wsl-only`, Windows collection is skipped and the WSL-visible logical CPU
 
 The collector's `MemUsage` value is retained as resource metadata but is not used in parent/child subtraction.
 
-WSLC 2.9 does not expose a `top` command, so wsltop executes `ps -eo pid,ppid,pcpu,rss,comm,args` inside each running container with `wslc.exe exec`. The injected `ps` process is excluded. Its ps-style `%CPU` is divided by the Windows host logical CPU count, has the same averaging caveat as Docker process CPU, and explains the container internally without being added to the container total.
+WSLC 2.9 does not expose a `top` command, so wsltop executes `ps -eo pid,ppid,pcpu,rss,time,comm,args` inside each running container with `wslc.exe exec`. The injected `ps` process is excluded. Its ps-style `%CPU` is divided by the Windows host logical CPU count, has the same averaging caveat as Docker process CPU, and explains the container internally without being added to the container total. The `time` column supplies process TIME+; wsltop falls back to the older column set when unsupported.
 
 ## Docker containers and processes
 
 Docker reports a container CPU percentage in a convention where one fully busy CPU is approximately 100%. `wsltop` divides it by the host logical CPU count so the result shares the Windows host scale.
 
-Docker process discovery separately runs `docker top <container-id> -eo pid,ppid,pcpu,rss,comm,args`. Its `pcpu` uses the same one-busy-CPU-is-100% convention and is normalized independently:
+Docker process discovery separately runs `docker top <container-id> -eo pid,ppid,pcpu,rss,time,comm,args`. Its `pcpu` uses the same one-busy-CPU-is-100% convention and is normalized independently:
 
 ```text
 docker_process_CPU% = docker_top_pcpu / Windows_host_logical_cpu_count
 ```
 
 Unlike wsltop's two-snapshot `/proc` measurement, docker-top `%CPU` is a ps-style average over process lifetime (with platform-specific averaging/decay behavior). It is therefore less precisely aligned with the current wsltop sampling interval and container statistics.
+
+The `time` column is cumulative process CPU time and is displayed independently of `%CPU`. Container and residual TIME+ remain unavailable because `docker stats` does not provide a matching cumulative value. Unsupported `time` output degrades to process rows without TIME+.
 
 Process observations explain a container internally and are never added to its value or rescaled to force a match:
 
