@@ -109,6 +109,7 @@ fn application_identity(
     }
 
     let mut parent = Some(process_metadata.parent_pid);
+    let mut descendant_start_id = process_metadata.start_id;
     let mut visited = HashSet::new();
     for _ in 0..8 {
         let Some(parent_pid) = parent.filter(|value| *value != 0) else {
@@ -124,6 +125,7 @@ fn application_identity(
             executable_stem(&item.name) == executable_stem(&parent_row.name)
                 && item.start_id != 0
                 && parent_row.start_id == Some(item.start_id)
+                && item.start_id <= descendant_start_id
         }) else {
             break;
         };
@@ -131,6 +133,7 @@ fn application_identity(
         if owner != "msedgewebview2" {
             return canonical_identity(&parent_row.name);
         }
+        descendant_start_id = parent_metadata.start_id;
         parent = Some(parent_metadata.parent_pid);
     }
     canonical_identity(&process.name)
@@ -354,6 +357,31 @@ mod tests {
         let rows = vec![row(10, "ms-teams", 1.0), row(21, "msedgewebview2", 1.0)];
         let child = metadata(21, 10, "msedgewebview2.exe");
         let groups = group_processes(&rows, &WindowsMetadata::from([(21, child)]));
+        assert_eq!(
+            groups
+                .iter()
+                .find(|group| group.resource.name == "Teams")
+                .unwrap()
+                .processes
+                .len(),
+            1
+        );
+        assert!(groups.iter().any(|group| group.resource.name == "WebView2"));
+    }
+
+    #[test]
+    fn parent_created_after_webview_is_not_trusted_after_pid_reuse() {
+        let mut parent_row = row(10, "ms-teams", 1.0);
+        parent_row.start_id = Some(30);
+        let rows = vec![parent_row, row(21, "msedgewebview2", 1.0)];
+        let mut reused_parent = metadata(10, 1, "ms-teams.exe");
+        reused_parent.start_id = 30;
+        let child = metadata(21, 10, "msedgewebview2.exe");
+        let groups = group_processes(
+            &rows,
+            &WindowsMetadata::from([(10, reused_parent), (21, child)]),
+        );
+
         assert_eq!(
             groups
                 .iter()
