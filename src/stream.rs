@@ -1043,16 +1043,28 @@ mod tests {
         webview.pid = Some(11);
         webview.name = "msedgewebview2".into();
         aggregate.apply(Event::Windows(Ok((vec![teams, webview], 16))));
-        aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::from([(
-            11,
-            WindowsProcessMetadata {
-                pid: 11,
-                parent_pid: 10,
-                name: "msedgewebview2.exe".into(),
-                executable_path: None,
-                command_line: None,
-            },
-        )]))));
+        aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::from([
+            (
+                10,
+                WindowsProcessMetadata {
+                    pid: 10,
+                    parent_pid: 1,
+                    name: "ms-teams.exe".into(),
+                    executable_path: None,
+                    command_line: None,
+                },
+            ),
+            (
+                11,
+                WindowsProcessMetadata {
+                    pid: 11,
+                    parent_pid: 10,
+                    name: "msedgewebview2.exe".into(),
+                    executable_path: None,
+                    command_line: None,
+                },
+            ),
+        ]))));
         aggregate.apply(Event::WindowsMetadata(Err("metadata failed".into())));
 
         let snapshot = aggregate.snapshot(&config());

@@ -83,22 +83,28 @@ fn application_identity(
     let Some(pid) = process.pid else {
         return canonical_identity(&base);
     };
-    if let Some(owner) = metadata
+    let Some(process_metadata) = metadata
         .get(&pid)
-        .and_then(|item| item.command_line.as_deref())
+        .filter(|item| executable_stem(&item.name) == base)
+    else {
+        return canonical_identity(&base);
+    };
+    if let Some(owner) = process_metadata
+        .command_line
+        .as_deref()
         .and_then(webview_exe_name)
     {
         return canonical_identity(&owner);
     }
-    if let Some(owner) = metadata
-        .get(&pid)
-        .and_then(|item| item.executable_path.as_deref())
+    if let Some(owner) = process_metadata
+        .executable_path
+        .as_deref()
         .and_then(packaged_application)
     {
         return canonical_identity(&owner);
     }
 
-    let mut parent = metadata.get(&pid).map(|item| item.parent_pid);
+    let mut parent = Some(process_metadata.parent_pid);
     let mut visited = HashSet::new();
     for _ in 0..8 {
         let Some(parent_pid) = parent.filter(|value| *value != 0) else {
@@ -110,17 +116,17 @@ fn application_identity(
         let Some(parent_row) = rows.get(&parent_pid) else {
             break;
         };
-        if metadata
+        let Some(parent_metadata) = metadata
             .get(&parent_pid)
-            .is_some_and(|item| executable_stem(&item.name) != executable_stem(&parent_row.name))
-        {
+            .filter(|item| executable_stem(&item.name) == executable_stem(&parent_row.name))
+        else {
             break;
-        }
+        };
         let owner = executable_stem(&parent_row.name);
         if owner != "msedgewebview2" {
             return canonical_identity(&owner);
         }
-        parent = metadata.get(&parent_pid).map(|item| item.parent_pid);
+        parent = Some(parent_metadata.parent_pid);
     }
     canonical_identity(&base)
 }
@@ -267,6 +273,34 @@ mod tests {
     fn ambiguous_webview_remains_conservative() {
         let groups = group_processes(&[row(21, "msedgewebview2", 1.0)], &WindowsMetadata::new());
         assert_eq!(groups[0].resource.name, "WebView2");
+    }
+
+    #[test]
+    fn stale_webview_metadata_is_not_trusted_after_pid_reuse() {
+        let mut stale = metadata(21, 10, "old-process.exe");
+        stale.command_line = Some("--webview-exe-name=ms-teams.exe".into());
+        let groups = group_processes(
+            &[row(21, "msedgewebview2", 1.0)],
+            &WindowsMetadata::from([(21, stale)]),
+        );
+        assert_eq!(groups[0].resource.name, "WebView2");
+    }
+
+    #[test]
+    fn parent_without_matching_metadata_is_not_trusted() {
+        let rows = vec![row(10, "ms-teams", 1.0), row(21, "msedgewebview2", 1.0)];
+        let child = metadata(21, 10, "msedgewebview2.exe");
+        let groups = group_processes(&rows, &WindowsMetadata::from([(21, child)]));
+        assert_eq!(
+            groups
+                .iter()
+                .find(|group| group.resource.name == "Teams")
+                .unwrap()
+                .processes
+                .len(),
+            1
+        );
+        assert!(groups.iter().any(|group| group.resource.name == "WebView2"));
     }
 
     #[test]
