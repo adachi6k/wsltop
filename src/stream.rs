@@ -279,8 +279,10 @@ impl Aggregate {
             &self.docker.resources,
         );
         attribution::attach_wslc_processes(&mut tree, &self.wslc.process_resources);
-        tree.windows_applications =
-            windows_app::group_processes(&self.windows, &self.windows_metadata);
+        if config.collect_windows_applications && !config.wsl_only {
+            tree.windows_applications =
+                windows_app::group_processes(&self.windows, &self.windows_metadata);
+        }
         if config.hide_infra {
             attribution::hide_infra(&mut tree);
         }
@@ -308,15 +310,17 @@ impl Aggregate {
         );
         let mut pid_resources = resources.clone();
         prepare_flat_resources(&mut pid_resources, config);
-        resources.retain(|row| {
-            row.environment != crate::model::EnvironmentKind::Windows
-                || row.kind != crate::model::ResourceKind::Process
-        });
-        resources.extend(
-            tree.windows_applications
-                .iter()
-                .map(|application| application.resource.clone()),
-        );
+        if config.collect_windows_applications && !config.wsl_only {
+            resources.retain(|row| {
+                row.environment != crate::model::EnvironmentKind::Windows
+                    || row.kind != crate::model::ResourceKind::Process
+            });
+            resources.extend(
+                tree.windows_applications
+                    .iter()
+                    .map(|application| application.resource.clone()),
+            );
+        }
         prepare_flat_resources(&mut resources, config);
         MonitorSnapshot {
             host_logical_cpu_count: self.host_cpu_count,
@@ -1034,6 +1038,22 @@ mod tests {
             .iter()
             .all(|row| row.kind == ResourceKind::Process));
         assert_eq!(snapshot.tree.windows_applications[0].processes.len(), 2);
+    }
+
+    #[test]
+    fn pid_only_streaming_output_preserves_windows_process_rows() {
+        let mut options = config();
+        options.collect_windows_applications = false;
+        let mut aggregate = Aggregate::new(&options);
+        let mut process = row(EnvironmentKind::Windows, ResourceKind::Process, "10");
+        process.pid = Some(10);
+        process.name = "chrome".into();
+        aggregate.apply(Event::Windows(Ok((vec![process], 16))));
+
+        let snapshot = aggregate.snapshot(&options);
+        assert_eq!(snapshot.resources.len(), 1);
+        assert_eq!(snapshot.resources[0].kind, ResourceKind::Process);
+        assert!(snapshot.tree.windows_applications.is_empty());
     }
 
     #[test]

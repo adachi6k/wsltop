@@ -213,7 +213,12 @@ fn should_collect_windows_metadata(
     config: &MonitorConfig,
     windows_usage: &[ResourceUsage],
 ) -> bool {
-    config.collect_windows_applications && !config.wsl_only && !windows_usage.is_empty()
+    config.collect_windows_applications
+        && !config.wsl_only
+        && windows_usage.iter().any(|row| {
+            row.environment == crate::model::EnvironmentKind::Windows
+                && row.kind == ResourceKind::Process
+        })
 }
 
 fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
@@ -335,6 +340,16 @@ mod tests {
             "Teams",
         )];
         assert!(!should_collect_windows_metadata(&config, &windows));
+    }
+
+    #[test]
+    fn host_only_windows_rows_skip_metadata_collection() {
+        let windows = vec![resource(
+            EnvironmentKind::Windows,
+            ResourceKind::Host,
+            "vmmemwsl",
+        )];
+        assert!(!should_collect_windows_metadata(&config(), &windows));
     }
 
     #[test]

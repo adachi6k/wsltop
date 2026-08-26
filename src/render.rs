@@ -203,13 +203,15 @@ fn tree_model(tree: &AttributionTree, cpus: u32, scale: CpuScale) -> String {
                 } else {
                     "|-"
                 };
+                let pid = process
+                    .pid
+                    .map_or_else(|| "-".to_string(), |pid| pid.to_string());
                 let _ = writeln!(
                     out,
-                    "   {child} {:<7} {:<27} {:>7.2}%  pid {}",
+                    "   {child} {:<7} {:<27} {:>7.2}%  pid {pid}",
                     "process",
                     process.name,
-                    scale.value(process.cpu_percent, cpus),
-                    process.pid.unwrap_or_default()
+                    scale.value(process.cpu_percent, cpus)
                 );
             }
         }
@@ -543,6 +545,35 @@ mod tests {
             snapshot.tree.windows_applications[0].resource.cpu_percent,
             2.0
         );
+    }
+
+    #[test]
+    fn tree_does_not_render_missing_process_pid_as_zero() {
+        let process = ResourceUsage {
+            environment: EnvironmentKind::Windows,
+            source: None,
+            kind: ResourceKind::Process,
+            id: "unknown".into(),
+            pid: None,
+            start_id: None,
+            ppid: None,
+            name: "worker".into(),
+            args: None,
+            cpu_percent: 1.0,
+            memory_bytes: 1,
+        };
+        let mut application = process.clone();
+        application.kind = ResourceKind::Application;
+        application.name = "Test".into();
+        let mut snapshot = snapshot(application.clone());
+        snapshot.tree.windows_applications = vec![WindowsApplicationUsage {
+            resource: application,
+            processes: vec![process.clone()],
+        }];
+
+        let output = tree(&snapshot, CpuScale::Host);
+        assert!(output.contains("pid -"));
+        assert!(!output.contains("pid 0"));
     }
 
     #[test]
