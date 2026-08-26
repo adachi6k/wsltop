@@ -38,7 +38,7 @@ Collector parsing and accounting are shared between interfaces. `Monitor::sample
 
 ## Sampling flow
 
-`MonitorConfig` carries the interval, flat limit, collector switches, and initial filtering choices. A sample proceeds as follows:
+`MonitorConfig` carries the interval (3000 ms by default), flat limit, collector switches, and initial filtering choices. A sample proceeds as follows:
 
 1. Capture the current `/proc`, additional-distro, and Windows cumulative snapshots.
 2. Wait for the configured sampling interval.

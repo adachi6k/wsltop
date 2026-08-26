@@ -57,7 +57,7 @@ Run `./target/release/wsltop --help` for the complete option reference.
 The flat view is a host-wide activity ranking. Windows and WSL processes appear alongside Docker and WSLC containers. A container is ranked once by its total CPU; optional process rows are an indented explanation of that total, not extra CPU to add to it.
 
 ```text
-wsltop 0.2.0 | flat | refresh 1000ms
+wsltop 0.2.0 | flat | refresh 3000ms
 
 ENV     TYPE         CPU%       MEM       ID/PID COMMAND
 ------------------------------------------------------------------------------------
@@ -123,7 +123,7 @@ wsltop [OPTIONS]
 --json                 Emit JSON; incompatible with --interactive
 --tree                 Show CPU attribution; selects the initial TUI view
 --limit N              Limit flat resources (default: 30)
---interval-ms N        Sampling/refresh interval (default: 1000, minimum: 100)
+--interval-ms N        Sampling/refresh interval (default: 3000, minimum: 100)
 --show-wsl-host        Show raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views
 --wsl-only             Skip Windows, additional-distro, and WSLC collectors
 --no-wslc              Disable WSLC collection
