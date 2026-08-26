@@ -19,6 +19,8 @@ use std::env;
 use std::error::Error;
 use std::time::Duration;
 
+const DEFAULT_INTERVAL_MS: u64 = 3000;
+
 #[derive(Debug)]
 struct Options {
     interval: Duration,
@@ -105,7 +107,7 @@ where
     S: Into<String>,
 {
     let mut options = Options {
-        interval: Duration::from_millis(1000),
+        interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
         limit: 30,
         json: false,
         show_wsl_host: false,
@@ -182,14 +184,15 @@ fn print_help() {
         "wsltop {}\n\n\
 Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: 1000]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes in flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
-        env!("CARGO_PKG_VERSION")
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes in flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
+        env!("CARGO_PKG_VERSION"),
+        DEFAULT_INTERVAL_MS
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args_from, validate_options};
+    use super::{parse_args_from, validate_options, DEFAULT_INTERVAL_MS};
     use crate::render::CpuScale;
 
     #[test]
@@ -197,6 +200,10 @@ mod tests {
         let options = parse_args_from(Vec::<String>::new()).unwrap();
         assert_eq!(options.cpu_scale, CpuScale::Core);
         assert!(!options.cpu_scale_explicit);
+        assert_eq!(
+            options.interval,
+            std::time::Duration::from_millis(DEFAULT_INTERVAL_MS)
+        );
     }
 
     #[test]

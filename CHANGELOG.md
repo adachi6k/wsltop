@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Changed
 
+- The default sampling and TUI refresh interval is 3000 ms, matching the calmer cadence commonly expected from Linux `top`; `--interval-ms` still overrides it.
 - Docker and WSLC aggregate collection is separated from lazily requested process detail; optional collectors use a lower interactive cadence and no longer block local rows.
 - The Windows host logical CPU count is cached after initial discovery instead of querying CIM for every process snapshot.
 - Text and TUI output default to one fully busy logical CPU equaling 100%; internal accounting and JSON remain host-wide.
