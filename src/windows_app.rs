@@ -77,17 +77,17 @@ fn application_identity(
 ) -> (String, String) {
     let base = executable_stem(&process.name);
     if base != "msedgewebview2" {
-        return canonical_identity(&base);
+        return canonical_identity(&process.name);
     }
 
     let Some(pid) = process.pid else {
-        return canonical_identity(&base);
+        return canonical_identity(&process.name);
     };
     let Some(process_metadata) = metadata
         .get(&pid)
         .filter(|item| executable_stem(&item.name) == base)
     else {
-        return canonical_identity(&base);
+        return canonical_identity(&process.name);
     };
     if let Some(owner) = process_metadata
         .command_line
@@ -124,11 +124,11 @@ fn application_identity(
         };
         let owner = executable_stem(&parent_row.name);
         if owner != "msedgewebview2" {
-            return canonical_identity(&owner);
+            return canonical_identity(&parent_row.name);
         }
         parent = Some(parent_metadata.parent_pid);
     }
-    canonical_identity(&base)
+    canonical_identity(&process.name)
 }
 
 fn executable_stem(name: &str) -> String {
@@ -309,6 +309,35 @@ mod tests {
             canonical_identity(r"C:\Program Files\Example App\Example.EXE"),
             ("example".into(), "Example".into())
         );
+    }
+
+    #[test]
+    fn unmapped_application_preserves_display_casing_while_grouping_case_insensitively() {
+        let groups = group_processes(
+            &[row(1, "Code.exe", 1.0), row(2, "CODE.EXE", 2.0)],
+            &WindowsMetadata::new(),
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].resource.name, "Code");
+        assert_eq!(groups[0].resource.cpu_percent, 3.0);
+    }
+
+    #[test]
+    fn webview_preserves_unmapped_parent_display_casing() {
+        let rows = vec![
+            row(10, "CustomHost.EXE", 1.0),
+            row(21, "msedgewebview2", 1.0),
+        ];
+        let metadata = WindowsMetadata::from([
+            (10, metadata(10, 1, "CustomHost.EXE")),
+            (21, metadata(21, 10, "msedgewebview2.exe")),
+        ]);
+        let groups = group_processes(&rows, &metadata);
+        let host = groups
+            .iter()
+            .find(|group| group.resource.name == "CustomHost")
+            .unwrap();
+        assert_eq!(host.processes.len(), 2);
     }
 
     #[test]
