@@ -70,12 +70,13 @@ WSLC    container  5e0c144e6a3c   5.94%      348M          -  mighty_flinders
         residual              -   0.04%          -          -    `- unattributed
 Windows application   (3 PIDs)   4.82%     1.24G  103:27.51  Teams
 Windows application  (12 PIDs)   2.37%     1.68G  248:10.03  Chrome
+Windows application        31460   1.20%      198M  178:27.95  Taskmgr
 WSL     infra                 5   0.05%        4M    0:14.82  plan9
 ```
 
 In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. Windows rows are ranked by application, so multi-process applications such as Teams and Chrome appear once. By default, at most five processes are shown per container and additional processes are summarized.
 
-For a Windows application row, `ID/PID` shows the number of currently observed member processes as `(1 PID)` or `(N PIDs)`. The parentheses distinguish this aggregate count from a real PID; tree view exposes the individual process IDs. JSON retains `pid: null` for application totals.
+For a Windows application row backed by one observed process, `ID/PID` shows that process's real PID. Multi-process applications show `(N PIDs)`; the parentheses distinguish the aggregate count from a real PID. If a single member's PID is unavailable, wsltop falls back to `(1 PID)`. Tree view exposes individual process IDs, while JSON retains `pid: null` for application totals.
 
 Press `t` to switch to the attribution tree and answer a different question: how much of each VM or container total can wsltop explain?
 

@@ -386,7 +386,9 @@ fn display_id(row: &ResourceUsage, tree: &AttributionTree) -> String {
             .map(|application| {
                 let count = application.processes.len();
                 if count == 1 {
-                    "(1 PID)".to_string()
+                    application.processes[0]
+                        .pid
+                        .map_or_else(|| "(1 PID)".to_string(), |pid| pid.to_string())
                 } else {
                     format!("({count} PIDs)")
                 }
@@ -599,6 +601,35 @@ mod tests {
         let mut process = application.clone();
         process.kind = crate::model::ResourceKind::Process;
         process.pid = Some(42);
+        let mut snapshot = snapshot(application.clone());
+        snapshot.resources = vec![application.clone()];
+        snapshot.tree.windows_applications = vec![WindowsApplicationUsage {
+            resource: application,
+            processes: vec![process],
+        }];
+
+        let output = flat(&snapshot, CpuScale::Host);
+        assert!(output.contains("          42"));
+        assert!(!output.contains("(1 PID)"));
+    }
+
+    #[test]
+    fn flat_application_falls_back_when_single_pid_is_unknown() {
+        let application = ResourceUsage {
+            environment: EnvironmentKind::Windows,
+            source: None,
+            kind: ResourceKind::Application,
+            id: "windows-app:test".into(),
+            pid: None,
+            start_id: None,
+            ppid: None,
+            name: "Test".into(),
+            args: None,
+            cpu_percent: 1.0,
+            cpu_time_seconds: Some(2.0),
+            memory_bytes: 3,
+        };
+        let process = application.clone();
         let mut snapshot = snapshot(application.clone());
         snapshot.resources = vec![application.clone()];
         snapshot.tree.windows_applications = vec![WindowsApplicationUsage {
