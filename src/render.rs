@@ -53,8 +53,8 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
     );
     let _ = writeln!(
         out,
-        "{:<7} {:<11} {:>7} {:>10} {:>9} {:>12} COMMAND",
-        "ENV", "TYPE", "CPU%", "TIME+", "MEM", "ID/PID"
+        "{:<7} {:<11} {:>12} {:>7} {:>9} {:>10} COMMAND",
+        "ENV", "TYPE", "ID/PID", "CPU%", "MEM", "TIME+"
     );
     let _ = writeln!(out, "{}", "-".repeat(97));
     for row in &snapshot.resources {
@@ -68,13 +68,13 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
         }
         let _ = writeln!(
             out,
-            "{:<7} {:<11} {:>6.2}% {:>10} {:>9} {:>12}  {}",
+            "{:<7} {:<11} {:>12} {:>6.2}% {:>9} {:>10}  {}",
             env_name(row.environment),
             row.kind.as_str(),
-            scale.value(row.cpu_percent, snapshot.host_logical_cpu_count),
-            format_cpu_time(row.cpu_time_seconds),
-            format_bytes(row.memory_bytes),
             display_id(row),
+            scale.value(row.cpu_percent, snapshot.host_logical_cpu_count),
+            format_bytes(row.memory_bytes),
+            format_cpu_time(row.cpu_time_seconds),
             display_name(row)
         );
         if matches!(
@@ -101,13 +101,13 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                 for process in &displayed {
                     let _ = writeln!(
                         out,
-                        "{:<7} {:<11} {:>6.2}% {:>10} {:>9} {:>12}    |- {}",
+                        "{:<7} {:<11} {:>12} {:>6.2}% {:>9} {:>10}    |- {}",
                         "",
                         "process",
-                        scale.value(process.cpu_percent, snapshot.host_logical_cpu_count),
-                        format_cpu_time(process.cpu_time_seconds),
-                        format_bytes(process.memory_bytes),
                         display_id(process),
+                        scale.value(process.cpu_percent, snapshot.host_logical_cpu_count),
+                        format_bytes(process.memory_bytes),
+                        format_cpu_time(process.cpu_time_seconds),
                         process.name
                     );
                 }
@@ -124,11 +124,11 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                     let omitted_cpu: f64 = omitted.iter().map(|process| process.cpu_percent).sum();
                     let _ = writeln!(
                         out,
-                        "{:<7} {:<11} {:>6.2}% {:>10} {:>9} {:>12}    |- {} more processes",
+                        "{:<7} {:<11} {:>12} {:>6.2}% {:>9} {:>10}    |- {} more processes",
                         "",
                         "processes",
-                        scale.value(omitted_cpu, snapshot.host_logical_cpu_count),
                         "-",
+                        scale.value(omitted_cpu, snapshot.host_logical_cpu_count),
                         "-",
                         "-",
                         omitted.len()
@@ -136,28 +136,28 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                 }
                 let _ = writeln!(
                     out,
-                    "{:<7} {:<11} {:>6.2}% {:>10} {:>9} {:>12}    `- unattributed",
+                    "{:<7} {:<11} {:>12} {:>6.2}% {:>9} {:>10}    `- unattributed",
                     "",
                     "residual",
+                    "-",
                     scale.value(
                         group.unattributed_cpu_percent,
                         snapshot.host_logical_cpu_count
                     ),
-                    "-",
                     "-",
                     "-"
                 );
                 if group.over_attributed_cpu_percent > 0.0 {
                     let _ = writeln!(
                         out,
-                        "{:<7} {:<11} {:>6.2}% {:>10} {:>9} {:>12}    `- over-attributed",
+                        "{:<7} {:<11} {:>12} {:>6.2}% {:>9} {:>10}    `- over-attributed",
                         "",
                         "residual",
+                        "-",
                         scale.value(
                             group.over_attributed_cpu_percent,
                             snapshot.host_logical_cpu_count
                         ),
-                        "-",
                         "-",
                         "-"
                     );
@@ -451,6 +451,31 @@ mod tests {
         assert_eq!(format_cpu_time(None), "-");
         assert_eq!(format_cpu_time(Some(0.0)), "0:00.00");
         assert_eq!(format_cpu_time(Some(3_723.456)), "62:03.46");
+    }
+
+    #[test]
+    fn flat_columns_follow_top_style_process_order() {
+        let row = ResourceUsage {
+            environment: EnvironmentKind::Wsl,
+            source: None,
+            kind: ResourceKind::Process,
+            id: "42".into(),
+            pid: Some(42),
+            start_id: None,
+            ppid: None,
+            name: "worker".into(),
+            args: None,
+            cpu_percent: 1.0,
+            cpu_time_seconds: Some(2.0),
+            memory_bytes: 3,
+        };
+        let output = flat(&snapshot(row), CpuScale::Host);
+        let header = output.lines().nth(1).unwrap();
+        let positions: Vec<_> = ["ID/PID", "CPU%", "MEM", "TIME+", "COMMAND"]
+            .iter()
+            .map(|column| header.find(column).unwrap())
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     fn snapshot(row: ResourceUsage) -> MonitorSnapshot {

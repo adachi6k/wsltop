@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file. The format 
 - Text and TUI output default to one fully busy logical CPU equaling 100%; internal accounting and JSON remain host-wide.
 - Human-readable flat/TUI output ranks Windows applications once while flat JSON preserves PID-level compatibility; interactive metadata discovery is independently scheduled and retains last-good state.
 - Resource JSON optionally includes additive `cpu_time_seconds`; unsupported container process backends retain detail rows without TIME+.
+- Flat/TUI columns follow top-style process ordering: `ID/PID`, `CPU%`, memory, `TIME+`, then command.
 
 ## [0.2.0] - 2026-08-24
 
