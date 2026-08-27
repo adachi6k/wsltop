@@ -18,6 +18,7 @@ pub enum EnvironmentKind {
 #[serde(rename_all = "lowercase")]
 pub enum ResourceKind {
     Process,
+    Application,
     Container,
     Infra,
     Host,
@@ -27,6 +28,7 @@ impl ResourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Process => "process",
+            Self::Application => "application",
             Self::Container => "container",
             Self::Infra => "infra",
             Self::Host => "host",
@@ -91,6 +93,9 @@ pub struct ResourceUsage {
     pub id: String,
     /// Present for process rows and null for non-process resources.
     pub pid: Option<u32>,
+    /// Process creation identity used internally to reject PID reuse.
+    #[serde(skip)]
+    pub start_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ppid: Option<u32>,
     pub name: String,
@@ -110,9 +115,15 @@ pub struct ContainerProcessUsage {
     pub host_pids: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct WindowsApplicationUsage {
+    pub resource: ResourceUsage,
+    pub processes: Vec<ResourceUsage>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ResourceKind;
+    use super::{EnvironmentKind, ResourceKind, ResourceUsage};
 
     #[test]
     fn serializes_infra_kind_for_json_output() {
@@ -120,5 +131,24 @@ mod tests {
             serde_json::to_string(&ResourceKind::Infra).unwrap(),
             "\"infra\""
         );
+    }
+
+    #[test]
+    fn process_generation_is_not_added_to_json_compatibility_rows() {
+        let row = ResourceUsage {
+            environment: EnvironmentKind::Windows,
+            source: None,
+            kind: ResourceKind::Process,
+            id: "42".into(),
+            pid: Some(42),
+            start_id: Some(123),
+            ppid: None,
+            name: "Code".into(),
+            args: None,
+            cpu_percent: 1.0,
+            memory_bytes: 1,
+        };
+        let value = serde_json::to_value(row).unwrap();
+        assert!(value.get("start_id").is_none());
     }
 }

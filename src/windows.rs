@@ -1,10 +1,12 @@
+use crate::command;
 use crate::model::{EnvironmentKind, ProcessKey, ProcessSample, Snapshot, WindowsSnapshot};
+use crate::windows_app::{WindowsMetadata, WindowsProcessMetadata};
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
 use std::process::Command;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 static HOST_LOGICAL_CPU_COUNT: OnceLock<u32> = OnceLock::new();
 
@@ -19,8 +21,54 @@ struct RawWindowsSnapshot {
 struct RawWindowsProcess {
     pid: u32,
     name: String,
+    start_id: u64,
     cpu_time_secs: f64,
     memory_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawMetadataSnapshot {
+    processes: Vec<WindowsProcessMetadata>,
+}
+
+pub fn application_metadata() -> Result<WindowsMetadata, Box<dyn Error>> {
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$items = @(Get-CimInstance Win32_Process | ForEach-Object {
+    [PSCustomObject]@{
+        pid = [uint32]$_.ProcessId
+        parent_pid = [uint32]$_.ParentProcessId
+        name = [string]$_.Name
+        executable_path = if ($null -eq $_.ExecutablePath) { $null } else { [string]$_.ExecutablePath }
+        command_line = if ($null -eq $_.CommandLine) { $null } else { [string]$_.CommandLine }
+        start_id = if ($null -eq $_.CreationDate) { 0 } else { try { [uint64]([DateTime]$_.CreationDate).ToFileTimeUtc() } catch { 0 } }
+    }
+})
+[PSCustomObject]@{ processes = $items } | ConvertTo-Json -Compress -Depth 3
+"#;
+    let output = command::output_with_timeout(
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script]),
+        Duration::from_secs(5),
+    )
+    .map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("Windows application metadata command failed: {error}"),
+        )
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Windows application metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let raw: RawMetadataSnapshot = serde_json::from_slice(&output.stdout)?;
+    Ok(raw
+        .processes
+        .into_iter()
+        .map(|process| (process.pid, process))
+        .collect())
 }
 
 pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
@@ -66,9 +114,7 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
                 environment: EnvironmentKind::Windows,
                 source: None,
                 pid: process.pid,
-                // StartTime is not requested because access can fail for protected processes.
-                // A negative CPU delta is treated as PID reuse by the sampler.
-                start_id: 0,
+                start_id: process.start_id,
             },
             name: process.name,
             cpu_time_secs: process.cpu_time_secs,
@@ -102,9 +148,11 @@ if ($cpuCount -le 0) { throw 'failed to determine the Windows host logical CPU c
 $items = @(Get-Process | ForEach-Object {
     $cpu = $_.CPU
     if ($null -eq $cpu) { $cpu = 0.0 }
+    $startId = try { [uint64]$_.StartTime.ToFileTimeUtc() } catch { 0 }
     [PSCustomObject]@{
         pid = [uint32]$_.Id
         name = [string]$_.ProcessName
+        start_id = $startId
         cpu_time_secs = [double]$cpu
         memory_bytes = [uint64]$_.WorkingSet64
     }
@@ -127,6 +175,8 @@ mod tests {
         let script = snapshot_script(16);
         assert!(script.contains("$cpuCount = [int]16"));
         assert!(script.contains("logical_cpu_count_from_cim = $cpuCountFromCim"));
+        assert!(script.contains("StartTime.ToFileTimeUtc()"));
+        assert!(script.contains("start_id = $startId"));
         assert!(script.contains("[Environment]::ProcessorCount"));
         assert!(!script.contains("__WSLTOP_CPU_COUNT__"));
         assert!(!script.contains("$args"));

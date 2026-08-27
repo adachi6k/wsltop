@@ -80,6 +80,16 @@ The two clamped residuals make sampling behavior explicit:
 
 No proportional scaling is applied to children. A displayed tree is an attribution model, not an additive list to combine with the parent.
 
+## Windows application totals
+
+Human-readable Windows application rows are derived without scaling:
+
+```text
+application_CPU = sum(observed member process CPU)
+```
+
+Member PIDs shown in tree output explain that total and are not additional utilization. Internal and JSON values remain on the host-wide scale; optional core-style display conversion occurs only after grouping.
+
 ## Sampling alignment
 
 Linux `/proc`, PowerShell, remote WSL, WSLC, and Docker snapshots are collected through different interfaces with different latency. Their sampling windows are not atomic or perfectly aligned. Consequently:

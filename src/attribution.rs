@@ -1,4 +1,4 @@
-use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
 use serde::Serialize;
 use std::cmp::Ordering;
 
@@ -29,6 +29,7 @@ pub struct AttributionTree {
     pub unmapped_children: Vec<ResourceUsage>,
     pub docker_groups: Vec<DockerAttributionGroup>,
     pub wslc_groups: Vec<DockerAttributionGroup>,
+    pub windows_applications: Vec<WindowsApplicationUsage>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +138,7 @@ pub fn build_tree_with_docker(
         unmapped_children,
         docker_groups,
         wslc_groups: Vec::new(),
+        windows_applications: Vec::new(),
     }
 }
 
@@ -273,6 +275,7 @@ mod tests {
             kind,
             id: name.to_string(),
             pid: Some(1),
+            start_id: None,
             ppid: None,
             name: name.to_string(),
             args: None,

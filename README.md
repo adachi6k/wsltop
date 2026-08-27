@@ -68,11 +68,12 @@ WSLC    container   5.94%      348M 5e0c144e6a3c  mighty_flinders
         process     5.71%       31M          806    |- cc1plus
         process     0.19%        6M          470    |- ninja
         residual    0.04%          -            -    `- unattributed
-Windows process     1.13%       29M        18352  dllhost
+Windows application 4.82%     1.24G            -  Teams
+Windows application 2.37%     1.68G            -  Chrome
 WSL     infra       0.05%        4M            5  plan9
 ```
 
-In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. By default, at most five processes are shown per container and additional processes are summarized.
+In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. Windows rows are ranked by application, so multi-process applications such as Teams and Chrome appear once. By default, at most five processes are shown per container and additional processes are summarized.
 
 Press `t` to switch to the attribution tree and answer a different question: how much of each VM or container total can wsltop explain?
 
@@ -90,7 +91,7 @@ Docker
    `- unattributed                         0.24%
 ```
 
-All percentages use the Windows host-wide scale: on a 16-logical-CPU machine, one fully occupied logical CPU is approximately `6.25%`.
+The default text/TUI scale treats one fully occupied logical CPU as `100%`; use `--cpu-scale host` for the Windows host-wide scale.
 
 ## Installation
 
@@ -141,6 +142,8 @@ Options that affect collection or the initial view also apply to interactive mod
 Start the terminal UI with `wsltop --interactive`. It draws immediately and accepts partial collector updates instead of waiting for every source. Current-WSL `/proc` data uses a fixed 150 ms startup warmup, then the configured interval. While Windows host discovery is pending, non-Windows collectors use the WSL-visible CPU count and are marked provisional. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` explicitly keeps the WSL-visible scale. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize local sampling.
 
 The TUI retains each collector's last successful result. While collectors start, the footer reports `loading`; after a collector error its previous rows remain visible and the footer reports the error. Docker/WSLC aggregate rows are collected separately from internal process details. Details use a separate bounded queue and five-second command timeout, so slow process inspection does not block aggregate refreshes. Details are requested by tree view or `--show-container-processes`, so the default flat view avoids per-container process commands. Switching to tree view enables them for the next container refresh.
+
+Windows processes are ranked as application totals in human-readable flat/TUI output. Multi-process applications such as Teams, Chrome, and ChatGPT therefore occupy one top-level row. Tree output expands each application into its contributing PIDs. WebView2 ownership uses current parent-PID evidence plus CIM command-line/package metadata; ambiguous helpers remain under a conservative `WebView2` application instead of being assigned by guess. Metadata discovery runs independently in interactive mode and retains its last successful result across transient failures.
 
 Controls:
 
@@ -196,6 +199,10 @@ Docker Desktop containers run in Docker Desktop's own Linux VM, so they are show
 
 A missing `wslc.exe`, missing Docker CLI, or recognized unavailable Docker daemon is treated as an expected absence: its rows are silently omitted and monitoring continues. Unexpected command, output, parse, or per-container attribution failures are reported through the common warning path. Use `--no-wslc` or `--no-docker` to disable a collector intentionally.
 
+## Windows application grouping
+
+Application CPU is exactly the sum of observed member-process CPU; child PIDs explain the application total and must not be added to it. Ordinary processes fall back to conservative executable-name grouping. A WebView2 process joins another application only when command-line, package, or a currently matching parent process provides unambiguous evidence.
+
 ## Multiple WSL distributions
 
 The current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These remote samples are best-effort and introduce more timing skew than direct `/proc` access.
@@ -204,13 +211,13 @@ The current distribution is sampled directly from `/proc`. Other running distrib
 
 ## JSON output
 
-`--json` preserves the flat resource-array schema and host-wide CPU values. Each resource includes fields such as `environment`, `kind`, identity, CPU percentage, and memory bytes. `--cpu-scale core` is rejected with JSON because display scaling does not alter machine-readable values; omitted scale or `--cpu-scale host` is accepted.
+`--json` preserves the PID-level flat resource-array schema and host-wide CPU values. Windows application rows are a human-readable view and do not replace existing Windows PID objects in flat JSON. Each resource includes fields such as `environment`, `kind`, identity, CPU percentage, and memory bytes. `--cpu-scale core` is rejected with JSON because display scaling does not alter machine-readable values; omitted scale or `--cpu-scale host` is accepted.
 
 ```console
 wsltop --once --json
 ```
 
-`--tree --json` emits a structured object containing `host_logical_cpu_count`, attribution groups, Docker subgroups, unmapped children, `unattributed_cpu_percent`, and sampling-skew information.
+`--tree --json` emits a structured object containing `host_logical_cpu_count`, attribution groups, additive Windows application groups, Docker subgroups, unmapped children, `unattributed_cpu_percent`, and sampling-skew information.
 
 JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 

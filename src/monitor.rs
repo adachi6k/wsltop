@@ -1,6 +1,6 @@
 use crate::attribution::{self, AttributionTree};
-use crate::model::{ResourceKind, ResourceUsage};
-use crate::{docker, linux, multiwsl, sampler, windows, wslc};
+use crate::model::{ResourceKind, ResourceUsage, WindowsApplicationUsage};
+use crate::{docker, linux, multiwsl, sampler, windows, windows_app, wslc};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::thread;
@@ -17,6 +17,7 @@ pub struct MonitorConfig {
     pub hide_infra: bool,
     pub show_container_processes: bool,
     pub container_process_limit: usize,
+    pub collect_windows_applications: bool,
 }
 
 pub struct Monitor {
@@ -26,6 +27,7 @@ pub struct Monitor {
 pub struct MonitorSnapshot {
     pub host_logical_cpu_count: u32,
     pub resources: Vec<ResourceUsage>,
+    pub pid_resources: Vec<ResourceUsage>,
     pub tree: AttributionTree,
     pub warnings: Vec<String>,
 }
@@ -112,6 +114,16 @@ impl Monitor {
             .filter(|row| attribution::is_host_resource(row))
             .cloned()
             .collect();
+        let applications = if should_collect_windows_metadata(&self.config, &windows_usage) {
+            windows::application_metadata()
+                .map(|metadata| windows_app::group_processes(&windows_usage, &metadata))
+                .unwrap_or_else(|error| {
+                    warnings.push(format!("Windows application metadata unavailable: {error}"));
+                    windows_app::group_processes(&windows_usage, &Default::default())
+                })
+        } else {
+            Vec::new()
+        };
         let mut tree = attribution::build_tree_with_docker(
             host_cpu_count,
             &hosts,
@@ -120,6 +132,7 @@ impl Monitor {
             &docker_usage,
         );
         attribution::attach_wslc_processes(&mut tree, &wslc_usage.process_resources);
+        tree.windows_applications = applications;
         if self.config.hide_infra {
             attribution::hide_infra(&mut tree);
         }
@@ -150,10 +163,14 @@ impl Monitor {
             }));
         }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
+        let mut pid_resources = resources.clone();
+        prepare_flat_resources(&mut pid_resources, &self.config);
+        apply_windows_application_view(&mut resources, &tree.windows_applications, &self.config);
         prepare_flat_resources(&mut resources, &self.config);
         Ok(MonitorSnapshot {
             host_logical_cpu_count: host_cpu_count,
             resources,
+            pid_resources,
             tree,
             warnings,
         })
@@ -182,6 +199,37 @@ impl Monitor {
             }
         }
     }
+}
+
+fn should_collect_windows_metadata(
+    config: &MonitorConfig,
+    windows_usage: &[ResourceUsage],
+) -> bool {
+    config.collect_windows_applications
+        && !config.wsl_only
+        && windows_usage.iter().any(|row| {
+            row.environment == crate::model::EnvironmentKind::Windows
+                && row.kind == ResourceKind::Process
+        })
+}
+
+fn apply_windows_application_view(
+    resources: &mut Vec<ResourceUsage>,
+    applications: &[WindowsApplicationUsage],
+    config: &MonitorConfig,
+) {
+    if !config.collect_windows_applications || config.wsl_only {
+        return;
+    }
+    resources.retain(|row| {
+        row.environment != crate::model::EnvironmentKind::Windows
+            || row.kind != ResourceKind::Process
+    });
+    resources.extend(
+        applications
+            .iter()
+            .map(|application| application.resource.clone()),
+    );
 }
 
 fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
@@ -244,8 +292,11 @@ pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config:
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_flat_resources, push_unique_warning, MonitorConfig};
-    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+    use super::{
+        apply_windows_application_view, prepare_flat_resources, push_unique_warning,
+        should_collect_windows_metadata, MonitorConfig,
+    };
+    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use std::time::Duration;
 
     fn config() -> MonitorConfig {
@@ -259,6 +310,7 @@ mod tests {
             hide_infra: false,
             show_container_processes: false,
             container_process_limit: 5,
+            collect_windows_applications: true,
         }
     }
 
@@ -269,12 +321,66 @@ mod tests {
             kind,
             id: name.to_string(),
             pid: Some(1),
+            start_id: None,
             ppid: None,
             name: name.to_string(),
             args: None,
             cpu_percent: 1.0,
             memory_bytes: 0,
         }
+    }
+
+    #[test]
+    fn wsl_only_skips_windows_metadata_collection() {
+        let mut config = config();
+        config.wsl_only = true;
+        let windows = vec![resource(
+            EnvironmentKind::Windows,
+            ResourceKind::Process,
+            "Teams",
+        )];
+        assert!(!should_collect_windows_metadata(&config, &windows));
+    }
+
+    #[test]
+    fn pid_only_output_skips_windows_metadata_collection() {
+        let mut config = config();
+        config.collect_windows_applications = false;
+        let windows = vec![resource(
+            EnvironmentKind::Windows,
+            ResourceKind::Process,
+            "Teams",
+        )];
+        assert!(!should_collect_windows_metadata(&config, &windows));
+    }
+
+    #[test]
+    fn pid_only_output_preserves_windows_process_rows() {
+        let mut config = config();
+        config.collect_windows_applications = false;
+        let process = resource(EnvironmentKind::Windows, ResourceKind::Process, "chrome");
+        let mut application = process.clone();
+        application.kind = ResourceKind::Application;
+        let applications = vec![WindowsApplicationUsage {
+            resource: application,
+            processes: vec![process.clone()],
+        }];
+        let mut resources = vec![process];
+
+        apply_windows_application_view(&mut resources, &applications, &config);
+
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].kind, ResourceKind::Process);
+    }
+
+    #[test]
+    fn host_only_windows_rows_skip_metadata_collection() {
+        let windows = vec![resource(
+            EnvironmentKind::Windows,
+            ResourceKind::Host,
+            "vmmemwsl",
+        )];
+        assert!(!should_collect_windows_metadata(&config(), &windows));
     }
 
     #[test]

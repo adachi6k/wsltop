@@ -277,6 +277,7 @@ mod tests {
             hide_infra: true,
             show_container_processes: false,
             container_process_limit: 5,
+            collect_windows_applications: true,
         };
         let state = State::from_config(&config, true, CpuScale::Core);
         assert!(state.tree);
