@@ -1,5 +1,5 @@
 use crate::attribution::{self, AttributionTree};
-use crate::model::{ResourceKind, ResourceUsage};
+use crate::model::{ResourceKind, ResourceUsage, WindowsApplicationUsage};
 use crate::{docker, linux, multiwsl, sampler, windows, windows_app, wslc};
 use std::cmp::Ordering;
 use std::error::Error;
@@ -165,15 +165,7 @@ impl Monitor {
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
         let mut pid_resources = resources.clone();
         prepare_flat_resources(&mut pid_resources, &self.config);
-        resources.retain(|row| {
-            row.environment != crate::model::EnvironmentKind::Windows
-                || row.kind != ResourceKind::Process
-        });
-        resources.extend(
-            tree.windows_applications
-                .iter()
-                .map(|application| application.resource.clone()),
-        );
+        apply_windows_application_view(&mut resources, &tree.windows_applications, &self.config);
         prepare_flat_resources(&mut resources, &self.config);
         Ok(MonitorSnapshot {
             host_logical_cpu_count: host_cpu_count,
@@ -219,6 +211,25 @@ fn should_collect_windows_metadata(
             row.environment == crate::model::EnvironmentKind::Windows
                 && row.kind == ResourceKind::Process
         })
+}
+
+fn apply_windows_application_view(
+    resources: &mut Vec<ResourceUsage>,
+    applications: &[WindowsApplicationUsage],
+    config: &MonitorConfig,
+) {
+    if !config.collect_windows_applications || config.wsl_only {
+        return;
+    }
+    resources.retain(|row| {
+        row.environment != crate::model::EnvironmentKind::Windows
+            || row.kind != ResourceKind::Process
+    });
+    resources.extend(
+        applications
+            .iter()
+            .map(|application| application.resource.clone()),
+    );
 }
 
 fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
@@ -282,9 +293,10 @@ pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config:
 #[cfg(test)]
 mod tests {
     use super::{
-        prepare_flat_resources, push_unique_warning, should_collect_windows_metadata, MonitorConfig,
+        apply_windows_application_view, prepare_flat_resources, push_unique_warning,
+        should_collect_windows_metadata, MonitorConfig,
     };
-    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
+    use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use std::time::Duration;
 
     fn config() -> MonitorConfig {
@@ -340,6 +352,25 @@ mod tests {
             "Teams",
         )];
         assert!(!should_collect_windows_metadata(&config, &windows));
+    }
+
+    #[test]
+    fn pid_only_output_preserves_windows_process_rows() {
+        let mut config = config();
+        config.collect_windows_applications = false;
+        let process = resource(EnvironmentKind::Windows, ResourceKind::Process, "chrome");
+        let mut application = process.clone();
+        application.kind = ResourceKind::Application;
+        let applications = vec![WindowsApplicationUsage {
+            resource: application,
+            processes: vec![process.clone()],
+        }];
+        let mut resources = vec![process];
+
+        apply_windows_application_view(&mut resources, &applications, &config);
+
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].kind, ResourceKind::Process);
     }
 
     #[test]
