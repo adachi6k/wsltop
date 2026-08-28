@@ -57,6 +57,10 @@ fn to_usage(sample: &ProcessSample, cpu_percent: f64) -> ResourceUsage {
         name: sample.name.clone(),
         args: None,
         cpu_percent,
+        cpu_time_seconds: sample
+            .cpu_time_secs
+            .is_finite()
+            .then_some(sample.cpu_time_secs.max(0.0)),
         memory_bytes: sample.memory_bytes,
     }
 }

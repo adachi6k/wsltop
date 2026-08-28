@@ -54,6 +54,12 @@ pub fn group_processes(
                     name: display,
                     args: None,
                     cpu_percent: processes.iter().map(|row| row.cpu_percent).sum(),
+                    cpu_time_seconds: Some(
+                        processes
+                            .iter()
+                            .filter_map(|row| row.cpu_time_seconds)
+                            .sum(),
+                    ),
                     memory_bytes: processes
                         .iter()
                         .map(|row| row.memory_bytes)
@@ -223,6 +229,7 @@ mod tests {
             name: name.into(),
             args: None,
             cpu_percent: cpu,
+            cpu_time_seconds: Some(cpu),
             memory_bytes: 1,
         }
     }
@@ -251,6 +258,7 @@ mod tests {
             .find(|group| group.resource.name == "Teams")
             .unwrap();
         assert_eq!(teams.resource.cpu_percent, 5.5);
+        assert_eq!(teams.resource.cpu_time_seconds, Some(5.5));
         assert_eq!(teams.processes.len(), 2);
     }
 

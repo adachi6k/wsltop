@@ -23,21 +23,21 @@ Unit tests cover CPU delta normalization, resource classification, attribution r
 | Case | Setup / command | Expected result |
 | --- | --- | --- |
 | Windows native processes | `wsltop --once` with interop enabled | Windows rows appear and use host-wide CPU normalization |
-| Windows application grouping | Run Teams, Chrome, ChatGPT, and SearchHost/WebView2 workloads | Flat/TUI ranks application totals once; tree nests contributing PIDs; SearchHost-owned and ambiguous WebView2 helpers are not assigned to Teams |
+| Windows application grouping | Run Teams, Chrome, ChatGPT, and SearchHost/WebView2 workloads | Flat/TUI ranks application totals once; tree nests contributing PIDs; application TIME+ sums live members; SearchHost-owned and ambiguous WebView2 helpers are not assigned to Teams |
 | Current WSL distro | Run a known workload in the invoking distro | Process appears with no remote-distro source label |
 | Second WSL distro | Start another distro, run a workload, then `wsltop --once` | Workload appears labelled with its distro; PID collisions do not merge |
 | WSLC present | Run containers in the default WSLC session | Container rows appear as `WSLC container` |
-| WSLC process attribution | Run identifiable processes in WSLC, then use `--show-container-processes` and `--tree` | Processes appear beneath their WSLC container; the collector's temporary `ps` is absent |
+| WSLC process attribution | Run identifiable processes in WSLC, then use `--show-container-processes` and `--tree` | Processes and available TIME+ appear beneath their WSLC container; the collector's temporary `ps` is absent; an unsupported `time` column falls back without losing rows |
 | WSLC absent | Run without `wslc.exe` installed | WSLC rows are silently omitted; Windows, WSL, and Docker collection continue |
 | Multiple WSLC hosts | Make more than one `vmmemwslc-*` host visible | Tree reports session mapping unresolved and does not guess; flat containers remain |
 | Docker present | Run a busy container | Docker container appears and is host-normalized |
 | Docker CLI absent | Remove Docker CLI from `PATH` | Docker rows are silently omitted; non-Docker monitoring continues |
 | Docker daemon stopped | Stop the daemon or make it unreachable with a recognized connection error | Docker rows are silently omitted; other collectors continue |
 | Unexpected optional collector error | Cause malformed output or an unrecognized command failure | Monitoring continues and the common warning path reports the failure in CLI/TUI |
-| Docker process attribution | Run identifiable processes in a busy Docker Desktop container, then use `--show-container-processes` and `--tree` | Container nests Docker-native processes under an independent Docker group and is not attached to the current WSL VM |
+| Docker process attribution | Run identifiable processes in a busy Docker Desktop container, then use `--show-container-processes` and `--tree` | Container nests Docker-native processes with available TIME+ under an independent Docker group and is not attached to the current WSL VM |
 | Grouped flat limits | Use `--show-container-processes --container-process-limit 2 --limit 5` | Five top-level resources are ranked by their own CPU; each selected container shows at most two processes plus omitted/residual rows |
 | Tree output | `wsltop --tree` | WSL/WSLC hosts are parents with children and non-negative unattributed CPU |
-| Flat JSON | `wsltop --json` | Top-level value remains the compatible PID-level resource array with `kind` fields |
+| Flat JSON | `wsltop --json` | Top-level value remains the compatible PID-level resource array with `kind` fields and optional additive `cpu_time_seconds` |
 | Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, additive Windows application groups, attribution groups, residuals, and unresolved resources |
 | Interactive TUI | `wsltop --interactive` | An immediate loading frame is followed by current-WSL data after the short warmup; slow optional collectors do not block it and keyboard navigation remains responsive |
 | Partial collector failure | Allow a collector to succeed, then fail it during TUI operation | Its last successful rows remain visible and the footer reports the error while other collectors continue updating |

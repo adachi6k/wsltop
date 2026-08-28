@@ -75,6 +75,7 @@ Collector threads do not wait for one another. This makes startup and refresh la
 - stable collector identity and optional PID/PPID
 - display name, optional arguments, and optional source distribution/container
 - host-normalized CPU percentage
+- optional cumulative CPU seconds for process rows and derived application totals
 - collector-provided memory bytes
 
 Classification is intentionally narrow. WSL `plan9` is infrastructure; ordinary WSL processes, including `init` and `systemd`, remain processes. Windows `vmmem`, `vmmemWSL`, and `vmmemwslc-*` processes are host resources used by attribution and hidden from the default flat view.
@@ -107,7 +108,7 @@ unattributed CPU = max(host CPU - known child CPU, 0)
 
 If child samples exceed the parent, attribution records the excess as `over_attributed_cpu_percent` while leaving `unattributed_cpu_percent` at zero. Children are not scaled to force equality. The values remain best-effort because collectors have different latency and snapshot times.
 
-Docker process attribution is owned by the Docker collector and does not depend on the current WSL `/proc`. It parses `docker top <id> -eo pid,ppid,pcpu,rss,comm,args`, normalizes process CPU, and nests those native observations beneath the corresponding container. Docker remains an independent top-level group unless a collector positively proves a Docker-host/VM relationship. In particular, Docker Desktop's VM is not automatically attached to the current WSL VM. The legacy WSL PID-matching path remains available only for a proven shared host PID namespace; an equal numeric PID is not proof.
+Docker process attribution is owned by the Docker collector and does not depend on the current WSL `/proc`. It parses `docker top <id> -eo pid,ppid,pcpu,rss,time,comm,args`, normalizes process CPU, carries cumulative process CPU time when supported, and nests those native observations beneath the corresponding container. A legacy column retry preserves process detail without TIME+ on unsupported backends. Docker remains an independent top-level group unless a collector positively proves a Docker-host/VM relationship. In particular, Docker Desktop's VM is not automatically attached to the current WSL VM. The legacy WSL PID-matching path remains available only for a proven shared host PID namespace; an equal numeric PID is not proof.
 
 The Docker process source is intentionally replaceable: attribution consumes per-container process observations, not `docker top` itself. A future collector can provide two snapshots of container `/proc` cumulative CPU time for interval-aligned measurements, with `docker top` retained as fallback.
 

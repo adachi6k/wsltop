@@ -102,6 +102,9 @@ pub struct ResourceUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
     pub cpu_percent: f64,
+    /// Cumulative CPU time consumed by this resource, in seconds, when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_time_seconds: Option<f64>,
     pub memory_bytes: u64,
 }
 
@@ -146,9 +149,11 @@ mod tests {
             name: "Code".into(),
             args: None,
             cpu_percent: 1.0,
+            cpu_time_seconds: None,
             memory_bytes: 1,
         };
         let value = serde_json::to_value(row).unwrap();
         assert!(value.get("start_id").is_none());
+        assert!(value.get("cpu_time_seconds").is_none());
     }
 }
