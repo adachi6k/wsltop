@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-29
+
 ### Added
 
 - Stateful, partial TUI collector updates with a 150 ms current-WSL startup warmup and independent Windows, additional-WSL, WSLC, and Docker scheduling.
@@ -73,6 +75,7 @@ All notable changes to this project will be documented in this file. The format 
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/adachi6k/wsltop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/adachi6k/wsltop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/adachi6k/wsltop/releases/tag/v0.1.0
