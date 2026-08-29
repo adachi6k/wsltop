@@ -388,9 +388,9 @@ fn display_id(row: &ResourceUsage, tree: &AttributionTree) -> String {
                 if count == 1 {
                     application.processes[0]
                         .pid
-                        .map_or_else(|| "(1 PID)".to_string(), |pid| pid.to_string())
+                        .map_or_else(|| "1 PID".to_string(), |pid| pid.to_string())
                 } else {
-                    format!("({count} PIDs)")
+                    format!("{count} PIDs")
                 }
             })
             .unwrap_or_else(|| "-".to_string());
@@ -579,7 +579,8 @@ mod tests {
             .collect();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].find("  6.25%"), rows[1].find("  6.25%"));
-        assert!(rows[0].contains("(3 PIDs)"));
+        assert!(rows[0].contains("3 PIDs"));
+        assert!(!rows[0].contains("(3 PIDs)"));
     }
 
     #[test]
@@ -610,7 +611,7 @@ mod tests {
 
         let output = flat(&snapshot, CpuScale::Host);
         assert!(output.contains("          42"));
-        assert!(!output.contains("(1 PID)"));
+        assert!(!output.contains("1 PID"));
     }
 
     #[test]
@@ -637,7 +638,9 @@ mod tests {
             processes: vec![process],
         }];
 
-        assert!(flat(&snapshot, CpuScale::Host).contains("(1 PID)"));
+        let output = flat(&snapshot, CpuScale::Host);
+        assert!(output.contains("1 PID"));
+        assert!(!output.contains("(1 PID)"));
     }
 
     #[test]

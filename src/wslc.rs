@@ -41,10 +41,10 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
         return Ok(WslcUsage::default());
     }
 
-    let output = match Command::new("wslc.exe")
-        .args(["stats", "--format", "json", "--no-trunc"])
-        .output()
-    {
+    let output = match command::output_with_timeout(
+        Command::new("wslc.exe").args(["stats", "--format", "json", "--no-trunc"]),
+        Duration::from_secs(5),
+    ) {
         Ok(output) => output,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(WslcUsage::default()),
         Err(e) => return Err(e.into()),

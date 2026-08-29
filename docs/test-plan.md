@@ -27,21 +27,21 @@ Unit tests cover CPU delta normalization, resource classification, attribution r
 | Current WSL distro | Run a known workload in the invoking distro | Process appears with no remote-distro source label |
 | Second WSL distro | Start another distro, run a workload, then `wsltop --once` | Workload appears labelled with its distro; PID collisions do not merge |
 | WSLC present | Run containers in the default WSLC session | Container rows appear as `WSLC container` |
-| WSLC process attribution | Run identifiable processes in WSLC, then use `--show-container-processes` and `--tree` | Processes and available TIME+ appear beneath their WSLC container; the collector's temporary `ps` is absent; an unsupported `time` column falls back without losing rows |
+| WSLC process attribution | Run identifiable processes in WSLC using the default flat view and `--tree` | Processes and available TIME+ appear beneath their WSLC container; the collector's temporary `ps` is absent; an unsupported `time` column falls back without losing rows |
 | WSLC absent | Run without `wslc.exe` installed | WSLC rows are silently omitted; Windows, WSL, and Docker collection continue |
 | Multiple WSLC hosts | Make more than one `vmmemwslc-*` host visible | Tree reports session mapping unresolved and does not guess; flat containers remain |
 | Docker present | Run a busy container | Docker container appears and is host-normalized |
 | Docker CLI absent | Remove Docker CLI from `PATH` | Docker rows are silently omitted; non-Docker monitoring continues |
 | Docker daemon stopped | Stop the daemon or make it unreachable with a recognized connection error | Docker rows are silently omitted; other collectors continue |
 | Unexpected optional collector error | Cause malformed output or an unrecognized command failure | Monitoring continues and the common warning path reports the failure in CLI/TUI |
-| Docker process attribution | Run identifiable processes in a busy Docker Desktop container, then use `--show-container-processes` and `--tree` | Container nests Docker-native processes with available TIME+ under an independent Docker group and is not attached to the current WSL VM |
-| Grouped flat limits | Use `--show-container-processes --container-process-limit 2 --limit 5` | Five top-level resources are ranked by their own CPU; each selected container shows at most two processes plus omitted/residual rows |
+| Docker process attribution | Run identifiable processes in a busy Docker Desktop container, then use the default flat view and `--tree` | Container nests Docker-native processes with available TIME+ under an independent Docker group and is not attached to the current WSL VM |
+| Grouped flat limits | Use `--container-process-limit 2 --limit 5` | Five top-level resources are ranked by their own CPU; each selected container shows at most two processes plus omitted/residual rows |
 | Tree output | `wsltop --tree` | WSL/WSLC hosts are parents with children and non-negative unattributed CPU |
 | Flat JSON | `wsltop --json` | Top-level value remains the compatible PID-level resource array with `kind` fields and optional additive `cpu_time_seconds` |
 | Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, additive Windows application groups, attribution groups, residuals, and unresolved resources |
 | Interactive TUI | `wsltop --interactive` | An immediate loading frame is followed by current-WSL data after the short warmup; slow optional collectors do not block it and keyboard navigation remains responsive |
 | Partial collector failure | Allow a collector to succeed, then fail it during TUI operation | Its last successful rows remain visible and the footer reports the error while other collectors continue updating |
-| Lazy container detail | Start in flat view without `--show-container-processes`, then press `t` | Aggregate container rows appear without per-container commands; process details arrive on the next slow refresh after tree view requests them |
+| Hidden container detail | Start with `--hide-container-processes`, then press `t` | Flat output omits process rows; tree view requests and displays process detail on the next slow refresh |
 | Initial interactive options | Combine `--interactive` with interval, collector switches, limit, tree, infra, and host options | Initial state and all collection/filter choices are honored |
 | Invalid interactive JSON | `wsltop --interactive --json` | Exits with an explicit incompatibility error and restores terminal state |
 | Hide infrastructure | `wsltop --hide-infra` and toggle `i` in TUI | `plan9` infrastructure rows are hidden as selected |

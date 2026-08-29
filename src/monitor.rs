@@ -45,14 +45,44 @@ impl Monitor {
         } else {
             Some(windows::snapshot()?)
         };
+        let collector_cpu_count = windows_before.as_ref().map_or_else(
+            || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
+            |snapshot| snapshot.host_logical_cpu_count,
+        );
+        let collect_wslc = !self.config.wsl_only && !self.config.no_wslc;
+        let collect_docker = !self.config.no_docker;
+        let wslc_worker = collect_wslc.then(|| {
+            thread::spawn(move || {
+                wslc::usage(collector_cpu_count).map_err(|error| error.to_string())
+            })
+        });
+        let docker_worker = collect_docker.then(|| {
+            thread::spawn(move || {
+                docker::usage(collector_cpu_count).map_err(|error| error.to_string())
+            })
+        });
         thread::sleep(self.config.interval);
-        let linux_after = linux::snapshot()?;
-        let extra_after = self.extra_wsl(&mut warnings);
-        let windows_after = if self.config.wsl_only {
-            None
-        } else {
-            Some(windows::snapshot()?)
-        };
+        let after_result = (|| -> Result<_, Box<dyn Error>> {
+            let linux_after = linux::snapshot()?;
+            let extra_after = self.extra_wsl(&mut warnings);
+            let windows_after = if self.config.wsl_only {
+                None
+            } else {
+                Some(windows::snapshot()?)
+            };
+            Ok((linux_after, extra_after, windows_after))
+        })();
+        let mut wslc_result = wslc_worker.map(|worker| {
+            worker
+                .join()
+                .unwrap_or_else(|_| Err("WSLC collector panicked".to_string()))
+        });
+        let mut docker_result = docker_worker.map(|worker| {
+            worker
+                .join()
+                .unwrap_or_else(|_| Err("Docker collector panicked".to_string()))
+        });
+        let (linux_after, extra_after, windows_after) = after_result?;
         let host_cpu_count = windows_after.as_ref().map_or_else(
             || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
             |snapshot| snapshot.host_logical_cpu_count,
@@ -81,10 +111,16 @@ impl Monitor {
             windows_usage =
                 sampler::calculate_usage(&before.snapshot, &after.snapshot, host_cpu_count);
         }
-        let wslc_usage = if self.config.wsl_only || self.config.no_wslc {
-            wslc::WslcUsage::default()
-        } else {
-            match wslc::usage(host_cpu_count) {
+        if collector_cpu_count != host_cpu_count {
+            warnings.push(format!(
+                "container collector results discarded because the Windows logical CPU count changed during sampling ({collector_cpu_count} -> {host_cpu_count})"
+            ));
+            wslc_result = None;
+            docker_result = None;
+        }
+        let wslc_usage = match wslc_result {
+            None => wslc::WslcUsage::default(),
+            Some(result) => match result {
                 Ok(result) => {
                     warnings.extend(result.warnings.iter().cloned());
                     result
@@ -93,12 +129,11 @@ impl Monitor {
                     warnings.push(format!("WSLC collector unavailable: {error}"));
                     wslc::WslcUsage::default()
                 }
-            }
+            },
         };
-        let docker_usage = if self.config.no_docker {
-            Vec::new()
-        } else {
-            match docker::usage(host_cpu_count) {
+        let docker_usage = match docker_result {
+            None => Vec::new(),
+            Some(result) => match result {
                 Ok(result) => {
                     warnings.extend(result.warnings);
                     result.resources
@@ -107,7 +142,7 @@ impl Monitor {
                     warnings.push(format!("Docker collector unavailable: {error}"));
                     Vec::new()
                 }
-            }
+            },
         };
         let hosts: Vec<_> = windows_usage
             .iter()
