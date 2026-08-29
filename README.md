@@ -6,6 +6,8 @@
 
 `wsltop` provides supported CLI and terminal UI interfaces; a graphical UI is outside the current scope.
 
+![wsltop terminal UI showing flat and tree views](docs/assets/wsltop-demo.gif)
+
 ## Why wsltop?
 
 Task Manager may show only a VM aggregate such as `VmmemWSL 35%`. That identifies the host process, but not the guest workload. `wsltop --tree` makes the hierarchy visible:
@@ -39,15 +41,19 @@ Parent and child CPU values are attribution views, not values to add together.
 
 ## Quick start
 
+Download the prebuilt Linux x86_64 archive and checksum from the
+[latest release](https://github.com/adachi6k/wsltop/releases/latest), then:
+
 ```console
-cargo build --release
-./target/release/wsltop --interactive
+tar -xzf wsltop-v*-x86_64-unknown-linux-gnu.tar.gz
+cd wsltop-v*-x86_64-unknown-linux-gnu
+./wsltop --interactive
 ```
 
 For a single sample:
 
 ```console
-./target/release/wsltop --once
+./wsltop --once
 ```
 
 Run `./target/release/wsltop --help` for the complete option reference.
@@ -105,6 +111,9 @@ Requirements:
 - PowerShell available as `powershell.exe` from WSL
 - Optional: `wslc.exe` for WSL Containers data
 - Optional: Docker CLI plus a reachable Docker daemon for Docker data
+
+Prebuilt Linux x86_64 archives and SHA-256 checksums are available from
+[GitHub Releases](https://github.com/adachi6k/wsltop/releases/latest).
 
 Build from source:
 
