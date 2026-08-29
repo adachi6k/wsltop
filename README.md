@@ -56,7 +56,7 @@ For a single sample:
 ./wsltop --once
 ```
 
-Run `./target/release/wsltop --help` for the complete option reference.
+Run `./wsltop --help` for the complete option reference.
 
 ## What the TUI shows
 
