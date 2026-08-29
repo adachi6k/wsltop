@@ -41,7 +41,14 @@ Parent and child CPU values are attribution views, not values to add together.
 
 ## Quick start
 
-Download the prebuilt Linux x86_64 archive and checksum from the
+Install from [crates.io](https://crates.io/crates/wsltop) and start the TUI:
+
+```console
+cargo install --locked wsltop
+wsltop --interactive
+```
+
+Alternatively, download the prebuilt Linux x86_64 archive and checksum from the
 [latest release](https://github.com/adachi6k/wsltop/releases/latest), then:
 
 ```console
@@ -107,13 +114,19 @@ The default text/TUI scale treats one fully occupied logical CPU as `100%`; use 
 Requirements:
 
 - Windows 11 with WSL2 and Windows interoperability enabled
-- A Rust toolchain capable of building the locked dependencies
 - PowerShell available as `powershell.exe` from WSL
 - Optional: `wslc.exe` for WSL Containers data
 - Optional: Docker CLI plus a reachable Docker daemon for Docker data
 
+Install with Cargo (requires a Rust toolchain):
+
+```console
+cargo install --locked wsltop
+```
+
 Prebuilt Linux x86_64 archives and SHA-256 checksums are available from
-[GitHub Releases](https://github.com/adachi6k/wsltop/releases/latest).
+[GitHub Releases](https://github.com/adachi6k/wsltop/releases/latest) and do not
+require a Rust toolchain.
 
 Build from source:
 
