@@ -34,16 +34,16 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<d
     if host_logical_cpu_count == 0 {
         return Ok(DockerUsage::default());
     }
-    let output = match Command::new("docker")
-        .args([
+    let output = match command::output_with_timeout(
+        Command::new("docker").args([
             "stats",
             "--no-stream",
             "--no-trunc",
             "--format",
             "{{json .}}",
-        ])
-        .output()
-    {
+        ]),
+        Duration::from_secs(5),
+    ) {
         Ok(output) => output,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DockerUsage::default()),
         Err(error) => return Err(error.into()),

@@ -41,7 +41,7 @@ Parent and child CPU values are attribution views, not values to add together.
 
 ```console
 cargo build --release
-./target/release/wsltop --interactive --show-container-processes
+./target/release/wsltop --interactive
 ```
 
 For a single sample:
@@ -57,7 +57,7 @@ Run `./target/release/wsltop --help` for the complete option reference.
 The flat view is a host-wide activity ranking. Windows and WSL processes appear alongside Docker and WSLC containers. A container is ranked once by its total CPU; optional process rows are an indented explanation of that total, not extra CPU to add to it.
 
 ```text
-wsltop 0.2.0 | flat | refresh 3000ms
+flat | CPU 1 core = 100% | interval 3000ms
 
 ENV     TYPE               ID/PID    CPU%       MEM      TIME+ COMMAND
 -------------------------------------------------------------------------------------------------
@@ -68,15 +68,15 @@ WSLC    container  5e0c144e6a3c   5.94%      348M          -  mighty_flinders
         process             806   5.71%       31M    4:12.08    |- cc1plus
         process             470   0.19%        6M    0:03.20    |- ninja
         residual              -   0.04%          -          -    `- unattributed
-Windows application   (3 PIDs)   4.82%     1.24G  103:27.51  Teams
-Windows application  (12 PIDs)   2.37%     1.68G  248:10.03  Chrome
+Windows application     3 PIDs   4.82%     1.24G  103:27.51  Teams
+Windows application    12 PIDs   2.37%     1.68G  248:10.03  Chrome
 Windows application        31460   1.20%      198M  178:27.95  Taskmgr
 WSL     infra                 5   0.05%        4M    0:14.82  plan9
 ```
 
 In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. Windows rows are ranked by application, so multi-process applications such as Teams and Chrome appear once. By default, at most five processes are shown per container and additional processes are summarized.
 
-For a Windows application row backed by one observed process, `ID/PID` shows that process's real PID. Multi-process applications show `(N PIDs)`; the parentheses distinguish the aggregate count from a real PID. If a single member's PID is unavailable, wsltop falls back to `(1 PID)`. Tree view exposes individual process IDs, while JSON retains `pid: null` for application totals.
+For a Windows application row backed by one observed process, `ID/PID` shows that process's real PID. Multi-process applications show `N PIDs` without extra punctuation. If a single member's PID is unavailable, wsltop falls back to `1 PID`. Tree view exposes individual process IDs, while JSON retains `pid: null` for application totals.
 
 Press `t` to switch to the attribution tree and answer a different question: how much of each VM or container total can wsltop explain?
 
@@ -132,7 +132,8 @@ wsltop [OPTIONS]
 --wsl-only             Skip Windows, additional-distro, and WSLC collectors
 --no-wslc              Disable WSLC collection
 --no-docker            Disable Docker collection
---show-container-processes Include Docker/WSLC processes in flat output
+--show-container-processes Include Docker/WSLC processes (default for text/TUI)
+--hide-container-processes Hide Docker/WSLC processes from flat output
 --container-process-limit N Show at most N processes per container (default: 5)
 --cpu-scale core|host CPU display scale for text/TUI output (default: core)
 --hide-infra           Hide infrastructure rows
@@ -144,7 +145,7 @@ Options that affect collection or the initial view also apply to interactive mod
 
 Start the terminal UI with `wsltop --interactive`. It draws immediately and accepts partial collector updates instead of waiting for every source. Current-WSL `/proc` data uses a fixed 150 ms startup warmup, then the configured interval. While Windows host discovery is pending, non-Windows collectors use the WSL-visible CPU count and are marked provisional. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` explicitly keeps the WSL-visible scale. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize local sampling.
 
-The TUI retains each collector's last successful result. While collectors start, the footer reports `loading`; after a collector error its previous rows remain visible and the footer reports the error. Docker/WSLC aggregate rows are collected separately from internal process details. Details use a separate bounded queue and five-second command timeout, so slow process inspection does not block aggregate refreshes. Details are requested by tree view or `--show-container-processes`, so the default flat view avoids per-container process commands. Switching to tree view enables them for the next container refresh.
+The TUI retains each collector's last successful result. While collectors start, the footer reports `loading`; after a collector error its previous rows remain visible and the footer reports the error. Docker/WSLC aggregate rows are collected separately from internal process details. Details are enabled by default for text/TUI output and use a separate bounded queue and five-second command timeout, so slow process inspection does not block aggregate refreshes. Use `--hide-container-processes` to skip process rows in flat output.
 
 Windows processes are ranked as application totals in human-readable flat/TUI output. Multi-process applications such as Teams, Chrome, and ChatGPT therefore occupy one top-level row. Tree output expands each application into its contributing PIDs. WebView2 ownership uses current parent-PID evidence plus CIM command-line/package metadata; ambiguous helpers remain under a conservative `WebView2` application instead of being assigned by guess. Metadata discovery runs independently in interactive mode and retains its last successful result across transient failures.
 
@@ -200,7 +201,7 @@ WSLC collection uses the current/default CLI session. A single available `vmmemw
 
 Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,time,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container. If the process backend does not support `time`, wsltop retries the older column set and leaves TIME+ unavailable instead of dropping the container detail.
 
-Docker Desktop containers run in Docker Desktop's own Linux VM, so they are shown under an independent top-level `Docker` group. They are not manufactured as children of the current WSL VM. The legacy current-WSL PID-matching path is used only if sharing of the host PID namespace has been positively established; the current Docker Desktop path does not make that claim. Use `--show-container-processes` to add Docker and WSLC process rows while preserving existing container rows and the default flat schema (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
+Docker Desktop containers run in Docker Desktop's own Linux VM, so they are shown under an independent top-level `Docker` group. They are not manufactured as children of the current WSL VM. The legacy current-WSL PID-matching path is used only if sharing of the host PID namespace has been positively established; the current Docker Desktop path does not make that claim. Text/TUI output includes Docker and WSLC process rows by default while preserving each container row; use `--hide-container-processes` to suppress them (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
 
 A missing `wslc.exe`, missing Docker CLI, or recognized unavailable Docker daemon is treated as an expected absence: its rows are silently omitted and monitoring continues. Unexpected command, output, parse, or per-container attribution failures are reported through the common warning path. Use `--no-wslc` or `--no-docker` to disable a collector intentionally.
 

@@ -9,7 +9,6 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Terminal;
@@ -42,15 +41,11 @@ pub fn run(
             ])
             .areas(frame.area());
             frame.render_widget(
-                Paragraph::new(Line::styled(
-                    format!(
-                        " wsltop {} | {} | CPU {} | refresh {}ms ",
-                        env!("CARGO_PKG_VERSION"),
-                        if state.tree { "tree" } else { "flat" },
-                        state.cpu_scale.label(),
-                        interval.as_millis()
-                    ),
-                    Style::default().fg(Color::Black).bg(Color::Cyan),
+                Paragraph::new(format!(
+                    " {} | CPU {} | interval {}ms",
+                    if state.tree { "tree" } else { "flat" },
+                    state.cpu_scale.label(),
+                    interval.as_millis()
                 )),
                 header,
             );
