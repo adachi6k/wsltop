@@ -26,3 +26,27 @@ jobs:
         run: cargo run --locked -- --help
       - name: Version smoke test
         run: cargo run --locked -- --version
+
+  windows-check:
+    name: Windows compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: Check Windows target
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check --locked --all-targets --target x86_64-pc-windows-gnu
+
+  windows-test:
+    name: Windows tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test Windows implementation
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --locked --all-targets

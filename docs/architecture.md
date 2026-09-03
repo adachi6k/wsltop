@@ -21,7 +21,11 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 
 | Module | Responsibility |
 | --- | --- |
-| `linux.rs` | Snapshot processes from the current distribution's `/proc` |
+| `linux.rs` | Read local `/proc` on Unix and turn parsed records into process snapshots |
+| `linux_proc.rs` | Parse Linux `/proc` stat and command-line records without platform-specific APIs |
+| `command.rs` | Select the target-specific bounded command implementation |
+| `command_unix.rs` | Run bounded commands in a Unix process group and terminate the group on timeout |
+| `command_windows.rs` | Run bounded commands on Windows; currently terminate the direct child pending Job Object support |
 | `windows.rs` | Snapshot Windows process cumulative CPU time and working sets through PowerShell |
 | `windows_app.rs` | Conservatively group Windows PIDs using executable, parent, command-line, and package evidence |
 | `multiwsl.rs` | Discover and snapshot additional running WSL distributions |
@@ -36,6 +40,12 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | `main.rs` | Parse/validate CLI options and choose JSON, text, or interactive presentation |
 
 Collector parsing and accounting are shared between interfaces. `Monitor::sample()` preserves atomic one-shot and JSON behavior. The TUI uses the stateful streaming orchestrator, which publishes the same `MonitorSnapshot` type after each collector event.
+
+Runtime collection remains WSL-native at this stage: `linux.rs` reads the
+invoking distribution's local `/proc`. The target-neutral parser and Windows
+command backend allow Windows compilation, but native Windows collection is not
+enabled yet. A later collector-plan stage will replace the unsupported local
+`/proc` call on Windows with `wsl.exe -d <distribution>` snapshots.
 
 ## Sampling flow
 

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- Windows-target compile checking, native Windows test execution, and target-specific command timeout implementations as groundwork for native Windows collection.
+
+### Changed
+
+- Linux `/proc` parsing is target-neutral and separate from local filesystem collection; `libc` is now a Unix-only dependency.
+
 ## [0.3.0] - 2026-08-29
 
 ### Added
