@@ -23,6 +23,7 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | --- | --- |
 | `linux.rs` | Read local `/proc` on Unix and turn parsed records into process snapshots |
 | `linux_proc.rs` | Parse Linux `/proc` stat and command-line records without platform-specific APIs |
+| `collector.rs` | Define process-snapshot collectors and build the one-shot WSL-native collector plan |
 | `command.rs` | Select the target-specific bounded command implementation |
 | `command_unix.rs` | Run bounded commands in a Unix process group and terminate the group on timeout |
 | `command_windows.rs` | Run bounded commands on Windows; currently terminate the direct child pending Job Object support |
@@ -41,17 +42,22 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 
 Collector parsing and accounting are shared between interfaces. `Monitor::sample()` preserves atomic one-shot and JSON behavior. The TUI uses the stateful streaming orchestrator, which publishes the same `MonitorSnapshot` type after each collector event.
 
-Runtime collection remains WSL-native at this stage: `linux.rs` reads the
-invoking distribution's local `/proc`. The target-neutral parser and Windows
-command backend allow Windows compilation, but native Windows collection is not
-enabled yet. A later collector-plan stage will replace the unsupported local
-`/proc` call on Windows with `wsl.exe -d <distribution>` snapshots.
+Runtime collection remains WSL-native at this stage. For one-shot sampling,
+`CollectorPlan` treats the invoking distribution's local `/proc` collector as
+required, discovers additional running distributions once, and uses one remote
+`wsl.exe` collector per additional distribution for both snapshots. A required
+collector failure aborts the sample; discovery and individual additional-distro
+failures degrade to warnings. The streaming TUI continues to use its existing
+collector scheduling until its later migration. Native Windows collection is
+not enabled yet; a later plan variant will select a required remote WSL
+collector instead of the unsupported local `/proc` call on Windows.
 
 ## Sampling flow
 
 `MonitorConfig` carries the interval (3000 ms by default), flat limit, collector switches, and initial filtering choices. A sample proceeds as follows:
 
-1. Capture the current `/proc`, additional-distro, and Windows cumulative snapshots.
+1. Build the one-shot WSL collector plan, then capture its current-WSL,
+   additional-distro, and Windows cumulative snapshots.
 2. Wait for the configured sampling interval.
 3. Capture the corresponding second snapshots.
 4. Convert matched cumulative-time deltas to host-normalized CPU percentages.

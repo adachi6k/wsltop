@@ -1,6 +1,7 @@
 use crate::attribution::{self, AttributionTree};
+use crate::collector::CollectorPlan;
 use crate::model::{ResourceKind, ResourceUsage, WindowsApplicationUsage};
-use crate::{docker, linux, multiwsl, sampler, windows, windows_app, wslc};
+use crate::{docker, sampler, windows, windows_app, wslc};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::thread;
@@ -38,8 +39,11 @@ impl Monitor {
     }
     pub fn sample(&mut self) -> Result<MonitorSnapshot, Box<dyn Error>> {
         let mut warnings = Vec::new();
-        let linux_before = linux::snapshot()?;
-        let extra_before = self.extra_wsl(&mut warnings);
+        let collector_plan = CollectorPlan::wsl_native(self.config.wsl_only);
+        let linux_before = collector_plan.capture()?;
+        for warning in linux_before.warnings {
+            push_unique_warning(&mut warnings, warning);
+        }
         let windows_before = if self.config.wsl_only {
             None
         } else {
@@ -63,14 +67,13 @@ impl Monitor {
         });
         thread::sleep(self.config.interval);
         let after_result = (|| -> Result<_, Box<dyn Error>> {
-            let linux_after = linux::snapshot()?;
-            let extra_after = self.extra_wsl(&mut warnings);
+            let linux_after = collector_plan.capture()?;
             let windows_after = if self.config.wsl_only {
                 None
             } else {
                 Some(windows::snapshot()?)
             };
-            Ok((linux_after, extra_after, windows_after))
+            Ok((linux_after, windows_after))
         })();
         let mut wslc_result = wslc_worker.map(|worker| {
             worker
@@ -82,7 +85,10 @@ impl Monitor {
                 .join()
                 .unwrap_or_else(|_| Err("Docker collector panicked".to_string()))
         });
-        let (linux_after, extra_after, windows_after) = after_result?;
+        let (linux_after, windows_after) = after_result?;
+        for warning in linux_after.warnings {
+            push_unique_warning(&mut warnings, warning);
+        }
         let host_cpu_count = windows_after.as_ref().map_or_else(
             || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
             |snapshot| snapshot.host_logical_cpu_count,
@@ -94,9 +100,14 @@ impl Monitor {
             );
         }
 
-        let mut linux_usage = sampler::calculate_usage(&linux_before, &linux_after, host_cpu_count);
-        for (name, before) in &extra_before {
-            if let Some((_, after)) = extra_after.iter().find(|(candidate, _)| candidate == name) {
+        let mut linux_usage =
+            sampler::calculate_usage(&linux_before.primary, &linux_after.primary, host_cpu_count);
+        for (name, before) in &linux_before.additional {
+            if let Some((_, after)) = linux_after
+                .additional
+                .iter()
+                .find(|(candidate, _)| candidate == name)
+            {
                 linux_usage.extend(sampler::calculate_usage(before, after, host_cpu_count));
             }
         }
@@ -209,30 +220,6 @@ impl Monitor {
             tree,
             warnings,
         })
-    }
-
-    fn extra_wsl(&self, warnings: &mut Vec<String>) -> Vec<(String, crate::model::Snapshot)> {
-        if self.config.wsl_only {
-            return Vec::new();
-        }
-        match multiwsl::snapshots() {
-            Ok(batch) => {
-                for (source, error) in &batch.failures {
-                    push_unique_warning(
-                        warnings,
-                        format!("additional WSL {source} unavailable: {error}"),
-                    );
-                }
-                batch.snapshots
-            }
-            Err(error) => {
-                push_unique_warning(
-                    warnings,
-                    format!("additional WSL distro discovery unavailable: {error}"),
-                );
-                Vec::new()
-            }
-        }
     }
 }
 
