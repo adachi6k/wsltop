@@ -40,7 +40,8 @@ pub fn cmdline_name(data: &[u8]) -> Option<String> {
     // Use only the Linux separator so a legal backslash in a filename survives.
     let basename = first
         .rsplit(|byte| *byte == b'/')
-        .find(|name| !name.is_empty())
+        .find(|name| !name.is_empty() && *name != b".")
+        .filter(|name| *name != b"..")
         .unwrap_or(first);
     Some(String::from_utf8_lossy(basename).into_owned())
 }
@@ -125,5 +126,7 @@ mod tests {
         );
         assert_eq!(cmdline_name(b"/usr/bin/cmake/\0"), Some("cmake".into()));
         assert_eq!(cmdline_name(b"/\0"), Some("/".into()));
+        assert_eq!(cmdline_name(b"/usr/bin/./\0"), Some("bin".into()));
+        assert_eq!(cmdline_name(b"/usr/bin/../\0"), Some("/usr/bin/../".into()));
     }
 }
