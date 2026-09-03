@@ -2,6 +2,8 @@ mod attribution;
 mod command;
 mod docker;
 mod linux;
+#[cfg_attr(windows, allow(dead_code))]
+mod linux_proc;
 mod model;
 mod monitor;
 mod multiwsl;
