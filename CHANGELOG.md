@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
-- Windows-target compile checking and target-specific command timeout implementations as groundwork for native Windows collection.
+- Windows-target compile checking, native Windows test execution, and target-specific command timeout implementations as groundwork for native Windows collection.
 
 ### Changed
 

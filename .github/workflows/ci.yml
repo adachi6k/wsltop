@@ -38,4 +38,15 @@ jobs:
       - name: Check Windows target
         env:
           RUSTFLAGS: -D warnings
-        run: cargo check --locked --target x86_64-pc-windows-gnu
+        run: cargo check --locked --all-targets --target x86_64-pc-windows-gnu
+
+  windows-test:
+    name: Windows tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test Windows implementation
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --locked --all-targets

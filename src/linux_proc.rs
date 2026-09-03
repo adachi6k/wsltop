@@ -1,5 +1,4 @@
 use std::io;
-use std::path::Path;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Stat<'a> {
@@ -37,12 +36,14 @@ pub fn cmdline_name(data: &[u8]) -> Option<String> {
     if first.is_empty() {
         return None;
     }
-    let full = String::from_utf8_lossy(first);
-    Path::new(full.as_ref())
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_string)
-        .or_else(|| Some(full.into_owned()))
+    // This is a Linux cmdline even when parsed by a Windows-native collector.
+    // Use only the Linux separator so a legal backslash in a filename survives.
+    let basename = first
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(first);
+    Some(String::from_utf8_lossy(basename).into_owned())
 }
 
 fn parse_u64(value: &str, source: &str) -> io::Result<u64> {
@@ -119,5 +120,9 @@ mod tests {
         );
         assert_eq!(cmdline_name(b""), None);
         assert_eq!(cmdline_name(b"\0"), None);
+        assert_eq!(
+            cmdline_name(b"/usr/bin/compiler\\worker\0--build\0"),
+            Some("compiler\\worker".into())
+        );
     }
 }
