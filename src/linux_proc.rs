@@ -2,22 +2,22 @@ use std::io;
 use std::path::Path;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Stat {
-    pub command: String,
+pub struct Stat<'a> {
+    pub command: &'a str,
     pub user_ticks: u64,
     pub system_ticks: u64,
     pub start_ticks: u64,
     pub resident_pages: u64,
 }
 
-pub fn parse_stat(input: &str, source: &str) -> io::Result<Stat> {
+pub fn parse_stat<'a>(input: &'a str, source: &str) -> io::Result<Stat<'a>> {
     let open = input.find('(').ok_or_else(|| invalid_stat(source))?;
     let close = input.rfind(')').ok_or_else(|| invalid_stat(source))?;
     if close <= open {
         return Err(invalid_stat(source));
     }
 
-    let command = input[open + 1..close].to_string();
+    let command = &input[open + 1..close];
     let fields: Vec<&str> = input[close + 1..].split_whitespace().collect();
     if fields.len() <= 21 {
         return Err(invalid_stat(source));
@@ -71,10 +71,13 @@ mod tests {
         fields[19] = "190";
         fields[21] = "7";
         let input = format!("42 (compiler worker) {}", fields.join(" "));
+        let parsed = parse_stat(&input, "/proc/42/stat").unwrap();
+        let command_offset = input.find('(').unwrap() + 1;
+        assert_eq!(parsed.command.as_ptr(), input[command_offset..].as_ptr());
         assert_eq!(
-            parse_stat(&input, "/proc/42/stat").unwrap(),
+            parsed,
             Stat {
-                command: "compiler worker".into(),
+                command: "compiler worker",
                 user_ticks: 120,
                 system_ticks: 30,
                 start_ticks: 190,

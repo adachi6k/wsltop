@@ -34,7 +34,12 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
-            let _ = child.wait();
+            // Waiting for Windows process termination is not guaranteed to be
+            // bounded. Drop the join handles so inherited pipes cannot extend
+            // this API's deadline; the reader threads finish when those pipes
+            // eventually close.
+            drop(stdout_reader);
+            drop(stderr_reader);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("command exceeded {} ms", timeout.as_millis()),

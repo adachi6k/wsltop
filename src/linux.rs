@@ -49,9 +49,10 @@ pub fn snapshot() -> io::Result<Snapshot> {
 #[cfg(unix)]
 fn read_process(pid: u32, clock_ticks: f64, page_size: u64) -> io::Result<ProcessSample> {
     let stat_path = format!("/proc/{pid}/stat");
-    let parsed = linux_proc::parse_stat(&fs::read_to_string(&stat_path)?, &stat_path)?;
+    let stat = fs::read_to_string(&stat_path)?;
+    let parsed = linux_proc::parse_stat(&stat, &stat_path)?;
     let cmdline = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-    let name = linux_proc::cmdline_name(&cmdline).unwrap_or(parsed.command);
+    let name = linux_proc::cmdline_name(&cmdline).unwrap_or_else(|| parsed.command.to_string());
 
     Ok(ProcessSample {
         key: ProcessKey {
