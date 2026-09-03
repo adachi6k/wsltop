@@ -4,11 +4,11 @@ use std::error::Error;
 
 type CollectorError = Box<dyn Error>;
 
-pub trait ProcessSnapshotCollector {
+pub(crate) trait ProcessSnapshotCollector {
     fn snapshot(&self) -> Result<Snapshot, CollectorError>;
 }
 
-pub struct LocalLinuxProcCollector;
+struct LocalLinuxProcCollector;
 
 impl ProcessSnapshotCollector for LocalLinuxProcCollector {
     fn snapshot(&self) -> Result<Snapshot, CollectorError> {
@@ -16,7 +16,7 @@ impl ProcessSnapshotCollector for LocalLinuxProcCollector {
     }
 }
 
-pub struct RemoteWslProcCollector {
+struct RemoteWslProcCollector {
     distro: String,
     source: Option<String>,
 }
@@ -34,20 +34,20 @@ impl ProcessSnapshotCollector for RemoteWslProcCollector {
 }
 
 #[derive(Debug)]
-pub struct CollectedSnapshots {
+pub(crate) struct CollectedSnapshots {
     pub primary: Snapshot,
     pub additional: Vec<(String, Snapshot)>,
     pub warnings: Vec<String>,
 }
 
-pub struct CollectorPlan {
+pub(crate) struct CollectorPlan {
     primary: Box<dyn ProcessSnapshotCollector>,
     additional: Vec<(String, Box<dyn ProcessSnapshotCollector>)>,
     warnings: Vec<String>,
 }
 
 impl CollectorPlan {
-    pub fn wsl_native(wsl_only: bool) -> Self {
+    pub(crate) fn wsl_native(wsl_only: bool) -> Self {
         let mut plan = Self {
             primary: Box::new(LocalLinuxProcCollector),
             additional: Vec::new(),
@@ -80,7 +80,7 @@ impl CollectorPlan {
         plan
     }
 
-    pub fn capture(&self) -> Result<CollectedSnapshots, CollectorError> {
+    pub(crate) fn capture(&self) -> Result<CollectedSnapshots, CollectorError> {
         let primary = self.primary.snapshot()?;
         let mut additional = Vec::new();
         let mut warnings = self.warnings.clone();
