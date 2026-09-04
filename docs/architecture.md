@@ -44,8 +44,10 @@ Collector parsing and accounting are shared between interfaces. `Monitor::sample
 
 Runtime collection remains WSL-native at this stage. For one-shot sampling,
 `CollectorPlan` treats the invoking distribution's local `/proc` collector as
-required, discovers additional running distributions once, and uses one remote
-`wsl.exe` collector per additional distribution for both snapshots. A required
+required, fixes the additional-distribution membership once, and uses one remote
+`wsl.exe` collector per additional distribution for both snapshots. Before each
+optional capture, one batched running-distro check skips distributions that have
+stopped, so observation does not restart them. A required
 collector failure aborts the sample; discovery and individual additional-distro
 failures degrade to warnings. The streaming TUI continues to use its existing
 collector scheduling until its later migration. Native Windows collection is

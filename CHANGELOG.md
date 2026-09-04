@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file. The format 
 ### Changed
 
 - Linux `/proc` parsing is target-neutral and separate from local filesystem collection; `libc` is now a Unix-only dependency.
-- One-shot sampling now discovers additional WSL distributions once per sample and reuses the same collector set across both interval snapshots; optional discovery and distro failures remain warnings.
+- One-shot sampling now fixes the additional WSL collector set once per sample, verifies running status before each optional capture to avoid restarting stopped distributions, and keeps optional discovery and distro failures as warnings.
 
 ## [0.3.0] - 2026-08-29
 
