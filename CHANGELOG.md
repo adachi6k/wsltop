@@ -7,10 +7,12 @@ All notable changes to this project will be documented in this file. The format 
 ### Added
 
 - Windows-target compile checking, native Windows test execution, and target-specific command timeout implementations as groundwork for native Windows collection.
+- A mockable process-snapshot collector boundary and a stable one-shot collector plan for current and additional WSL distributions.
 
 ### Changed
 
 - Linux `/proc` parsing is target-neutral and separate from local filesystem collection; `libc` is now a Unix-only dependency.
+- One-shot sampling now fixes the additional WSL collector set once per sample, verifies running status before each optional capture to avoid restarting stopped distributions, and keeps optional discovery and distro failures as warnings.
 
 ## [0.3.0] - 2026-08-29
 

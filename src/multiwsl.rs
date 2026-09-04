@@ -11,27 +11,36 @@ pub struct SnapshotBatch {
 
 pub fn snapshots() -> Result<SnapshotBatch, Box<dyn Error>> {
     let current = std::env::var("WSL_DISTRO_NAME").ok();
+    let names = running_distros()?;
+    let mut result = SnapshotBatch::default();
+    for name in names {
+        if current.as_deref() == Some(name.as_str()) {
+            continue;
+        }
+        match snapshot(&name, Some(&name)) {
+            Ok(snapshot) => result.snapshots.push((name, snapshot)),
+            Err(error) => result.failures.push((name, error.to_string())),
+        }
+    }
+    Ok(result)
+}
+
+pub fn running_distros() -> Result<Vec<String>, Box<dyn Error>> {
     let output = Command::new("wsl.exe")
         .args(["--list", "--running", "--quiet"])
         .output()?;
     if !output.status.success() {
         return Err("wsl.exe distro discovery failed".into());
     }
-    let names = decode_wsl_text(&output.stdout);
-    let mut result = SnapshotBatch::default();
-    for name in names.lines().map(str::trim).filter(|name| !name.is_empty()) {
-        if current.as_deref() == Some(name) {
-            continue;
-        }
-        match snapshot(name) {
-            Ok(snapshot) => result.snapshots.push((name.to_string(), snapshot)),
-            Err(error) => result.failures.push((name.to_string(), error.to_string())),
-        }
-    }
-    Ok(result)
+    Ok(decode_wsl_text(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
-fn snapshot(distro: &str) -> Result<Snapshot, Box<dyn Error>> {
+pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn Error>> {
     let script = "printf '%s %s\\n' \"$(getconf CLK_TCK)\" \"$(getconf PAGESIZE)\"; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\"; done";
     let output = Command::new("wsl.exe")
         .args(["-d", distro, "--", "sh", "-c", script])
@@ -39,10 +48,10 @@ fn snapshot(distro: &str) -> Result<Snapshot, Box<dyn Error>> {
     if !output.status.success() {
         return Err("remote /proc collection failed".into());
     }
-    parse_snapshot(distro, &String::from_utf8(output.stdout)?)
+    parse_snapshot(source, &String::from_utf8(output.stdout)?)
 }
 
-fn parse_snapshot(distro: &str, text: &str) -> Result<Snapshot, Box<dyn Error>> {
+fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn Error>> {
     let mut lines = text.lines();
     let header: Vec<_> = lines
         .next()
@@ -82,7 +91,7 @@ fn parse_snapshot(distro: &str, text: &str) -> Result<Snapshot, Box<dyn Error>> 
         processes.push(ProcessSample {
             key: ProcessKey {
                 environment: EnvironmentKind::Wsl,
-                source: Some(distro.to_string()),
+                source: source.map(str::to_string),
                 pid,
                 start_id,
             },
@@ -117,12 +126,18 @@ mod tests {
     #[test]
     fn parses_remote_process_and_source() {
         let stat = "42 (worker) S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 777 0 3";
-        let snapshot = parse_snapshot("Ubuntu-2", &format!("100 4096\n{stat}\n")).unwrap();
+        let snapshot = parse_snapshot(Some("Ubuntu-2"), &format!("100 4096\n{stat}\n")).unwrap();
         assert_eq!(
             snapshot.processes[0].key.source.as_deref(),
             Some("Ubuntu-2")
         );
         assert_eq!(snapshot.processes[0].memory_bytes, 12288);
+    }
+    #[test]
+    fn parses_primary_process_without_source() {
+        let stat = "42 (worker) S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 777 0 3";
+        let snapshot = parse_snapshot(None, &format!("100 4096\n{stat}\n")).unwrap();
+        assert_eq!(snapshot.processes[0].key.source, None);
     }
     #[test]
     fn decodes_utf16_distro_list() {
