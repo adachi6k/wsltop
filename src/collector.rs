@@ -149,7 +149,8 @@ impl CollectorPlan {
         } else {
             None
         };
-        let primary = select_primary_distro(requested_distro, default.as_deref(), &running)?;
+        let primary =
+            select_primary_distro(requested_distro, default.as_deref(), &running, &warnings)?;
         let additional = if wsl_only {
             Vec::new()
         } else {
@@ -219,13 +220,22 @@ fn select_primary_distro(
     requested: Option<&str>,
     default: Option<&str>,
     running: &[String],
+    discovery_failures: &[String],
 ) -> Result<String, CollectorError> {
     requested
         .filter(|name| !name.trim().is_empty())
         .or(default)
         .map(str::to_string)
         .or_else(|| running.first().cloned())
-        .ok_or_else(|| "no WSL distribution is available; install one or pass --distro NAME".into())
+        .ok_or_else(|| {
+            let mut message =
+                "no WSL distribution is available; install one or pass --distro NAME".to_string();
+            if !discovery_failures.is_empty() {
+                message.push_str("; discovery failures: ");
+                message.push_str(&discovery_failures.join("; "));
+            }
+            message.into()
+        })
 }
 
 #[cfg(test)]
@@ -333,17 +343,32 @@ mod tests {
     fn primary_distro_selection_prefers_requested_then_default_then_running() {
         let running = vec!["Running".to_string()];
         assert_eq!(
-            select_primary_distro(Some("Requested"), Some("Default"), &running).unwrap(),
+            select_primary_distro(Some("Requested"), Some("Default"), &running, &[]).unwrap(),
             "Requested"
         );
         assert_eq!(
-            select_primary_distro(None, Some("Default"), &running).unwrap(),
+            select_primary_distro(None, Some("Default"), &running, &[]).unwrap(),
             "Default"
         );
         assert_eq!(
-            select_primary_distro(None, None, &running).unwrap(),
+            select_primary_distro(None, None, &running, &[]).unwrap(),
             "Running"
         );
-        assert!(select_primary_distro(None, None, &[]).is_err());
+        assert!(select_primary_distro(None, None, &[], &[]).is_err());
+    }
+
+    #[test]
+    fn primary_distro_selection_preserves_discovery_failures() {
+        let failures = vec![
+            "additional WSL distro discovery unavailable: wsl service failed".to_string(),
+            "default WSL distro discovery unavailable: default query failed".to_string(),
+        ];
+
+        let error = select_primary_distro(None, None, &[], &failures).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "no WSL distribution is available; install one or pass --distro NAME; discovery failures: additional WSL distro discovery unavailable: wsl service failed; default WSL distro discovery unavailable: default query failed"
+        );
     }
 }

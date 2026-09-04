@@ -114,7 +114,8 @@ The default text/TUI scale treats one fully occupied logical CPU as `100%`; use 
 Requirements:
 
 - Windows 11 with WSL2
-- For WSL-native execution, Windows interoperability enabled and PowerShell available as `powershell.exe`
+- PowerShell available as `powershell.exe` for Windows process collection
+- For WSL-native execution, Windows interoperability enabled
 - Optional: `wslc.exe` for WSL Containers data
 - Optional: Docker CLI plus a reachable Docker daemon for Docker data
 
