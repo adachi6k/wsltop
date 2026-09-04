@@ -41,6 +41,7 @@ struct Options {
     container_process_limit: usize,
     cpu_scale: CpuScale,
     cpu_scale_explicit: bool,
+    distro: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -50,8 +51,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn validate_options(options: &Options) -> Result<(), Box<dyn Error>> {
+    validate_options_for_platform(options, cfg!(windows))
+}
+
+fn validate_options_for_platform(
+    options: &Options,
+    windows_native: bool,
+) -> Result<(), Box<dyn Error>> {
     if options.interactive && options.json {
         return Err("--interactive cannot be combined with --json".into());
+    }
+    if windows_native && options.interactive {
+        return Err(
+            "--interactive is not yet supported by the Windows-native executable; use --once"
+                .into(),
+        );
+    }
+    if !windows_native && options.distro.is_some() {
+        return Err("--distro is only supported by the Windows-native executable".into());
     }
     if options.json && options.cpu_scale_explicit && options.cpu_scale == CpuScale::Core {
         return Err("--json uses host-wide CPU values; --cpu-scale core is display-only".into());
@@ -77,7 +94,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         return tui::run(config, options.tree, options.cpu_scale);
     }
 
-    let mut monitor = Monitor::new(config);
+    let mut monitor = Monitor::new(config, options.distro);
     let snapshot = monitor.sample()?;
     for warning in &snapshot.warnings {
         eprintln!("warning: {warning}");
@@ -126,6 +143,7 @@ where
         container_process_limit: 5,
         cpu_scale: CpuScale::Core,
         cpu_scale_explicit: false,
+        distro: None,
     };
 
     let mut args = args.into_iter().map(Into::into);
@@ -135,6 +153,13 @@ where
             "--json" => options.json = true,
             "--show-wsl-host" => options.show_wsl_host = true,
             "--wsl-only" => options.wsl_only = true,
+            "--distro" => {
+                let value = args.next().ok_or("--distro requires a name")?;
+                if value.trim().is_empty() {
+                    return Err("--distro requires a non-empty name".into());
+                }
+                options.distro = Some(value);
+            }
             "--no-wslc" => options.no_wslc = true,
             "--hide-infra" => options.hide_infra = true,
             "--tree" => options.tree = true,
@@ -198,7 +223,7 @@ fn print_help() {
         "wsltop {}\n\n\
 Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --distro NAME          Select the primary WSL distro (Windows-native one-shot only)\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
         env!("CARGO_PKG_VERSION"),
         DEFAULT_INTERVAL_MS
     );
@@ -206,7 +231,9 @@ OPTIONS:\n    --once                 Take one sampled measurement (default behav
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args_from, validate_options, DEFAULT_INTERVAL_MS};
+    use super::{
+        parse_args_from, validate_options, validate_options_for_platform, DEFAULT_INTERVAL_MS,
+    };
     use crate::render::CpuScale;
 
     #[test]
@@ -250,6 +277,25 @@ mod tests {
         let options = parse_args_from(["--cpu-scale", "host"]).unwrap();
         assert_eq!(options.cpu_scale, CpuScale::Host);
         assert!(options.cpu_scale_explicit);
+    }
+
+    #[test]
+    fn parses_primary_distro() {
+        let options = parse_args_from(["--distro", "Ubuntu-24.04"]).unwrap();
+        assert_eq!(options.distro.as_deref(), Some("Ubuntu-24.04"));
+        assert!(parse_args_from(["--distro", ""]).is_err());
+        assert!(parse_args_from(["--distro"]).is_err());
+    }
+
+    #[test]
+    fn platform_validation_limits_distro_and_windows_interactive_modes() {
+        let distro = parse_args_from(["--distro", "Ubuntu"]).unwrap();
+        assert!(validate_options_for_platform(&distro, false).is_err());
+        assert!(validate_options_for_platform(&distro, true).is_ok());
+
+        let interactive = parse_args_from(["--interactive"]).unwrap();
+        assert!(validate_options_for_platform(&interactive, false).is_ok());
+        assert!(validate_options_for_platform(&interactive, true).is_err());
     }
 
     #[test]

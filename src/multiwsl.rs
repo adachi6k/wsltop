@@ -26,11 +26,33 @@ pub fn snapshots() -> Result<SnapshotBatch, Box<dyn Error>> {
 }
 
 pub fn running_distros() -> Result<Vec<String>, Box<dyn Error>> {
+    list_distros(&["--list", "--running", "--quiet"])
+}
+
+#[cfg(windows)]
+pub fn default_distro() -> Result<Option<String>, Box<dyn Error>> {
     let output = Command::new("wsl.exe")
-        .args(["--list", "--running", "--quiet"])
+        .args(["--", "sh", "-c", "printf '%s' \"$WSL_DISTRO_NAME\""])
         .output()?;
     if !output.status.success() {
-        return Err("wsl.exe distro discovery failed".into());
+        return Err(format!(
+            "wsl.exe default distro discovery failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let name = decode_wsl_text(&output.stdout).trim().to_string();
+    Ok((!name.is_empty()).then_some(name))
+}
+
+fn list_distros(args: &[&str]) -> Result<Vec<String>, Box<dyn Error>> {
+    let output = Command::new("wsl.exe").args(args).output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "wsl.exe distro discovery failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
     }
     Ok(decode_wsl_text(&output.stdout)
         .lines()
@@ -46,7 +68,11 @@ pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn 
         .args(["-d", distro, "--", "sh", "-c", script])
         .output()?;
     if !output.status.success() {
-        return Err("remote /proc collection failed".into());
+        return Err(format!(
+            "remote /proc collection for {distro} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
     }
     parse_snapshot(source, &String::from_utf8(output.stdout)?)
 }

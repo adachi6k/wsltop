@@ -81,12 +81,7 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
-        .map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!("failed to execute powershell.exe (is WSL interop enabled?): {e}"),
-            )
-        })?;
+        .map_err(|e| io::Error::new(e.kind(), format!("failed to execute powershell.exe: {e}")))?;
 
     if !output.status.success() {
         return Err(format!(

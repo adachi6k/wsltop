@@ -42,17 +42,19 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 
 Collector parsing and accounting are shared between interfaces. `Monitor::sample()` preserves atomic one-shot and JSON behavior. The TUI uses the stateful streaming orchestrator, which publishes the same `MonitorSnapshot` type after each collector event.
 
-Runtime collection remains WSL-native at this stage. For one-shot sampling,
-`CollectorPlan` treats the invoking distribution's local `/proc` collector as
-required, fixes the additional-distribution membership once, and uses one remote
-`wsl.exe` collector per additional distribution for both snapshots. Before each
-optional capture, one batched running-distro check skips distributions that have
-stopped, so observation does not restart them. A required
+One-shot runtime collection now selects a platform plan. On WSL, `CollectorPlan`
+treats the invoking distribution's local `/proc` collector as required. On
+Windows, it selects `--distro`, the WSL default, or the first running distro (in
+that order) and uses a required remote `wsl.exe` collector with `source: None`.
+Other running distributions use remote collectors with `source: Some(name)`.
+The additional-distribution membership is fixed once; before each optional
+capture, one batched running-distro check skips distributions that have stopped,
+so observation does not restart them. A required
 collector failure aborts the sample; discovery and individual additional-distro
-failures degrade to warnings. The streaming TUI continues to use its existing
-collector scheduling until its later migration. Native Windows collection is
-not enabled yet; a later plan variant will select a required remote WSL
-collector instead of the unsupported local `/proc` call on Windows.
+failures degrade to warnings. Windows PowerShell, WSLC, and Docker collection
+then use the existing one-shot paths. The streaming TUI continues to use its
+existing WSL-native scheduling until its later collector-plan migration, so the
+Windows-native executable currently rejects `--interactive`.
 
 ## Sampling flow
 

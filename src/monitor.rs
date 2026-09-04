@@ -23,6 +23,7 @@ pub struct MonitorConfig {
 
 pub struct Monitor {
     config: MonitorConfig,
+    distro: Option<String>,
 }
 
 pub struct MonitorSnapshot {
@@ -34,12 +35,12 @@ pub struct MonitorSnapshot {
 }
 
 impl Monitor {
-    pub fn new(config: MonitorConfig) -> Self {
-        Self { config }
+    pub fn new(config: MonitorConfig, distro: Option<String>) -> Self {
+        Self { config, distro }
     }
     pub fn sample(&mut self) -> Result<MonitorSnapshot, Box<dyn Error>> {
         let mut warnings = Vec::new();
-        let collector_plan = CollectorPlan::wsl_native(self.config.wsl_only);
+        let collector_plan = CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
         let linux_before = collector_plan.capture()?;
         for warning in linux_before.warnings {
             push_unique_warning(&mut warnings, warning);

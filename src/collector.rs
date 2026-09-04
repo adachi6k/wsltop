@@ -1,5 +1,7 @@
+#[cfg(unix)]
+use crate::linux;
 use crate::model::Snapshot;
-use crate::{linux, multiwsl};
+use crate::multiwsl;
 use std::collections::HashSet;
 use std::error::Error;
 
@@ -21,8 +23,10 @@ impl RunningDistroDiscovery for WslRunningDistroDiscovery {
     }
 }
 
+#[cfg(unix)]
 struct LocalLinuxProcCollector;
 
+#[cfg(unix)]
 impl ProcessSnapshotCollector for LocalLinuxProcCollector {
     fn snapshot(&self) -> Result<Snapshot, CollectorError> {
         Ok(linux::snapshot()?)
@@ -61,6 +65,24 @@ pub(crate) struct CollectorPlan {
 }
 
 impl CollectorPlan {
+    pub(crate) fn native(
+        requested_distro: Option<&str>,
+        wsl_only: bool,
+    ) -> Result<Self, CollectorError> {
+        #[cfg(unix)]
+        {
+            if requested_distro.is_some() {
+                return Err("--distro is only supported by the Windows-native executable".into());
+            }
+            Ok(Self::wsl_native(wsl_only))
+        }
+        #[cfg(windows)]
+        {
+            Self::windows_native(requested_distro, wsl_only)
+        }
+    }
+
+    #[cfg(unix)]
     pub(crate) fn wsl_native(wsl_only: bool) -> Self {
         let mut plan = Self {
             primary: Box::new(LocalLinuxProcCollector),
@@ -93,6 +115,62 @@ impl CollectorPlan {
             )),
         }
         plan
+    }
+
+    #[cfg(windows)]
+    fn windows_native(
+        requested_distro: Option<&str>,
+        wsl_only: bool,
+    ) -> Result<Self, CollectorError> {
+        let mut warnings = Vec::new();
+        let running = if !wsl_only || requested_distro.is_none() {
+            match multiwsl::running_distros() {
+                Ok(distros) => distros,
+                Err(error) => {
+                    if !wsl_only {
+                        warnings.push(format!(
+                            "additional WSL distro discovery unavailable: {error}"
+                        ));
+                    }
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        let default = if requested_distro.is_none() {
+            match multiwsl::default_distro() {
+                Ok(distro) => distro,
+                Err(error) => {
+                    warnings.push(format!("default WSL distro discovery unavailable: {error}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let primary = select_primary_distro(requested_distro, default.as_deref(), &running)?;
+        let additional = if wsl_only {
+            Vec::new()
+        } else {
+            running
+                .into_iter()
+                .filter(|name| !name.eq_ignore_ascii_case(&primary))
+                .map(|name| {
+                    let collector = RemoteWslProcCollector::new(name.clone(), Some(name.clone()));
+                    (
+                        name,
+                        Box::new(collector) as Box<dyn ProcessSnapshotCollector>,
+                    )
+                })
+                .collect()
+        };
+        Ok(Self {
+            primary: Box::new(RemoteWslProcCollector::new(primary, None)),
+            additional,
+            distro_discovery: Box::new(WslRunningDistroDiscovery),
+            warnings,
+        })
     }
 
     pub(crate) fn capture(&self) -> Result<CollectedSnapshots, CollectorError> {
@@ -136,9 +214,26 @@ impl CollectorPlan {
     }
 }
 
+#[cfg(any(windows, test))]
+fn select_primary_distro(
+    requested: Option<&str>,
+    default: Option<&str>,
+    running: &[String],
+) -> Result<String, CollectorError> {
+    requested
+        .filter(|name| !name.trim().is_empty())
+        .or(default)
+        .map(str::to_string)
+        .or_else(|| running.first().cloned())
+        .ok_or_else(|| "no WSL distribution is available; install one or pass --distro NAME".into())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CollectorError, CollectorPlan, ProcessSnapshotCollector, RunningDistroDiscovery};
+    use super::{
+        select_primary_distro, CollectorError, CollectorPlan, ProcessSnapshotCollector,
+        RunningDistroDiscovery,
+    };
     use crate::model::Snapshot;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -232,5 +327,23 @@ mod tests {
             result.warnings,
             ["additional WSL Ubuntu-2 unavailable: distribution is no longer running"]
         );
+    }
+
+    #[test]
+    fn primary_distro_selection_prefers_requested_then_default_then_running() {
+        let running = vec!["Running".to_string()];
+        assert_eq!(
+            select_primary_distro(Some("Requested"), Some("Default"), &running).unwrap(),
+            "Requested"
+        );
+        assert_eq!(
+            select_primary_distro(None, Some("Default"), &running).unwrap(),
+            "Default"
+        );
+        assert_eq!(
+            select_primary_distro(None, None, &running).unwrap(),
+            "Running"
+        );
+        assert!(select_primary_distro(None, None, &[]).is_err());
     }
 }
