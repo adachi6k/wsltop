@@ -155,10 +155,11 @@ where
             "--wsl-only" => options.wsl_only = true,
             "--distro" => {
                 let value = args.next().ok_or("--distro requires a name")?;
-                if value.trim().is_empty() {
+                let value = value.trim();
+                if value.is_empty() {
                     return Err("--distro requires a non-empty name".into());
                 }
-                options.distro = Some(value);
+                options.distro = Some(value.to_string());
             }
             "--no-wslc" => options.no_wslc = true,
             "--hide-infra" => options.hide_infra = true,
@@ -283,6 +284,8 @@ mod tests {
     fn parses_primary_distro() {
         let options = parse_args_from(["--distro", "Ubuntu-24.04"]).unwrap();
         assert_eq!(options.distro.as_deref(), Some("Ubuntu-24.04"));
+        let padded = parse_args_from(["--distro", "  Ubuntu-24.04  "]).unwrap();
+        assert_eq!(padded.distro.as_deref(), Some("Ubuntu-24.04"));
         assert!(parse_args_from(["--distro", ""]).is_err());
         assert!(parse_args_from(["--distro"]).is_err());
     }
