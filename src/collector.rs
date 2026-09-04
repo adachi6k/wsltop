@@ -122,6 +122,13 @@ impl AdditionalStreamCollector {
         }
         let mut result = StreamAdditionalSnapshots::default();
         for (name, collector) in &self.collectors {
+            if self
+                .primary_distro
+                .as_deref()
+                .is_some_and(|primary| primary.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
             if !running
                 .iter()
                 .any(|running_name| running_name.eq_ignore_ascii_case(name))
@@ -190,7 +197,11 @@ impl CollectorPlan {
             Ok(distros) => {
                 plan.additional = distros
                     .into_iter()
-                    .filter(|name| current.as_deref() != Some(name.as_str()))
+                    .filter(|name| {
+                        !current
+                            .as_deref()
+                            .is_some_and(|primary| primary.eq_ignore_ascii_case(name))
+                    })
                     .map(|name| {
                         let collector =
                             RemoteWslProcCollector::new(name.clone(), Some(name.clone()));
@@ -627,6 +638,27 @@ mod tests {
             error.to_string(),
             "no WSL distribution is available; install one or pass --distro NAME; discovery failures: additional WSL distro discovery unavailable: wsl service failed; default WSL distro discovery unavailable: default query failed"
         );
+    }
+
+    #[test]
+    fn stream_never_samples_a_preseeded_primary_as_additional() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let plan = CollectorPlan {
+            primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: Some("Ubuntu-2".to_string()),
+            additional: vec![(
+                "ubuntu-2".to_string(),
+                Box::new(CountingCollector(Arc::clone(&calls))),
+            )],
+            distro_discovery: Box::new(StubDiscovery(Ok(vec!["UBUNTU-2".to_string()]))),
+            warnings: Vec::new(),
+        };
+
+        let mut stream = plan.into_stream();
+        let additional = stream.additional.snapshot().unwrap();
+        assert!(additional.snapshots.is_empty());
+        assert!(additional.running_sources.is_empty());
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 
     #[test]
