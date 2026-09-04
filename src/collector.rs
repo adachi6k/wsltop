@@ -94,6 +94,18 @@ pub(crate) struct AdditionalStreamCollector {
 
 impl AdditionalStreamCollector {
     pub(crate) fn snapshot(&mut self) -> Result<StreamAdditionalSnapshots, String> {
+        self.snapshot_with_factory(|name| {
+            Box::new(RemoteWslProcCollector::new(
+                name.to_string(),
+                Some(name.to_string()),
+            ))
+        })
+    }
+
+    fn snapshot_with_factory(
+        &mut self,
+        mut make_collector: impl FnMut(&str) -> Box<dyn ProcessSnapshotCollector>,
+    ) -> Result<StreamAdditionalSnapshots, String> {
         let running: HashSet<_> = self
             .distro_discovery
             .running_distros()
@@ -111,13 +123,7 @@ impl AdditionalStreamCollector {
                     .iter()
                     .any(|(existing, _)| existing.eq_ignore_ascii_case(name))
             {
-                self.collectors.push((
-                    name.clone(),
-                    Box::new(RemoteWslProcCollector::new(
-                        name.clone(),
-                        Some(name.clone()),
-                    )),
-                ));
+                self.collectors.push((name.clone(), make_collector(name)));
             }
         }
         let mut result = StreamAdditionalSnapshots::default();
@@ -480,6 +486,55 @@ mod tests {
     }
 
     struct CountingCollector(Arc<AtomicUsize>);
+
+    #[test]
+    fn stream_discovers_and_samples_a_new_distro_without_sampling_primary() {
+        struct ChangingDiscovery(AtomicUsize);
+
+        impl RunningDistroDiscovery for ChangingDiscovery {
+            fn running_distros(&self) -> Result<Vec<String>, CollectorError> {
+                let pass = self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(match pass {
+                    0 => vec!["UBUNTU".into()],
+                    1 => vec!["ubuntu".into(), "Debian".into()],
+                    _ => vec!["Ubuntu".into(), "DEBIAN".into()],
+                })
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut created = Vec::new();
+        let mut make_collector = |name: &str| -> Box<dyn ProcessSnapshotCollector> {
+            created.push(name.to_string());
+            Box::new(CountingCollector(Arc::clone(&calls)))
+        };
+        let mut collector = super::AdditionalStreamCollector {
+            collectors: Vec::new(),
+            distro_discovery: Box::new(ChangingDiscovery(AtomicUsize::new(0))),
+            primary_distro: Some("Ubuntu".into()),
+        };
+
+        let initial = collector
+            .snapshot_with_factory(&mut make_collector)
+            .unwrap();
+        assert!(initial.running_sources.is_empty());
+        assert!(initial.snapshots.is_empty());
+        assert!(collector.collectors.is_empty());
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        for expected_calls in 1..=2 {
+            let update = collector
+                .snapshot_with_factory(&mut make_collector)
+                .unwrap();
+            assert_eq!(collector.collectors.len(), 1);
+            assert_eq!(update.running_sources, ["Debian".into()].into());
+            assert_eq!(update.snapshots.len(), 1);
+            assert_eq!(update.snapshots[0].0, "Debian");
+            assert!(update.failures.is_empty());
+            assert_eq!(calls.load(Ordering::Relaxed), expected_calls);
+        }
+        assert_eq!(created, ["Debian"]);
+    }
 
     impl ProcessSnapshotCollector for CountingCollector {
         fn snapshot(&self) -> Result<Snapshot, CollectorError> {

@@ -177,7 +177,16 @@ impl Aggregate {
             self.docker_detail_warnings.clone_from(&usage.warnings);
             return;
         }
-        self.pending.remove(name);
+        let baseline_only = matches!(
+            &event,
+            Event::ExtraWsl(Normalized { value: Ok(update), .. })
+                if !update.running_sources.is_empty()
+                    && update.successful_sources.is_empty()
+                    && update.failures.is_empty()
+        );
+        if !baseline_only {
+            self.pending.remove(name);
+        }
         let result = match event {
             Event::HostCpuCount(_) => unreachable!(),
             Event::CollectorWarnings(_) => unreachable!(),
@@ -595,6 +604,7 @@ fn calculate_additional_update(
     let successful_sources = after
         .snapshots
         .iter()
+        .filter(|(name, _)| before.contains_key(name))
         .map(|(name, _)| name.clone())
         .collect();
     let mut rows = Vec::new();
@@ -953,8 +963,40 @@ mod tests {
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || wait(&worker_stop, Duration::from_secs(2)));
         thread::sleep(Duration::from_millis(20));
+        let shutdown_started = Instant::now();
         stop.store(true, Ordering::Relaxed);
         assert!(!worker.join().unwrap());
+        assert!(shutdown_started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn additional_loading_waits_for_delta_or_no_running_distros() {
+        let mut aggregate = Aggregate::new(&config());
+        let mut before = BTreeMap::new();
+        let sample = || StreamAdditionalSnapshots {
+            snapshots: vec![("Debian".into(), empty_snapshot())],
+            running_sources: BTreeSet::from(["Debian".into()]),
+            failures: BTreeMap::new(),
+        };
+        let baseline = calculate_additional_update(&mut before, sample(), fallback_cpu_count());
+        assert!(baseline.successful_sources.is_empty());
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(baseline))));
+        assert!(aggregate.pending.contains("additional WSL"));
+        assert!(aggregate.extra_wsl.is_empty());
+
+        let delta = calculate_additional_update(&mut before, sample(), fallback_cpu_count());
+        assert!(delta.successful_sources.contains("Debian"));
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(delta))));
+        assert!(!aggregate.pending.contains("additional WSL"));
+
+        let mut aggregate = Aggregate::new(&config());
+        let stopped = calculate_additional_update(
+            &mut before,
+            StreamAdditionalSnapshots::default(),
+            fallback_cpu_count(),
+        );
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(stopped))));
+        assert!(!aggregate.pending.contains("additional WSL"));
     }
 
     #[test]
