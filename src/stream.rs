@@ -1,6 +1,7 @@
 use crate::attribution;
 use crate::collector::{
-    AdditionalStreamCollector, CollectorPlan, PrimaryStreamCollector, StreamAdditionalSnapshots,
+    AdditionalStreamCollector, PrimaryStreamCollector, StreamAdditionalSnapshots,
+    StreamCollectorPlan,
 };
 use crate::docker::DockerUsage;
 use crate::model::{ContainerProcessUsage, ResourceUsage};
@@ -429,14 +430,13 @@ pub fn run(
         Ok(value) => value.clone(),
         Err(_) => return,
     };
-    let collector_plan = match CollectorPlan::native(distro.as_deref(), initial.wsl_only) {
+    let collector_plan = match StreamCollectorPlan::native(distro.as_deref()) {
         Ok(plan) => plan,
         Err(error) => {
             let _ = output.send(Err(error.to_string()));
             return;
         }
     };
-    let collector_plan = collector_plan.into_stream();
     let host_cpu_count = Arc::new(AtomicU32::new(fallback_cpu_count()));
     let (sender, receiver) = mpsc::channel();
     let _ = sender.send(Event::CollectorWarnings(collector_plan.warnings));

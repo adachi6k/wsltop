@@ -153,6 +153,15 @@ pub(crate) struct StreamCollectorPlan {
     pub warnings: Vec<String>,
 }
 
+impl StreamCollectorPlan {
+    pub(crate) fn native(requested_distro: Option<&str>) -> Result<Self, CollectorError> {
+        // Build only the primary synchronously. On Windows this may still need
+        // discovery to select a default/fallback primary. Additional distro
+        // discovery belongs to the additional stream worker, even in full mode.
+        CollectorPlan::native(requested_distro, true).map(CollectorPlan::into_stream)
+    }
+}
+
 pub(crate) struct CollectorPlan {
     primary: Box<dyn ProcessSnapshotCollector>,
     primary_distro: Option<String>,
@@ -436,6 +445,20 @@ mod tests {
 
     struct StubDiscovery(Result<Vec<String>, &'static str>);
 
+    struct ForbiddenDiscovery;
+
+    impl RunningDistroDiscovery for ForbiddenDiscovery {
+        fn running_distros(&self) -> Result<Vec<String>, CollectorError> {
+            panic!("optional running-distro discovery must be deferred");
+        }
+    }
+
+    impl DefaultDistroDiscovery for ForbiddenDiscovery {
+        fn default_distro(&self) -> Result<Option<String>, CollectorError> {
+            panic!("explicit primary must not require default discovery");
+        }
+    }
+
     impl RunningDistroDiscovery for StubDiscovery {
         fn running_distros(&self) -> Result<Vec<String>, CollectorError> {
             match &self.0 {
@@ -711,7 +734,7 @@ mod tests {
 
     #[test]
     fn windows_native_spec_wsl_only_uses_default_without_additional_collectors() {
-        let running = StubDiscovery(Err("running discovery must not be called"));
+        let running = ForbiddenDiscovery;
         let default = StubDefaultDiscovery(Ok(Some("Ubuntu".to_string())));
 
         let spec = windows_native_spec(None, true, &running, &default).unwrap();
@@ -720,6 +743,41 @@ mod tests {
         assert_eq!(spec.primary.source, None);
         assert!(spec.additional.is_empty());
         assert!(spec.warnings.is_empty());
+    }
+
+    #[test]
+    fn stream_primary_selection_skips_discovery_for_explicit_windows_distro() {
+        let spec = windows_native_spec(
+            Some("Ubuntu"),
+            true,
+            &ForbiddenDiscovery,
+            &ForbiddenDiscovery,
+        )
+        .unwrap();
+
+        assert_eq!(spec.primary.distro, "Ubuntu");
+        assert!(spec.additional.is_empty());
+        assert!(spec.warnings.is_empty());
+    }
+
+    #[test]
+    fn stream_primary_selection_preserves_windows_running_fallback() {
+        let running = StubDiscovery(Ok(vec!["Debian".to_string(), "Ubuntu".to_string()]));
+        let default = StubDefaultDiscovery(Ok(None));
+        let spec = windows_native_spec(None, true, &running, &default).unwrap();
+
+        assert_eq!(spec.primary.distro, "Debian");
+        assert!(spec.additional.is_empty());
+        assert!(spec.warnings.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_stream_starts_with_only_the_local_primary() {
+        let plan = super::StreamCollectorPlan::native(None).unwrap();
+        assert!(plan.additional.collectors.is_empty());
+        assert!(plan.warnings.is_empty());
+        assert!(plan.primary.snapshot().is_ok());
     }
 
     #[test]
