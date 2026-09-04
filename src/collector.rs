@@ -229,6 +229,10 @@ fn windows_native_spec(
                     warnings.push(format!(
                         "additional WSL distro discovery unavailable: {error}"
                     ));
+                } else if requested_distro.is_none() {
+                    warnings.push(format!(
+                        "running WSL distro fallback discovery unavailable: {error}"
+                    ));
                 }
                 Vec::new()
             }
@@ -485,5 +489,17 @@ mod tests {
 
         assert!(error.to_string().contains("running query failed"));
         assert!(error.to_string().contains("default query failed"));
+    }
+
+    #[test]
+    fn windows_native_wsl_only_preserves_running_fallback_failure() {
+        let running = StubDiscovery(Err("running fallback failed"));
+        let default = StubDefaultDiscovery(Ok(None));
+
+        let error = windows_native_spec(None, true, &running, &default).unwrap_err();
+
+        assert!(error.to_string().contains(
+            "running WSL distro fallback discovery unavailable: running fallback failed"
+        ));
     }
 }
