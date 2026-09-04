@@ -271,7 +271,10 @@ impl CollectorPlan {
             }
         };
         for (name, collector) in &self.additional {
-            if !running.contains(name) {
+            if !running
+                .iter()
+                .any(|running_name| running_name.eq_ignore_ascii_case(name))
+            {
                 warnings.push(format!(
                     "additional WSL {name} unavailable: distribution is no longer running"
                 ));
@@ -522,6 +525,27 @@ mod tests {
             result.warnings,
             ["additional WSL Ubuntu-2 unavailable: distribution is no longer running"]
         );
+    }
+
+    #[test]
+    fn capture_running_membership_is_case_insensitive() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let plan = CollectorPlan {
+            primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: None,
+            additional: vec![(
+                "Ubuntu-2".to_string(),
+                Box::new(CountingCollector(Arc::clone(&calls))),
+            )],
+            distro_discovery: Box::new(StubDiscovery(Ok(vec!["ubuntu-2".to_string()]))),
+            warnings: Vec::new(),
+        };
+
+        let result = plan.capture().unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(result.additional.len(), 1);
+        assert_eq!(result.additional[0].0, "Ubuntu-2");
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
