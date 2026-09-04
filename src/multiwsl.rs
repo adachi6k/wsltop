@@ -1,6 +1,8 @@
 use crate::model::{EnvironmentKind, ProcessKey, ProcessSample, Snapshot};
 use std::error::Error;
+use std::io::Write;
 use std::process::Command;
+use std::process::{Output, Stdio};
 use std::time::Instant;
 
 #[derive(Default)]
@@ -31,9 +33,7 @@ pub fn running_distros() -> Result<Vec<String>, Box<dyn Error>> {
 
 #[cfg(windows)]
 pub fn default_distro() -> Result<Option<String>, Box<dyn Error>> {
-    let output = Command::new("wsl.exe")
-        .args(["--", "sh", "-c", "printf '%s' \"$WSL_DISTRO_NAME\""])
-        .output()?;
+    let output = run_wsl_script(None, "printf '%s' \"$WSL_DISTRO_NAME\"")?;
     if !output.status.success() {
         return Err(format!(
             "wsl.exe default distro discovery failed: {}",
@@ -64,17 +64,37 @@ fn list_distros(args: &[&str]) -> Result<Vec<String>, Box<dyn Error>> {
 
 pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn Error>> {
     let script = "printf '%s %s\\n' \"$(getconf CLK_TCK)\" \"$(getconf PAGESIZE)\"; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\"; done";
-    let output = Command::new("wsl.exe")
-        .args(["-d", distro, "--", "sh", "-c", script])
-        .output()?;
+    let output = run_wsl_script(Some(distro), script)?;
     if !output.status.success() {
         return Err(format!(
-            "remote /proc collection for {distro} failed: {}",
+            "remote /proc collection for {distro} failed with {}: {}",
+            output.status,
             decode_wsl_text(&output.stderr).trim()
         )
         .into());
     }
     parse_snapshot(source, &String::from_utf8(output.stdout)?)
+}
+
+fn run_wsl_script(distro: Option<&str>, script: &str) -> Result<Output, Box<dyn Error>> {
+    let mut command = Command::new("wsl.exe");
+    if let Some(distro) = distro {
+        command.args(["-d", distro]);
+    }
+    // Passing a shell program as a `sh -c` argument is unreliable because wsl.exe applies
+    // Windows command-line parsing before forwarding it. stdin preserves the script exactly.
+    let mut child = command
+        .args(["--", "sh"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or("failed to open wsl.exe stdin")?
+        .write_all(script.as_bytes())?;
+    Ok(child.wait_with_output()?)
 }
 
 fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn Error>> {
