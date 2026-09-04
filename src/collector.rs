@@ -221,7 +221,18 @@ fn windows_native_spec(
     default_discovery: &dyn DefaultDistroDiscovery,
 ) -> Result<WindowsNativeSpec, CollectorError> {
     let mut warnings = Vec::new();
-    let running = if !wsl_only || requested_distro.is_none() {
+    let default = if requested_distro.is_none() {
+        match default_discovery.default_distro() {
+            Ok(distro) => distro,
+            Err(error) => {
+                warnings.push(format!("default WSL distro discovery unavailable: {error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let running = if !wsl_only || (requested_distro.is_none() && default.is_none()) {
         match running_discovery.running_distros() {
             Ok(distros) => distros,
             Err(error) => {
@@ -239,17 +250,6 @@ fn windows_native_spec(
         }
     } else {
         Vec::new()
-    };
-    let default = if requested_distro.is_none() {
-        match default_discovery.default_distro() {
-            Ok(distro) => distro,
-            Err(error) => {
-                warnings.push(format!("default WSL distro discovery unavailable: {error}"));
-                None
-            }
-        }
-    } else {
-        None
     };
     let primary = select_primary_distro(requested_distro, default.as_deref(), &running, &warnings)?;
     let additional = if wsl_only {
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn windows_native_spec_wsl_only_uses_default_without_additional_collectors() {
-        let running = StubDiscovery(Ok(vec!["Debian".to_string()]));
+        let running = StubDiscovery(Err("running discovery must not be called"));
         let default = StubDefaultDiscovery(Ok(Some("Ubuntu".to_string())));
 
         let spec = windows_native_spec(None, true, &running, &default).unwrap();
