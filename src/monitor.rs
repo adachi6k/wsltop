@@ -95,10 +95,7 @@ impl Monitor {
             |snapshot| snapshot.host_logical_cpu_count,
         );
         if self.config.wsl_only {
-            warnings.push(
-                "--wsl-only uses the WSL-visible logical CPU count; exact host normalization and Windows host attribution require Windows interop"
-                    .to_string(),
-            );
+            warnings.push(wsl_only_warning().to_string());
         }
 
         let mut linux_usage =
@@ -224,6 +221,16 @@ impl Monitor {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn wsl_only_warning() -> &'static str {
+    "--wsl-only uses the Windows logical CPU count but disables Windows host attribution"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wsl_only_warning() -> &'static str {
+    "--wsl-only uses the WSL-visible logical CPU count; exact host normalization and Windows host attribution require Windows interop"
+}
+
 fn should_collect_windows_metadata(
     config: &MonitorConfig,
     windows_usage: &[ResourceUsage],
@@ -317,7 +324,7 @@ pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config:
 mod tests {
     use super::{
         apply_windows_application_view, prepare_flat_resources, push_unique_warning,
-        should_collect_windows_metadata, MonitorConfig,
+        should_collect_windows_metadata, wsl_only_warning, MonitorConfig,
     };
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use std::time::Duration;
@@ -364,6 +371,21 @@ mod tests {
             "Teams",
         )];
         assert!(!should_collect_windows_metadata(&config, &windows));
+    }
+
+    #[test]
+    fn wsl_only_warning_matches_the_native_platform() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            wsl_only_warning(),
+            "--wsl-only uses the Windows logical CPU count but disables Windows host attribution"
+        );
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            wsl_only_warning(),
+            "--wsl-only uses the WSL-visible logical CPU count; exact host normalization and Windows host attribution require Windows interop"
+        );
     }
 
     #[test]
