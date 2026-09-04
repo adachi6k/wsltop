@@ -50,10 +50,10 @@ impl Monitor {
         } else {
             Some(windows::snapshot()?)
         };
-        let collector_cpu_count = windows_before.as_ref().map_or_else(
-            || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
-            |snapshot| snapshot.host_logical_cpu_count,
-        );
+        let collector_cpu_count = match windows_before.as_ref() {
+            Some(snapshot) => snapshot.host_logical_cpu_count,
+            None => wsl_only_host_cpu_count()?,
+        };
         let collect_wslc = !self.config.wsl_only && !self.config.no_wslc;
         let collect_docker = !self.config.no_docker;
         let wslc_worker = collect_wslc.then(|| {
@@ -90,10 +90,11 @@ impl Monitor {
         for warning in linux_after.warnings {
             push_unique_warning(&mut warnings, warning);
         }
-        let host_cpu_count = windows_after.as_ref().map_or_else(
-            || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
-            |snapshot| snapshot.host_logical_cpu_count,
-        );
+        let host_cpu_count = windows_after
+            .as_ref()
+            .map_or(collector_cpu_count, |snapshot| {
+                snapshot.host_logical_cpu_count
+            });
         if self.config.wsl_only {
             warnings.push(wsl_only_warning().to_string());
         }
@@ -219,6 +220,16 @@ impl Monitor {
             warnings,
         })
     }
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_only_host_cpu_count() -> Result<u32, Box<dyn Error>> {
+    windows::host_logical_cpu_count()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wsl_only_host_cpu_count() -> Result<u32, Box<dyn Error>> {
+    Ok(std::thread::available_parallelism().map_or(1, |count| count.get() as u32))
 }
 
 #[cfg(target_os = "windows")]
