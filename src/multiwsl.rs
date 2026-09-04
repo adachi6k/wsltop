@@ -37,7 +37,7 @@ pub fn default_distro() -> Result<Option<String>, Box<dyn Error>> {
     if !output.status.success() {
         return Err(format!(
             "wsl.exe default distro discovery failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            decode_wsl_text(&output.stderr).trim()
         )
         .into());
     }
@@ -50,7 +50,7 @@ fn list_distros(args: &[&str]) -> Result<Vec<String>, Box<dyn Error>> {
     if !output.status.success() {
         return Err(format!(
             "wsl.exe distro discovery failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            decode_wsl_text(&output.stderr).trim()
         )
         .into());
     }
@@ -70,7 +70,7 @@ pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn 
     if !output.status.success() {
         return Err(format!(
             "remote /proc collection for {distro} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            decode_wsl_text(&output.stderr).trim()
         )
         .into());
     }
@@ -133,7 +133,7 @@ fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn 
 }
 
 fn decode_wsl_text(bytes: &[u8]) -> String {
-    if bytes.iter().step_by(2).skip(1).any(|byte| *byte == 0) {
+    if bytes.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
         let words: Vec<_> = bytes
             .as_chunks::<2>()
             .0
@@ -167,10 +167,17 @@ mod tests {
     }
     #[test]
     fn decodes_utf16_distro_list() {
-        let bytes: Vec<_> = "Ubuntu\r\n"
+        let bytes: Vec<_> = "Ubuntu 日本語\r\n"
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
             .collect();
-        assert_eq!(decode_wsl_text(&bytes), "Ubuntu\r\n");
+        assert_eq!(decode_wsl_text(&bytes), "Ubuntu 日本語\r\n");
+    }
+    #[test]
+    fn preserves_utf8_wsl_output() {
+        assert_eq!(
+            decode_wsl_text("Ubuntu 日本語\r\n".as_bytes()),
+            "Ubuntu 日本語\r\n"
+        );
     }
 }
