@@ -253,7 +253,7 @@ When wsltop runs inside WSL, the current distribution is sampled directly from `
 
 When `wsltop.exe` runs on Windows, the selected primary distribution and every additional distribution are sampled remotely through `wsl.exe`; failure of the primary is fatal, while additional distributions remain best-effort. `--distro NAME` selects the required primary explicitly.
 
-`--wsl-only` limits collection to the primary distribution. In WSL-native execution it uses the WSL-visible logical CPU count and warns that exact Windows-host normalization is unavailable. In Windows-native execution it uses the Windows logical CPU count but still disables Windows host-process attribution.
+`--wsl-only` limits WSL distribution collection to the primary distribution and disables Windows and WSLC collection. Optional Docker collection remains enabled unless `--no-docker` is also passed. In WSL-native execution it uses the WSL-visible logical CPU count and warns that exact Windows-host normalization is unavailable. In Windows-native execution it uses the Windows logical CPU count but still disables Windows host-process attribution.
 
 ## JSON output
 
