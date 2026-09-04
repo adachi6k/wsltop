@@ -1,5 +1,7 @@
+#[cfg(unix)]
+use crate::linux;
 use crate::model::Snapshot;
-use crate::{linux, multiwsl};
+use crate::multiwsl;
 use std::collections::HashSet;
 use std::error::Error;
 
@@ -13,6 +15,11 @@ trait RunningDistroDiscovery {
     fn running_distros(&self) -> Result<Vec<String>, CollectorError>;
 }
 
+#[cfg(any(windows, test))]
+trait DefaultDistroDiscovery {
+    fn default_distro(&self) -> Result<Option<String>, CollectorError>;
+}
+
 struct WslRunningDistroDiscovery;
 
 impl RunningDistroDiscovery for WslRunningDistroDiscovery {
@@ -21,8 +28,17 @@ impl RunningDistroDiscovery for WslRunningDistroDiscovery {
     }
 }
 
+#[cfg(windows)]
+impl DefaultDistroDiscovery for WslRunningDistroDiscovery {
+    fn default_distro(&self) -> Result<Option<String>, CollectorError> {
+        multiwsl::default_distro()
+    }
+}
+
+#[cfg(unix)]
 struct LocalLinuxProcCollector;
 
+#[cfg(unix)]
 impl ProcessSnapshotCollector for LocalLinuxProcCollector {
     fn snapshot(&self) -> Result<Snapshot, CollectorError> {
         Ok(linux::snapshot()?)
@@ -61,6 +77,24 @@ pub(crate) struct CollectorPlan {
 }
 
 impl CollectorPlan {
+    pub(crate) fn native(
+        requested_distro: Option<&str>,
+        wsl_only: bool,
+    ) -> Result<Self, CollectorError> {
+        #[cfg(unix)]
+        {
+            if requested_distro.is_some() {
+                return Err("--distro is only supported by the Windows-native executable".into());
+            }
+            Ok(Self::wsl_native(wsl_only))
+        }
+        #[cfg(windows)]
+        {
+            Self::windows_native(requested_distro, wsl_only)
+        }
+    }
+
+    #[cfg(unix)]
     pub(crate) fn wsl_native(wsl_only: bool) -> Self {
         let mut plan = Self {
             primary: Box::new(LocalLinuxProcCollector),
@@ -93,6 +127,34 @@ impl CollectorPlan {
             )),
         }
         plan
+    }
+
+    #[cfg(windows)]
+    fn windows_native(
+        requested_distro: Option<&str>,
+        wsl_only: bool,
+    ) -> Result<Self, CollectorError> {
+        let discovery = WslRunningDistroDiscovery;
+        let spec = windows_native_spec(requested_distro, wsl_only, &discovery, &discovery)?;
+        let primary = spec.primary;
+        let additional = spec
+            .additional
+            .into_iter()
+            .map(|spec| {
+                let name = spec.distro.clone();
+                (
+                    name,
+                    Box::new(RemoteWslProcCollector::new(spec.distro, spec.source))
+                        as Box<dyn ProcessSnapshotCollector>,
+                )
+            })
+            .collect();
+        Ok(Self {
+            primary: Box::new(RemoteWslProcCollector::new(primary.distro, primary.source)),
+            additional,
+            distro_discovery: Box::new(discovery),
+            warnings: spec.warnings,
+        })
     }
 
     pub(crate) fn capture(&self) -> Result<CollectedSnapshots, CollectorError> {
@@ -136,9 +198,112 @@ impl CollectorPlan {
     }
 }
 
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+struct RemoteCollectorSpec {
+    distro: String,
+    source: Option<String>,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+struct WindowsNativeSpec {
+    primary: RemoteCollectorSpec,
+    additional: Vec<RemoteCollectorSpec>,
+    warnings: Vec<String>,
+}
+
+#[cfg(any(windows, test))]
+fn windows_native_spec(
+    requested_distro: Option<&str>,
+    wsl_only: bool,
+    running_discovery: &dyn RunningDistroDiscovery,
+    default_discovery: &dyn DefaultDistroDiscovery,
+) -> Result<WindowsNativeSpec, CollectorError> {
+    let mut warnings = Vec::new();
+    let default = if requested_distro.is_none() {
+        match default_discovery.default_distro() {
+            Ok(distro) => distro,
+            Err(error) => {
+                warnings.push(format!("default WSL distro discovery unavailable: {error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let running = if !wsl_only || (requested_distro.is_none() && default.is_none()) {
+        match running_discovery.running_distros() {
+            Ok(distros) => distros,
+            Err(error) => {
+                if !wsl_only {
+                    warnings.push(format!(
+                        "additional WSL distro discovery unavailable: {error}"
+                    ));
+                } else if requested_distro.is_none() {
+                    warnings.push(format!(
+                        "running WSL distro fallback discovery unavailable: {error}"
+                    ));
+                }
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let primary = select_primary_distro(requested_distro, default.as_deref(), &running, &warnings)?;
+    let additional = if wsl_only {
+        Vec::new()
+    } else {
+        running
+            .into_iter()
+            .filter(|name| !name.eq_ignore_ascii_case(&primary))
+            .map(|distro| RemoteCollectorSpec {
+                source: Some(distro.clone()),
+                distro,
+            })
+            .collect()
+    };
+    Ok(WindowsNativeSpec {
+        primary: RemoteCollectorSpec {
+            distro: primary,
+            source: None,
+        },
+        additional,
+        warnings,
+    })
+}
+
+#[cfg(any(windows, test))]
+fn select_primary_distro(
+    requested: Option<&str>,
+    default: Option<&str>,
+    running: &[String],
+    discovery_failures: &[String],
+) -> Result<String, CollectorError> {
+    requested
+        .filter(|name| !name.trim().is_empty())
+        .or(default)
+        .map(str::to_string)
+        .or_else(|| running.first().cloned())
+        .ok_or_else(|| {
+            let mut message =
+                "no WSL distribution is available; install one or pass --distro NAME".to_string();
+            if !discovery_failures.is_empty() {
+                message.push_str("; discovery failures: ");
+                message.push_str(&discovery_failures.join("; "));
+            }
+            message.into()
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CollectorError, CollectorPlan, ProcessSnapshotCollector, RunningDistroDiscovery};
+    use super::{
+        select_primary_distro, windows_native_spec, CollectorError, CollectorPlan,
+        DefaultDistroDiscovery, ProcessSnapshotCollector, RemoteCollectorSpec,
+        RunningDistroDiscovery,
+    };
     use crate::model::Snapshot;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -161,6 +326,17 @@ mod tests {
         fn running_distros(&self) -> Result<Vec<String>, CollectorError> {
             match &self.0 {
                 Ok(distros) => Ok(distros.clone()),
+                Err(error) => Err((*error).into()),
+            }
+        }
+    }
+
+    struct StubDefaultDiscovery(Result<Option<String>, &'static str>);
+
+    impl DefaultDistroDiscovery for StubDefaultDiscovery {
+        fn default_distro(&self) -> Result<Option<String>, CollectorError> {
+            match &self.0 {
+                Ok(distro) => Ok(distro.clone()),
                 Err(error) => Err((*error).into()),
             }
         }
@@ -232,5 +408,98 @@ mod tests {
             result.warnings,
             ["additional WSL Ubuntu-2 unavailable: distribution is no longer running"]
         );
+    }
+
+    #[test]
+    fn primary_distro_selection_prefers_requested_then_default_then_running() {
+        let running = vec!["Running".to_string()];
+        assert_eq!(
+            select_primary_distro(Some("Requested"), Some("Default"), &running, &[]).unwrap(),
+            "Requested"
+        );
+        assert_eq!(
+            select_primary_distro(None, Some("Default"), &running, &[]).unwrap(),
+            "Default"
+        );
+        assert_eq!(
+            select_primary_distro(None, None, &running, &[]).unwrap(),
+            "Running"
+        );
+        assert!(select_primary_distro(None, None, &[], &[]).is_err());
+    }
+
+    #[test]
+    fn primary_distro_selection_preserves_discovery_failures() {
+        let failures = vec![
+            "additional WSL distro discovery unavailable: wsl service failed".to_string(),
+            "default WSL distro discovery unavailable: default query failed".to_string(),
+        ];
+
+        let error = select_primary_distro(None, None, &[], &failures).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "no WSL distribution is available; install one or pass --distro NAME; discovery failures: additional WSL distro discovery unavailable: wsl service failed; default WSL distro discovery unavailable: default query failed"
+        );
+    }
+
+    #[test]
+    fn windows_native_spec_builds_primary_and_additional_collectors() {
+        let running = StubDiscovery(Ok(vec!["Ubuntu".to_string(), "Debian".to_string()]));
+        let default = StubDefaultDiscovery(Ok(Some("Ubuntu".to_string())));
+
+        let spec = windows_native_spec(None, false, &running, &default).unwrap();
+
+        assert_eq!(
+            spec.primary,
+            RemoteCollectorSpec {
+                distro: "Ubuntu".to_string(),
+                source: None,
+            }
+        );
+        assert_eq!(
+            spec.additional,
+            [RemoteCollectorSpec {
+                distro: "Debian".to_string(),
+                source: Some("Debian".to_string()),
+            }]
+        );
+        assert!(spec.warnings.is_empty());
+    }
+
+    #[test]
+    fn windows_native_spec_wsl_only_uses_default_without_additional_collectors() {
+        let running = StubDiscovery(Err("running discovery must not be called"));
+        let default = StubDefaultDiscovery(Ok(Some("Ubuntu".to_string())));
+
+        let spec = windows_native_spec(None, true, &running, &default).unwrap();
+
+        assert_eq!(spec.primary.distro, "Ubuntu");
+        assert_eq!(spec.primary.source, None);
+        assert!(spec.additional.is_empty());
+        assert!(spec.warnings.is_empty());
+    }
+
+    #[test]
+    fn windows_native_spec_preserves_injected_discovery_failures() {
+        let running = StubDiscovery(Err("running query failed"));
+        let default = StubDefaultDiscovery(Err("default query failed"));
+
+        let error = windows_native_spec(None, false, &running, &default).unwrap_err();
+
+        assert!(error.to_string().contains("running query failed"));
+        assert!(error.to_string().contains("default query failed"));
+    }
+
+    #[test]
+    fn windows_native_wsl_only_preserves_running_fallback_failure() {
+        let running = StubDiscovery(Err("running fallback failed"));
+        let default = StubDefaultDiscovery(Ok(None));
+
+        let error = windows_native_spec(None, true, &running, &default).unwrap_err();
+
+        assert!(error.to_string().contains(
+            "running WSL distro fallback discovery unavailable: running fallback failed"
+        ));
     }
 }

@@ -23,13 +23,13 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | --- | --- |
 | `linux.rs` | Read local `/proc` on Unix and turn parsed records into process snapshots |
 | `linux_proc.rs` | Parse Linux `/proc` stat and command-line records without platform-specific APIs |
-| `collector.rs` | Define process-snapshot collectors and build the one-shot WSL-native collector plan |
+| `collector.rs` | Define process-snapshot collectors and build the platform-selected one-shot collector plan |
 | `command.rs` | Select the target-specific bounded command implementation |
 | `command_unix.rs` | Run bounded commands in a Unix process group and terminate the group on timeout |
 | `command_windows.rs` | Run bounded commands on Windows; currently terminate the direct child pending Job Object support |
 | `windows.rs` | Snapshot Windows process cumulative CPU time and working sets through PowerShell |
 | `windows_app.rs` | Conservatively group Windows PIDs using executable, parent, command-line, and package evidence |
-| `multiwsl.rs` | Discover and snapshot additional running WSL distributions |
+| `multiwsl.rs` | Discover WSL distributions and remotely snapshot the Windows-native primary or additional distributions |
 | `wslc.rs` | Collect current/default WSLC container statistics and in-container process observations |
 | `docker.rs` | Collect Docker statistics and Docker-namespace process observations |
 | `sampler.rs` | Convert cumulative process-time deltas into host-normalized `ResourceUsage` values |
@@ -42,17 +42,19 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 
 Collector parsing and accounting are shared between interfaces. `Monitor::sample()` preserves atomic one-shot and JSON behavior. The TUI uses the stateful streaming orchestrator, which publishes the same `MonitorSnapshot` type after each collector event.
 
-Runtime collection remains WSL-native at this stage. For one-shot sampling,
-`CollectorPlan` treats the invoking distribution's local `/proc` collector as
-required, fixes the additional-distribution membership once, and uses one remote
-`wsl.exe` collector per additional distribution for both snapshots. Before each
-optional capture, one batched running-distro check skips distributions that have
-stopped, so observation does not restart them. A required
+One-shot runtime collection now selects a platform plan. On WSL, `CollectorPlan`
+treats the invoking distribution's local `/proc` collector as required. On
+Windows, it selects `--distro`, the WSL default, or the first running distro (in
+that order) and uses a required remote `wsl.exe` collector with `source: None`.
+Other running distributions use remote collectors with `source: Some(name)`.
+The additional-distribution membership is fixed once; before each optional
+capture, one batched running-distro check skips distributions that have stopped,
+so observation does not restart them. A required
 collector failure aborts the sample; discovery and individual additional-distro
-failures degrade to warnings. The streaming TUI continues to use its existing
-collector scheduling until its later migration. Native Windows collection is
-not enabled yet; a later plan variant will select a required remote WSL
-collector instead of the unsupported local `/proc` call on Windows.
+failures degrade to warnings. Windows PowerShell, WSLC, and Docker collection
+then use the existing one-shot paths. The streaming TUI continues to use its
+existing WSL-native scheduling until its later collector-plan migration, so the
+Windows-native executable currently rejects `--interactive`.
 
 ## Sampling flow
 
@@ -144,9 +146,9 @@ The TUI renders the same text views from incrementally rebuilt snapshots. Its `t
 
 ## Degradation and lifecycle
 
-The current WSL `/proc` collector and, unless `--wsl-only` is used, Windows host collection are required for a sample. Optional collectors degrade independently:
+The platform-selected primary WSL collector is required for a sample: local `/proc` when running inside WSL, or the selected remote `wsl.exe` collector when running on Windows. Unless `--wsl-only` is used, Windows host collection is also required. Optional collectors degrade independently:
 
-- additional-distribution failure: continue with current WSL and other sources
+- additional-distribution failure: continue with the primary WSL distribution and other sources
 - missing WSLC executable: silently continue without WSLC rows
 - missing Docker CLI or recognized daemon-unavailable error: silently continue without Docker rows
 - unexpected optional-collector failure: continue without affected data and surface a warning
@@ -158,7 +160,7 @@ Warnings are written to stderr in one-shot mode and surfaced in TUI status. `Ter
 
 - Snapshots across collectors are not atomic.
 - Windows collection starts a PowerShell process for each cumulative snapshot.
-- Additional distributions are sampled serially through `wsl.exe` and have extra skew.
+- Remote WSL distributions are sampled serially through `wsl.exe` and have extra skew; on Windows this includes the required primary distribution.
 - WSLC mapping covers the current/default CLI session conservatively.
 - `docker top` process CPU is a ps-style average rather than an interval sample.
 - GUI presentation is outside the current CLI/TUI architecture.

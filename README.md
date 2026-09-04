@@ -4,7 +4,7 @@
 
 > Windows Task Manager says `VmmemWSL` is busy. `wsltop` shows which Windows, WSL, WSLC, or Docker workload is responsible.
 
-`wsltop` provides supported CLI and terminal UI interfaces; a graphical UI is outside the current scope.
+`wsltop` provides a one-shot CLI on both Windows and WSL. The terminal UI currently runs from WSL; Windows-native TUI support is the next migration stage. A graphical UI is outside the current scope.
 
 ![wsltop terminal UI showing flat and tree views](docs/assets/wsltop-demo.gif)
 
@@ -113,10 +113,26 @@ The default text/TUI scale treats one fully occupied logical CPU as `100%`; use 
 
 Requirements:
 
-- Windows 11 with WSL2 and Windows interoperability enabled
-- PowerShell available as `powershell.exe` from WSL
+- Windows 11 with WSL2
+- PowerShell available as `powershell.exe` for Windows process collection
+- For WSL-native execution, Windows interoperability enabled
 - Optional: `wslc.exe` for WSL Containers data
 - Optional: Docker CLI plus a reachable Docker daemon for Docker data
+
+### Windows-native one-shot
+
+Building on Windows produces `wsltop.exe`. It collects the primary WSL
+distribution through `wsl.exe`, while Windows, WSLC, and Docker collectors run
+from Windows. The primary distribution is selected in this order: `--distro
+NAME`, the WSL default distribution, then the first running distribution.
+
+```powershell
+cargo build --release --locked
+.\target\release\wsltop.exe --once
+.\target\release\wsltop.exe --distro Ubuntu-24.04 --tree
+```
+
+Windows-native interactive mode is not enabled yet; run the TUI from WSL.
 
 Install with Cargo (requires a Rust toolchain):
 
@@ -233,9 +249,11 @@ Application CPU is exactly the sum of observed member-process CPU; child PIDs ex
 
 ## Multiple WSL distributions
 
-The current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These remote samples are best-effort and introduce more timing skew than direct `/proc` access.
+When wsltop runs inside WSL, the current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These additional remote samples are best-effort and introduce more timing skew than direct `/proc` access.
 
-`--wsl-only` intentionally limits collection to the current distribution. It cannot obtain the Windows host CPU count or host resources, so output warns that CPU normalization and host attribution are limited.
+When `wsltop.exe` runs on Windows, the selected primary distribution and every additional distribution are sampled remotely through `wsl.exe`; failure of the primary is fatal, while additional distributions remain best-effort. `--distro NAME` selects the required primary explicitly.
+
+`--wsl-only` limits WSL distribution collection to the primary distribution and disables Windows and WSLC collection. Optional Docker collection remains enabled unless `--no-docker` is also passed. In WSL-native execution it uses the WSL-visible logical CPU count and warns that exact Windows-host normalization is unavailable. In Windows-native execution it uses the Windows logical CPU count but still disables Windows host-process attribution.
 
 ## JSON output
 

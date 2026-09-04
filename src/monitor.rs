@@ -23,6 +23,7 @@ pub struct MonitorConfig {
 
 pub struct Monitor {
     config: MonitorConfig,
+    distro: Option<String>,
 }
 
 pub struct MonitorSnapshot {
@@ -34,12 +35,12 @@ pub struct MonitorSnapshot {
 }
 
 impl Monitor {
-    pub fn new(config: MonitorConfig) -> Self {
-        Self { config }
+    pub fn new(config: MonitorConfig, distro: Option<String>) -> Self {
+        Self { config, distro }
     }
     pub fn sample(&mut self) -> Result<MonitorSnapshot, Box<dyn Error>> {
         let mut warnings = Vec::new();
-        let collector_plan = CollectorPlan::wsl_native(self.config.wsl_only);
+        let collector_plan = CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
         let linux_before = collector_plan.capture()?;
         for warning in linux_before.warnings {
             push_unique_warning(&mut warnings, warning);
@@ -49,10 +50,10 @@ impl Monitor {
         } else {
             Some(windows::snapshot()?)
         };
-        let collector_cpu_count = windows_before.as_ref().map_or_else(
-            || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
-            |snapshot| snapshot.host_logical_cpu_count,
-        );
+        let collector_cpu_count = match windows_before.as_ref() {
+            Some(snapshot) => snapshot.host_logical_cpu_count,
+            None => wsl_only_host_cpu_count()?,
+        };
         let collect_wslc = !self.config.wsl_only && !self.config.no_wslc;
         let collect_docker = !self.config.no_docker;
         let wslc_worker = collect_wslc.then(|| {
@@ -89,15 +90,13 @@ impl Monitor {
         for warning in linux_after.warnings {
             push_unique_warning(&mut warnings, warning);
         }
-        let host_cpu_count = windows_after.as_ref().map_or_else(
-            || std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
-            |snapshot| snapshot.host_logical_cpu_count,
-        );
+        let host_cpu_count = windows_after
+            .as_ref()
+            .map_or(collector_cpu_count, |snapshot| {
+                snapshot.host_logical_cpu_count
+            });
         if self.config.wsl_only {
-            warnings.push(
-                "--wsl-only uses the WSL-visible logical CPU count; exact host normalization and Windows host attribution require Windows interop"
-                    .to_string(),
-            );
+            warnings.push(wsl_only_warning().to_string());
         }
 
         let mut linux_usage =
@@ -223,6 +222,26 @@ impl Monitor {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn wsl_only_host_cpu_count() -> Result<u32, Box<dyn Error>> {
+    windows::host_logical_cpu_count()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wsl_only_host_cpu_count() -> Result<u32, Box<dyn Error>> {
+    Ok(std::thread::available_parallelism().map_or(1, |count| count.get() as u32))
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_only_warning() -> &'static str {
+    "--wsl-only uses the Windows logical CPU count but disables Windows host attribution"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wsl_only_warning() -> &'static str {
+    "--wsl-only uses the WSL-visible logical CPU count; exact host normalization and Windows host attribution require Windows interop"
+}
+
 fn should_collect_windows_metadata(
     config: &MonitorConfig,
     windows_usage: &[ResourceUsage],
@@ -316,7 +335,7 @@ pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config:
 mod tests {
     use super::{
         apply_windows_application_view, prepare_flat_resources, push_unique_warning,
-        should_collect_windows_metadata, MonitorConfig,
+        should_collect_windows_metadata, wsl_only_warning, MonitorConfig,
     };
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use std::time::Duration;
@@ -363,6 +382,21 @@ mod tests {
             "Teams",
         )];
         assert!(!should_collect_windows_metadata(&config, &windows));
+    }
+
+    #[test]
+    fn wsl_only_warning_matches_the_native_platform() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            wsl_only_warning(),
+            "--wsl-only uses the Windows logical CPU count but disables Windows host attribution"
+        );
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            wsl_only_warning(),
+            "--wsl-only uses the WSL-visible logical CPU count; exact host normalization and Windows host attribution require Windows interop"
+        );
     }
 
     #[test]
