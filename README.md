@@ -249,9 +249,11 @@ Application CPU is exactly the sum of observed member-process CPU; child PIDs ex
 
 ## Multiple WSL distributions
 
-The current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These remote samples are best-effort and introduce more timing skew than direct `/proc` access.
+When wsltop runs inside WSL, the current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These additional remote samples are best-effort and introduce more timing skew than direct `/proc` access.
 
-`--wsl-only` intentionally limits collection to the current distribution. It cannot obtain the Windows host CPU count or host resources, so output warns that CPU normalization and host attribution are limited.
+When `wsltop.exe` runs on Windows, the selected primary distribution and every additional distribution are sampled remotely through `wsl.exe`; failure of the primary is fatal, while additional distributions remain best-effort. `--distro NAME` selects the required primary explicitly.
+
+`--wsl-only` limits collection to the primary distribution. In WSL-native execution it uses the WSL-visible logical CPU count and warns that exact Windows-host normalization is unavailable. In Windows-native execution it uses the Windows logical CPU count but still disables Windows host-process attribution.
 
 ## JSON output
 

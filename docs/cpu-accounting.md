@@ -28,13 +28,13 @@ CPU% = delta_cpu_seconds / elapsed_seconds
        / host_logical_cpu_count * 100
 ```
 
-Windows cumulative time comes from `Get-Process .CPU`. Current-WSL cumulative time comes from `/proc/<pid>/stat`; additional distributions provide equivalent values through `wsl.exe -d` collection.
+Windows cumulative time comes from `Get-Process .CPU`. In WSL-native execution, current-distribution cumulative time is read directly from `/proc/<pid>/stat`, while additional distributions provide equivalent values through `wsl.exe -d` collection. In Windows-native execution, both the selected primary distribution and additional distributions are sampled remotely through `wsl.exe`.
 
 The same cumulative value is exposed as `TIME+` in text/TUI output. It is CPU time consumed, not elapsed wall-clock age, and is formatted as unbounded minutes plus seconds and hundredths (`MM:SS.hh`). Windows application TIME+ sums the currently observed member processes, so it may decrease when a member exits. JSON exposes the underlying value as optional `cpu_time_seconds`.
 
 Negative deltas are treated as process replacement/PID reuse and do not become negative usage. Process identity includes environment, PID, and source where available.
 
-With `--wsl-only`, Windows collection is skipped and the WSL-visible logical CPU count is used as a fallback. The command warns because exact Windows-host normalization cannot be guaranteed in that mode.
+With `--wsl-only`, Windows process collection is skipped. WSL-native execution uses the WSL-visible logical CPU count as a fallback and warns that exact Windows-host normalization cannot be guaranteed. Windows-native execution obtains the Windows logical CPU count from the Windows process itself, but warns that Windows host-process attribution is disabled.
 
 ## WSLC containers
 

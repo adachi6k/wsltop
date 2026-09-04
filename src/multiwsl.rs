@@ -63,7 +63,7 @@ fn list_distros(args: &[&str]) -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn Error>> {
-    let script = "printf '%s %s\\n' \"$(getconf CLK_TCK)\" \"$(getconf PAGESIZE)\"; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\"; done";
+    let script = "clock_ticks=$(getconf CLK_TCK) || exit; page_size=$(getconf PAGESIZE) || exit; printf '%s %s\\n' \"$clock_ticks\" \"$page_size\" || exit; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\" 2>/dev/null || :; done";
     let output = run_wsl_script(Some(distro), script)?;
     if !output.status.success() {
         return Err(format!(
@@ -73,7 +73,7 @@ pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn 
         )
         .into());
     }
-    parse_snapshot(source, &String::from_utf8(output.stdout)?)
+    parse_snapshot_bytes(source, &output.stdout)
 }
 
 fn run_wsl_script(distro: Option<&str>, script: &str) -> Result<Output, Box<dyn Error>> {
@@ -152,6 +152,10 @@ fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn 
     })
 }
 
+fn parse_snapshot_bytes(source: Option<&str>, bytes: &[u8]) -> Result<Snapshot, Box<dyn Error>> {
+    parse_snapshot(source, &String::from_utf8_lossy(bytes))
+}
+
 fn decode_wsl_text(bytes: &[u8]) -> String {
     if bytes.iter().skip(1).step_by(2).any(|byte| *byte == 0) {
         let words: Vec<_> = bytes
@@ -168,7 +172,7 @@ fn decode_wsl_text(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_wsl_text, parse_snapshot};
+    use super::{decode_wsl_text, parse_snapshot, parse_snapshot_bytes};
     #[test]
     fn parses_remote_process_and_source() {
         let stat = "42 (worker) S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 777 0 3";
@@ -184,6 +188,16 @@ mod tests {
         let stat = "42 (worker) S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 777 0 3";
         let snapshot = parse_snapshot(None, &format!("100 4096\n{stat}\n")).unwrap();
         assert_eq!(snapshot.processes[0].key.source, None);
+    }
+    #[test]
+    fn parses_non_utf8_process_name_lossily() {
+        let mut bytes = b"100 4096\n42 (work".to_vec();
+        bytes.push(0xff);
+        bytes.extend_from_slice(b"r) S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 777 0 3\n");
+
+        let snapshot = parse_snapshot_bytes(None, &bytes).unwrap();
+
+        assert_eq!(snapshot.processes[0].name, "work\u{fffd}r");
     }
     #[test]
     fn decodes_utf16_distro_list() {
