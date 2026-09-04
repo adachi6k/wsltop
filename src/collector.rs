@@ -122,7 +122,10 @@ impl AdditionalStreamCollector {
         }
         let mut result = StreamAdditionalSnapshots::default();
         for (name, collector) in &self.collectors {
-            if !running.contains(name) {
+            if !running
+                .iter()
+                .any(|running_name| running_name.eq_ignore_ascii_case(name))
+            {
                 continue;
             }
             result.running_sources.insert(name.clone());
@@ -572,6 +575,25 @@ mod tests {
             stream.additional.snapshot().unwrap_err(),
             "additional WSL unavailable: discovery failed"
         );
+    }
+
+    #[test]
+    fn stream_running_membership_is_case_insensitive() {
+        let plan = CollectorPlan {
+            primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: None,
+            additional: vec![(
+                "Ubuntu-2".to_string(),
+                Box::new(StubCollector(Ok(snapshot()))),
+            )],
+            distro_discovery: Box::new(StubDiscovery(Ok(vec!["ubuntu-2".to_string()]))),
+            warnings: Vec::new(),
+        };
+
+        let mut stream = plan.into_stream();
+        let additional = stream.additional.snapshot().unwrap();
+        assert_eq!(additional.snapshots[0].0, "Ubuntu-2");
+        assert_eq!(additional.running_sources, ["Ubuntu-2".to_string()].into());
     }
 
     #[test]
