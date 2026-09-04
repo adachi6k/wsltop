@@ -1,10 +1,13 @@
 use crate::attribution;
+use crate::collector::{
+    AdditionalStreamCollector, CollectorPlan, PrimaryStreamCollector, StreamAdditionalSnapshots,
+};
 use crate::docker::DockerUsage;
 use crate::model::{ContainerProcessUsage, ResourceUsage};
 use crate::monitor::{prepare_flat_resources, MonitorConfig, MonitorSnapshot};
 use crate::windows_app::WindowsMetadata;
 use crate::wslc::WslcUsage;
-use crate::{docker, linux, multiwsl, sampler, windows, windows_app, wslc};
+use crate::{docker, sampler, windows, windows_app, wslc};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -16,6 +19,7 @@ const SLOW_COLLECTOR_MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 enum Event {
     HostCpuCount(u32),
+    CollectorWarnings(Vec<String>),
     Linux(Normalized<Result<Vec<ResourceUsage>, String>>),
     Windows(Result<(Vec<ResourceUsage>, u32), String>),
     WindowsMetadata(Result<WindowsMetadata, String>),
@@ -49,6 +53,7 @@ impl Event {
     fn name(&self) -> &'static str {
         match self {
             Self::HostCpuCount(_) => "Windows host CPU",
+            Self::CollectorWarnings(_) => "WSL collector plan",
             Self::Linux(_) => "current WSL",
             Self::Windows(_) => "Windows",
             Self::WindowsMetadata(_) => "Windows applications",
@@ -75,6 +80,7 @@ struct Aggregate {
     normalized_collectors: BTreeSet<&'static str>,
     pending: BTreeSet<&'static str>,
     errors: BTreeMap<&'static str, String>,
+    collector_warnings: Vec<String>,
 }
 
 impl Aggregate {
@@ -117,6 +123,10 @@ impl Aggregate {
             }
             self.host_cpu_count = *count;
             self.host_cpu_authoritative = true;
+            return;
+        }
+        if let Event::CollectorWarnings(warnings) = &event {
+            self.collector_warnings.clone_from(warnings);
             return;
         }
         if event.has_stale_normalization(self.host_cpu_authoritative, self.host_cpu_count) {
@@ -169,6 +179,7 @@ impl Aggregate {
         self.pending.remove(name);
         let result = match event {
             Event::HostCpuCount(_) => unreachable!(),
+            Event::CollectorWarnings(_) => unreachable!(),
             Event::Linux(value) => value.value.map(|rows| self.linux = rows),
             Event::Windows(value) => value.map(|(rows, count)| {
                 self.windows = rows;
@@ -238,6 +249,7 @@ impl Aggregate {
 
     fn snapshot(&self, config: &MonitorConfig) -> MonitorSnapshot {
         let mut warnings: Vec<String> = self.errors.values().cloned().collect();
+        warnings.extend(self.collector_warnings.iter().cloned());
         warnings.extend(
             self.extra_wsl_errors
                 .iter()
@@ -344,7 +356,10 @@ impl Event {
             Self::WslcDetails(value) => value.cpu_count != current_count,
             Self::DockerAggregate(value) => value.cpu_count != current_count,
             Self::DockerDetails(value) => value.cpu_count != current_count,
-            Self::HostCpuCount(_) | Self::Windows(_) | Self::WindowsMetadata(_) => false,
+            Self::HostCpuCount(_)
+            | Self::CollectorWarnings(_)
+            | Self::Windows(_)
+            | Self::WindowsMetadata(_) => false,
         }
     }
 }
@@ -405,6 +420,7 @@ fn reuse_docker_processes(
 
 pub fn run(
     config: Arc<Mutex<MonitorConfig>>,
+    distro: Option<String>,
     details: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     output: mpsc::Sender<Result<MonitorSnapshot, String>>,
@@ -413,14 +429,33 @@ pub fn run(
         Ok(value) => value.clone(),
         Err(_) => return,
     };
+    let collector_plan = match CollectorPlan::native(distro.as_deref(), initial.wsl_only) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = output.send(Err(error.to_string()));
+            return;
+        }
+    };
+    let collector_plan = collector_plan.into_stream();
     let host_cpu_count = Arc::new(AtomicU32::new(fallback_cpu_count()));
     let (sender, receiver) = mpsc::channel();
-    spawn_linux(
+    let _ = sender.send(Event::CollectorWarnings(collector_plan.warnings));
+    spawn_primary_processes(
+        collector_plan.primary,
         sender.clone(),
         Arc::clone(&stop),
         Arc::clone(&host_cpu_count),
         initial.interval,
     );
+    if !initial.wsl_only {
+        spawn_additional_processes(
+            collector_plan.additional,
+            sender.clone(),
+            Arc::clone(&stop),
+            Arc::clone(&host_cpu_count),
+            initial.interval,
+        );
+    }
     if !initial.wsl_only {
         spawn_windows(
             sender.clone(),
@@ -429,12 +464,6 @@ pub fn run(
             initial.interval,
         );
         spawn_windows_metadata(sender.clone(), Arc::clone(&stop));
-        spawn_extra_wsl(
-            sender.clone(),
-            Arc::clone(&stop),
-            Arc::clone(&host_cpu_count),
-            initial.interval,
-        );
         if !initial.no_wslc {
             spawn_wslc(
                 sender.clone(),
@@ -472,24 +501,25 @@ pub fn run(
     }
 }
 
-fn spawn_linux(
+fn spawn_primary_processes(
+    collector: PrimaryStreamCollector,
     sender: mpsc::Sender<Event>,
     stop: Arc<AtomicBool>,
     cpus: Arc<AtomicU32>,
     interval: Duration,
 ) {
     thread::spawn(move || {
-        let mut before: Option<crate::model::Snapshot> = None;
+        let mut primary_before: Option<crate::model::Snapshot> = None;
         let mut delay = Duration::ZERO;
         while wait(&stop, delay) {
-            match linux::snapshot() {
+            match collector.snapshot() {
                 Ok(after) => {
-                    let had_baseline = before.is_some();
+                    let had_baseline = primary_before.is_some();
                     let count = match cpus.load(Ordering::Relaxed) {
                         0 => fallback_cpu_count(),
                         count => count,
                     };
-                    if let Some(old) = &before {
+                    if let Some(old) = &primary_before {
                         let rows = sampler::calculate_usage(old, &after, count);
                         if sender
                             .send(Event::Linux(Normalized::new(count, Ok(rows))))
@@ -498,7 +528,7 @@ fn spawn_linux(
                             break;
                         }
                     }
-                    before = Some(after);
+                    primary_before = Some(after);
                     delay = if had_baseline {
                         interval
                     } else {
@@ -518,6 +548,75 @@ fn spawn_linux(
             }
         }
     });
+}
+
+fn spawn_additional_processes(
+    mut collector: AdditionalStreamCollector,
+    sender: mpsc::Sender<Event>,
+    stop: Arc<AtomicBool>,
+    cpus: Arc<AtomicU32>,
+    interval: Duration,
+) {
+    thread::spawn(move || {
+        let cadence = additional_process_cadence(interval);
+        let mut before = BTreeMap::<String, crate::model::Snapshot>::new();
+        let mut delay = Duration::ZERO;
+        while wait(&stop, delay) {
+            let count = cpus.load(Ordering::Relaxed).max(1);
+            match collector.snapshot() {
+                Ok(after) => {
+                    let update = calculate_additional_update(&mut before, after, count);
+                    if sender
+                        .send(Event::ExtraWsl(Normalized::new(count, Ok(update))))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    if sender
+                        .send(Event::ExtraWsl(Normalized::new(count, Err(error))))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+            delay = cadence;
+        }
+    });
+}
+
+fn calculate_additional_update(
+    before: &mut BTreeMap<String, crate::model::Snapshot>,
+    after: StreamAdditionalSnapshots,
+    cpu_count: u32,
+) -> ExtraWslUpdate {
+    let successful_sources = after
+        .snapshots
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut rows = Vec::new();
+    for (name, snapshot) in &after.snapshots {
+        if let Some(old) = before.get(name) {
+            rows.extend(sampler::calculate_usage(old, snapshot, cpu_count));
+        }
+    }
+    before.retain(|name, _| after.running_sources.contains(name));
+    for (name, snapshot) in after.snapshots {
+        before.insert(name, snapshot);
+    }
+    ExtraWslUpdate {
+        rows,
+        running_sources: after.running_sources,
+        successful_sources,
+        failures: after.failures,
+    }
+}
+
+fn additional_process_cadence(interval: Duration) -> Duration {
+    interval.max(SLOW_COLLECTOR_MIN_INTERVAL)
 }
 
 fn spawn_windows(
@@ -586,88 +685,6 @@ fn sample_windows(
             }
         }
     }
-}
-
-fn spawn_extra_wsl(
-    sender: mpsc::Sender<Event>,
-    stop: Arc<AtomicBool>,
-    cpus: Arc<AtomicU32>,
-    interval: Duration,
-) {
-    thread::spawn(move || {
-        let cadence = interval.max(SLOW_COLLECTOR_MIN_INTERVAL);
-        let mut before = match multiwsl::snapshots() {
-            Ok(value) => value.snapshots,
-            Err(error) => {
-                let _ = sender.send(Event::ExtraWsl(Normalized::new(
-                    cpus.load(Ordering::Relaxed),
-                    Err(format!("additional WSL unavailable: {error}")),
-                )));
-                Vec::new()
-            }
-        };
-        while wait(&stop, cadence) {
-            match multiwsl::snapshots() {
-                Ok(after) => {
-                    let count = cpus.load(Ordering::Relaxed);
-                    let mut rows = Vec::new();
-                    let running_sources: BTreeSet<String> = after
-                        .snapshots
-                        .iter()
-                        .map(|(name, _)| name.clone())
-                        .chain(after.failures.iter().map(|(name, _)| name.clone()))
-                        .collect();
-                    let successful_sources: BTreeSet<String> = after
-                        .snapshots
-                        .iter()
-                        .map(|(name, _)| name.clone())
-                        .collect();
-                    for (name, old) in &before {
-                        if let Some((_, new)) = after
-                            .snapshots
-                            .iter()
-                            .find(|(candidate, _)| candidate == name)
-                        {
-                            rows.extend(sampler::calculate_usage(old, new, count));
-                        }
-                    }
-                    before.retain(|(name, _)| running_sources.contains(name));
-                    for (name, snapshot) in after.snapshots {
-                        if let Some((_, old)) = before.iter_mut().find(|(old, _)| old == &name) {
-                            *old = snapshot;
-                        } else {
-                            before.push((name, snapshot));
-                        }
-                    }
-                    if sender
-                        .send(Event::ExtraWsl(Normalized::new(
-                            count,
-                            Ok(ExtraWslUpdate {
-                                rows,
-                                running_sources,
-                                successful_sources,
-                                failures: after.failures.into_iter().collect(),
-                            }),
-                        )))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(error) => {
-                    if sender
-                        .send(Event::ExtraWsl(Normalized::new(
-                            cpus.load(Ordering::Relaxed),
-                            Err(format!("additional WSL unavailable: {error}")),
-                        )))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    });
 }
 
 fn spawn_wslc(
@@ -831,16 +848,20 @@ fn fallback_cpu_count() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        fallback_cpu_count, reuse_docker_processes, reuse_wslc_processes, Aggregate, Event,
-        ExtraWslUpdate, Normalized,
+        additional_process_cadence, calculate_additional_update, fallback_cpu_count,
+        reuse_docker_processes, reuse_wslc_processes, wait, Aggregate, Event, ExtraWslUpdate,
+        Normalized,
     };
+    use crate::collector::StreamAdditionalSnapshots;
     use crate::docker::DockerUsage;
     use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
     use crate::monitor::MonitorConfig;
     use crate::windows_app::{WindowsMetadata, WindowsProcessMetadata};
     use crate::wslc::WslcUsage;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::time::Duration;
+    use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     fn config() -> MonitorConfig {
         MonitorConfig {
@@ -876,6 +897,64 @@ mod tests {
 
     fn normalized<T>(value: T) -> Normalized<T> {
         Normalized::new(fallback_cpu_count(), value)
+    }
+
+    fn empty_snapshot() -> crate::model::Snapshot {
+        crate::model::Snapshot {
+            captured_at: Instant::now(),
+            processes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn additional_process_cadence_keeps_the_existing_two_second_floor() {
+        assert_eq!(
+            additional_process_cadence(Duration::from_millis(100)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            additional_process_cadence(Duration::from_secs(3)),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn additional_baseline_survives_failure_but_is_removed_when_stopped() {
+        let mut before = BTreeMap::new();
+        calculate_additional_update(
+            &mut before,
+            StreamAdditionalSnapshots {
+                snapshots: vec![("Ubuntu-2".into(), empty_snapshot())],
+                running_sources: BTreeSet::from(["Ubuntu-2".into()]),
+                failures: BTreeMap::new(),
+            },
+            8,
+        );
+        assert!(before.contains_key("Ubuntu-2"));
+
+        calculate_additional_update(
+            &mut before,
+            StreamAdditionalSnapshots {
+                running_sources: BTreeSet::from(["Ubuntu-2".into()]),
+                failures: BTreeMap::from([("Ubuntu-2".into(), "failed".into())]),
+                ..StreamAdditionalSnapshots::default()
+            },
+            8,
+        );
+        assert!(before.contains_key("Ubuntu-2"));
+
+        calculate_additional_update(&mut before, StreamAdditionalSnapshots::default(), 8);
+        assert!(!before.contains_key("Ubuntu-2"));
+    }
+
+    #[test]
+    fn worker_wait_observes_shutdown_without_waiting_for_full_cadence() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || wait(&worker_stop, Duration::from_secs(2)));
+        thread::sleep(Duration::from_millis(20));
+        stop.store(true, Ordering::Relaxed);
+        assert!(!worker.join().unwrap());
     }
 
     #[test]

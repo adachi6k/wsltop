@@ -21,13 +21,14 @@ use std::time::Duration;
 
 pub fn run(
     config: MonitorConfig,
+    distro: Option<String>,
     initial_tree: bool,
     cpu_scale: CpuScale,
 ) -> Result<(), Box<dyn Error>> {
     let interval = config.interval;
     let mut terminal = TerminalGuard::new()?;
     let mut state = State::from_config(&config, initial_tree, cpu_scale);
-    let worker = SamplingWorker::start(config, initial_tree);
+    let worker = SamplingWorker::start(config, distro, initial_tree);
 
     loop {
         for result in worker.receiver.try_iter() {
@@ -173,7 +174,7 @@ struct SamplingWorker {
 }
 
 impl SamplingWorker {
-    fn start(config: MonitorConfig, initial_tree: bool) -> Self {
+    fn start(config: MonitorConfig, distro: Option<String>, initial_tree: bool) -> Self {
         let explicit_details = config.show_container_processes;
         let shared_config = Arc::new(Mutex::new(config));
         let stop = Arc::new(AtomicBool::new(false));
@@ -182,7 +183,9 @@ impl SamplingWorker {
         let worker_config = Arc::clone(&shared_config);
         let worker_stop = Arc::clone(&stop);
         let worker_details = Arc::clone(&details);
-        thread::spawn(move || stream::run(worker_config, worker_details, worker_stop, sender));
+        thread::spawn(move || {
+            stream::run(worker_config, distro, worker_details, worker_stop, sender)
+        });
         Self {
             receiver,
             config: shared_config,

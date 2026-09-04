@@ -2,16 +2,16 @@
 use crate::linux;
 use crate::model::Snapshot;
 use crate::multiwsl;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::error::Error;
 
 type CollectorError = Box<dyn Error>;
 
-pub(crate) trait ProcessSnapshotCollector {
+pub(crate) trait ProcessSnapshotCollector: Send {
     fn snapshot(&self) -> Result<Snapshot, CollectorError>;
 }
 
-trait RunningDistroDiscovery {
+trait RunningDistroDiscovery: Send {
     fn running_distros(&self) -> Result<Vec<String>, CollectorError>;
 }
 
@@ -69,8 +69,83 @@ pub(crate) struct CollectedSnapshots {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct StreamAdditionalSnapshots {
+    pub snapshots: Vec<(String, Snapshot)>,
+    pub running_sources: BTreeSet<String>,
+    pub failures: BTreeMap<String, String>,
+}
+
+pub(crate) struct PrimaryStreamCollector {
+    collector: Box<dyn ProcessSnapshotCollector>,
+}
+
+impl PrimaryStreamCollector {
+    pub(crate) fn snapshot(&self) -> Result<Snapshot, String> {
+        self.collector.snapshot().map_err(|error| error.to_string())
+    }
+}
+
+pub(crate) struct AdditionalStreamCollector {
+    collectors: Vec<(String, Box<dyn ProcessSnapshotCollector>)>,
+    distro_discovery: Box<dyn RunningDistroDiscovery>,
+    primary_distro: Option<String>,
+}
+
+impl AdditionalStreamCollector {
+    pub(crate) fn snapshot(&mut self) -> Result<StreamAdditionalSnapshots, String> {
+        let running: HashSet<_> = self
+            .distro_discovery
+            .running_distros()
+            .map_err(|error| format!("additional WSL unavailable: {error}"))?
+            .into_iter()
+            .collect();
+        for name in &running {
+            let is_primary = self
+                .primary_distro
+                .as_deref()
+                .is_some_and(|primary| primary.eq_ignore_ascii_case(name));
+            if !is_primary
+                && !self
+                    .collectors
+                    .iter()
+                    .any(|(existing, _)| existing.eq_ignore_ascii_case(name))
+            {
+                self.collectors.push((
+                    name.clone(),
+                    Box::new(RemoteWslProcCollector::new(
+                        name.clone(),
+                        Some(name.clone()),
+                    )),
+                ));
+            }
+        }
+        let mut result = StreamAdditionalSnapshots::default();
+        for (name, collector) in &self.collectors {
+            if !running.contains(name) {
+                continue;
+            }
+            result.running_sources.insert(name.clone());
+            match collector.snapshot() {
+                Ok(snapshot) => result.snapshots.push((name.clone(), snapshot)),
+                Err(error) => {
+                    result.failures.insert(name.clone(), error.to_string());
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+pub(crate) struct StreamCollectorPlan {
+    pub primary: PrimaryStreamCollector,
+    pub additional: AdditionalStreamCollector,
+    pub warnings: Vec<String>,
+}
+
 pub(crate) struct CollectorPlan {
     primary: Box<dyn ProcessSnapshotCollector>,
+    primary_distro: Option<String>,
     additional: Vec<(String, Box<dyn ProcessSnapshotCollector>)>,
     distro_discovery: Box<dyn RunningDistroDiscovery>,
     warnings: Vec<String>,
@@ -96,8 +171,10 @@ impl CollectorPlan {
 
     #[cfg(unix)]
     pub(crate) fn wsl_native(wsl_only: bool) -> Self {
+        let current = std::env::var("WSL_DISTRO_NAME").ok();
         let mut plan = Self {
             primary: Box::new(LocalLinuxProcCollector),
+            primary_distro: current.clone(),
             additional: Vec::new(),
             distro_discovery: Box::new(WslRunningDistroDiscovery),
             warnings: Vec::new(),
@@ -106,7 +183,6 @@ impl CollectorPlan {
             return plan;
         }
 
-        let current = std::env::var("WSL_DISTRO_NAME").ok();
         match multiwsl::running_distros() {
             Ok(distros) => {
                 plan.additional = distros
@@ -149,8 +225,10 @@ impl CollectorPlan {
                 )
             })
             .collect();
+        let primary_distro = primary.distro.clone();
         Ok(Self {
             primary: Box::new(RemoteWslProcCollector::new(primary.distro, primary.source)),
+            primary_distro: Some(primary_distro),
             additional,
             distro_discovery: Box::new(discovery),
             warnings: spec.warnings,
@@ -195,6 +273,23 @@ impl CollectorPlan {
             additional,
             warnings,
         })
+    }
+
+    pub(crate) fn into_stream(self) -> StreamCollectorPlan {
+        let mut warnings = self.warnings;
+        warnings
+            .retain(|warning| !warning.starts_with("additional WSL distro discovery unavailable:"));
+        StreamCollectorPlan {
+            primary: PrimaryStreamCollector {
+                collector: self.primary,
+            },
+            additional: AdditionalStreamCollector {
+                collectors: self.additional,
+                distro_discovery: self.distro_discovery,
+                primary_distro: self.primary_distro,
+            },
+            warnings,
+        }
     }
 }
 
@@ -305,8 +400,10 @@ mod tests {
         RunningDistroDiscovery,
     };
     use crate::model::Snapshot;
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use std::time::Instant;
 
     struct StubCollector(Result<Snapshot, &'static str>);
@@ -342,11 +439,11 @@ mod tests {
         }
     }
 
-    struct CountingCollector(Rc<Cell<usize>>);
+    struct CountingCollector(Arc<AtomicUsize>);
 
     impl ProcessSnapshotCollector for CountingCollector {
         fn snapshot(&self) -> Result<Snapshot, CollectorError> {
-            self.0.set(self.0.get() + 1);
+            self.0.fetch_add(1, Ordering::Relaxed);
             Ok(snapshot())
         }
     }
@@ -362,6 +459,7 @@ mod tests {
     fn required_collector_failure_is_an_error() {
         let plan = CollectorPlan {
             primary: Box::new(StubCollector(Err("primary failed"))),
+            primary_distro: None,
             additional: Vec::new(),
             distro_discovery: Box::new(StubDiscovery(Ok(Vec::new()))),
             warnings: Vec::new(),
@@ -373,6 +471,7 @@ mod tests {
     fn optional_collector_failure_is_a_warning() {
         let plan = CollectorPlan {
             primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: None,
             additional: vec![(
                 "Ubuntu-2".to_string(),
                 Box::new(StubCollector(Err("remote failed"))),
@@ -390,23 +489,88 @@ mod tests {
 
     #[test]
     fn stopped_optional_distro_is_not_started_by_snapshot_collection() {
-        let calls = Rc::new(Cell::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
         let plan = CollectorPlan {
             primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: None,
             additional: vec![(
                 "Ubuntu-2".to_string(),
-                Box::new(CountingCollector(Rc::clone(&calls))),
+                Box::new(CountingCollector(Arc::clone(&calls))),
             )],
             distro_discovery: Box::new(StubDiscovery(Ok(Vec::new()))),
             warnings: Vec::new(),
         };
 
         let result = plan.capture().unwrap();
-        assert_eq!(calls.get(), 0);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
         assert!(result.additional.is_empty());
         assert_eq!(
             result.warnings,
             ["additional WSL Ubuntu-2 unavailable: distribution is no longer running"]
+        );
+    }
+
+    #[test]
+    fn stream_plan_reports_each_additional_source_state() {
+        let plan = CollectorPlan {
+            primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: None,
+            additional: vec![
+                (
+                    "running".to_string(),
+                    Box::new(StubCollector(Ok(snapshot()))),
+                ),
+                (
+                    "failed".to_string(),
+                    Box::new(StubCollector(Err("remote failed"))),
+                ),
+                (
+                    "stopped".to_string(),
+                    Box::new(StubCollector(Err("must not be sampled"))),
+                ),
+            ],
+            distro_discovery: Box::new(StubDiscovery(Ok(vec![
+                "running".to_string(),
+                "failed".to_string(),
+            ]))),
+            warnings: vec!["initial warning".to_string()],
+        };
+
+        let mut stream = plan.into_stream();
+        assert_eq!(stream.warnings, ["initial warning"]);
+        assert!(stream.primary.snapshot().is_ok());
+        let additional = stream.additional.snapshot().unwrap();
+        assert_eq!(
+            additional.running_sources,
+            ["failed".to_string(), "running".to_string()].into()
+        );
+        assert_eq!(additional.snapshots.len(), 1);
+        assert_eq!(additional.snapshots[0].0, "running");
+        assert_eq!(
+            additional.failures.get("failed").map(String::as_str),
+            Some("remote failed")
+        );
+        assert!(!additional.failures.contains_key("stopped"));
+    }
+
+    #[test]
+    fn stream_additional_discovery_failure_does_not_block_primary() {
+        let plan = CollectorPlan {
+            primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: None,
+            additional: vec![(
+                "Ubuntu-2".to_string(),
+                Box::new(StubCollector(Ok(snapshot()))),
+            )],
+            distro_discovery: Box::new(StubDiscovery(Err("discovery failed"))),
+            warnings: Vec::new(),
+        };
+
+        let mut stream = plan.into_stream();
+        assert!(stream.primary.snapshot().is_ok());
+        assert_eq!(
+            stream.additional.snapshot().unwrap_err(),
+            "additional WSL unavailable: discovery failed"
         );
     }
 
