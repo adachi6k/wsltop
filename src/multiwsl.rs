@@ -5,28 +5,6 @@ use std::process::Command;
 use std::process::{Output, Stdio};
 use std::time::Instant;
 
-#[derive(Default)]
-pub struct SnapshotBatch {
-    pub snapshots: Vec<(String, Snapshot)>,
-    pub failures: Vec<(String, String)>,
-}
-
-pub fn snapshots() -> Result<SnapshotBatch, Box<dyn Error>> {
-    let current = std::env::var("WSL_DISTRO_NAME").ok();
-    let names = running_distros()?;
-    let mut result = SnapshotBatch::default();
-    for name in names {
-        if current.as_deref() == Some(name.as_str()) {
-            continue;
-        }
-        match snapshot(&name, Some(&name)) {
-            Ok(snapshot) => result.snapshots.push((name, snapshot)),
-            Err(error) => result.failures.push((name, error.to_string())),
-        }
-    }
-    Ok(result)
-}
-
 pub fn running_distros() -> Result<Vec<String>, Box<dyn Error>> {
     list_distros(&["--list", "--running", "--quiet"])
 }
