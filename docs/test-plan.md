@@ -2,6 +2,8 @@
 
 This document separates automated CI checks from real Windows/WSL host validation. CI runs portable checks on Ubuntu, a Windows GNU cross-target check, and native Windows tests, an MSVC release build, and help/version smoke checks. Collectors that require WSL2, Windows interoperability, WSLC, Docker, or multiple distributions must be exercised on representative hosts before release.
 
+Recorded runs: [2026-09-05 Windows-native archive and TUI smoke tests](validation/2026-09-05-windows-native.md).
+
 ## Automated checks
 
 Run from a clean checkout with the tracked lockfile:
