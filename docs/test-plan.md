@@ -195,3 +195,10 @@ native runner, and publishes both platforms' archives/checksums only after both
 packaging jobs succeed. It does not publish to crates.io. Packaging verification
 and real-host results should be attached to the release PR; skipped checks remain
 explicitly pending.
+
+Changes to the release workflow run the same packaging jobs in pull requests.
+The workflow also supports a manual `workflow_dispatch` dry run. Both use the
+package version for archive names, verify transferred checksums and extracted
+executables, and upload downloadable Actions artifacts without publishing a
+GitHub release. Only a `v*` tag push reaches the publication step. Download those
+artifacts to perform the Windows/WSL runtime procedure on the exact packaged build.
