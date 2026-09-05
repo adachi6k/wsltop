@@ -1,6 +1,6 @@
 # Validation and Test Plan
 
-This document separates portable CI checks from real Windows/WSL host validation. CI validates deterministic code paths on an Ubuntu runner; collectors that require Windows interoperability, WSLC, Docker, or multiple WSL distributions must be exercised on representative hosts before release.
+This document separates automated CI checks from real Windows/WSL host validation. CI runs portable checks on Ubuntu, a Windows GNU cross-target check, and native Windows tests, an MSVC release build, and help/version smoke checks. Collectors that require WSL2, Windows interoperability, WSLC, Docker, or multiple distributions must be exercised on representative hosts before release.
 
 ## Automated checks
 
@@ -14,9 +14,97 @@ cargo build --release --locked
 cargo package --locked
 cargo run --locked -- --help
 cargo run --locked -- --version
+rustup target add x86_64-pc-windows-gnu
+cargo check --locked --all-targets --target x86_64-pc-windows-gnu
 ```
 
 Unit tests cover CPU delta normalization, resource classification, attribution remainder/clamping, Windows application/WebView2 grouping, WSLC ambiguity, Docker/WSLC process parsing and nesting, host normalization, malformed-output degradation, and grouped flat filtering. Help and version smoke tests must exit before any WSL/Windows runtime collection.
+
+Streaming regressions also cover case-insensitive primary exclusion and running
+membership, runtime discovery from an empty additional-collector set, loading
+through baseline-only updates, last-good/baseline retention, the two-second
+additional-collector cadence floor, and shutdown polling latency.
+
+## Windows-native and WSL-native smoke procedure
+
+Use a Windows 11 + WSL2 host with a primary distro and a second disposable test
+distro. Record the commit/tag, Windows and WSL versions, distro names, host/guest
+CPU counts, terminal, and available Docker/WSLC versions. Run the same scenarios
+with both executables; a cross-target compile is not a runtime test.
+
+### Windows PowerShell
+
+Build from a checkout with the MSVC Rust toolchain and Visual Studio C++ build
+tools, or extract the Windows release ZIP using the README checksum procedure.
+For a source build:
+
+```powershell
+cargo build --release --locked --target x86_64-pc-windows-msvc
+$exe = '.\target\x86_64-pc-windows-msvc\release\wsltop.exe'
+& $exe --help
+& $exe --version
+wsl.exe --list --verbose
+& $exe --once --cpu-scale host
+& $exe --distro Ubuntu-24.04 --once --json | ConvertFrom-Json
+& $exe --distro Ubuntu-24.04 --tree --json | ConvertFrom-Json
+& $exe --distro Ubuntu-24.04 --wsl-only --no-docker
+& $exe --distro Ubuntu-24.04 --interactive --interval-ms 1000
+```
+
+Replace `Ubuntu-24.04` with an installed distro. Check default selection without
+`--distro`, explicit selection (including differing letter case), and a nonexistent
+name. The explicit primary must appear only once, with the JSON source omitted;
+additional processes carry their distro name. A nonexistent required primary
+must fail a one-shot sample; interactive sampling reports the error and remains
+responsive. Where default discovery is unavailable, the running-distro fallback
+must select a primary or report that no distro is available. This fallback is
+also covered by injected unit tests; do not change a working host configuration
+merely to force it.
+
+### WSL shell
+
+From a checkout inside the primary distro:
+
+```console
+cargo build --release --locked
+./target/release/wsltop --once --cpu-scale host
+./target/release/wsltop --json
+./target/release/wsltop --tree --json
+./target/release/wsltop --wsl-only --no-docker
+./target/release/wsltop --interactive --interval-ms 1000
+./target/release/wsltop --distro Ubuntu-24.04
+```
+
+The final command must reject the Windows-only option. The local distro remains
+the primary with no source label. In `--wsl-only`, verify the WSL-visible CPU
+denominator and normalization warning; on Windows the denominator is Windows-visible.
+
+### Interactive lifecycle on both platforms
+
+1. Start with the test distro stopped. Confirm the loading frame appears before
+   collection completes, primary rows arrive independently, and flat/tree views,
+   scrolling, `i`, `h`, and `0` work.
+2. In another terminal start the test distro and keep a shell/workload running:
+   `wsl.exe -d <test-distro>`. Verify it is discovered without restarting wsltop.
+   Allow two additional-collector passes for its baseline and CPU delta; optional
+   discovery must not block primary refreshes. Test startup with that distro
+   already running too: baseline-only success must not prematurely end loading.
+3. Exit all work in the disposable distro, then use `wsl.exe --terminate <test-distro>`
+   only after saving its work. Confirm its rows disappear after discovery confirms
+   the stop, the primary remains visible, and restarting it establishes a new baseline.
+4. Exercise an optional collector failure and recovery. Last-good rows remain
+   visible with an error until a successful update; failure is distinct from a
+   confirmed stopped distro. Deterministic transient-discovery and snapshot failures
+   are unit-tested when the real host cannot reproduce them safely.
+5. Quit with `q` and with `Esc`, including during a long configured interval.
+   Verify prompt exit, restored echo/cursor/alternate screen, and a usable shell.
+   Check `Ctrl-C` where supported. Cadence waits poll every 50 ms; this does not
+   guarantee cancellation of an in-flight `wsl.exe` command.
+6. Run `--interactive --json` and verify explicit rejection without terminal damage.
+
+Record each scenario as passed, failed, or not run, with evidence. In particular,
+Windows-native TUI runtime validation is a release acceptance item; adding this
+procedure or passing CI does not mark it complete.
 
 ## Real-host feature matrix
 
@@ -91,11 +179,19 @@ Validate these failure paths deliberately:
 
 ## Release acceptance
 
-Before tagging v0.2.0:
+Before tagging a release:
 
 1. All automated commands pass from a clean checkout using `Cargo.lock`.
 2. The feature matrix is exercised on at least one current Windows 11 + WSL2 host.
 3. CPU normalization is checked against one-CPU and four-CPU workloads.
 4. At least one optional-collector failure path is verified for WSLC and Docker.
-5. The release workflow produces an executable Linux x86_64 archive from a test tag or dry run.
+5. Validate both Linux x86_64 tar.gz and Windows x86_64 MSVC ZIP packaging in a dry run: each archive contains its executable, README, and LICENSE in a versioned directory; each SHA-256 file matches the archive; extracted executables pass help/version. Do not push a test `v*` tag merely to validate packaging, because it publishes a release.
 6. README installation and quick-start commands work as written.
+7. Record native Windows and WSL interactive results, including distro discovery,
+   baseline loading, failure recovery, and terminal restoration.
+
+The tagged release workflow checks the tag against `Cargo.toml`, builds on each
+native runner, and publishes both platforms' archives/checksums only after both
+packaging jobs succeed. It does not publish to crates.io. Packaging verification
+and real-host results should be attached to the release PR; skipped checks remain
+explicitly pending.

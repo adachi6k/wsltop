@@ -23,7 +23,7 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | --- | --- |
 | `linux.rs` | Read local `/proc` on Unix and turn parsed records into process snapshots |
 | `linux_proc.rs` | Parse Linux `/proc` stat and command-line records without platform-specific APIs |
-| `collector.rs` | Define process-snapshot collectors and build the platform-selected one-shot collector plan |
+| `collector.rs` | Define process-snapshot collectors and build platform-selected one-shot and streaming plans |
 | `command.rs` | Select the target-specific bounded command implementation |
 | `command_unix.rs` | Run bounded commands in a Unix process group and terminate the group on timeout |
 | `command_windows.rs` | Run bounded commands on Windows; currently terminate the direct child pending Job Object support |
@@ -52,9 +52,16 @@ capture, one batched running-distro check skips distributions that have stopped,
 so observation does not restart them. A required
 collector failure aborts the sample; discovery and individual additional-distro
 failures degrade to warnings. Windows PowerShell, WSLC, and Docker collection
-then use the existing one-shot paths. The streaming TUI continues to use its
-existing WSL-native scheduling until its later collector-plan migration, so the
-Windows-native executable currently rejects `--interactive`.
+then use the existing one-shot paths.
+
+The TUI uses `StreamCollectorPlan::native` to construct only the primary
+synchronously, reusing the primary-only `CollectorPlan` path. Windows default or
+running-distro fallback discovery happens here only when necessary to select the
+primary. `PrimaryStreamCollector` and `AdditionalStreamCollector` move into
+separate workers. Additional discovery is deferred to its worker and repeated
+on every pass, so newly started distros can join a session. Primary exclusion,
+deduplication, and running membership use ASCII-case-insensitive comparison;
+existing collector names remain stable for baseline and aggregate keys.
 
 ## Sampling flow
 
@@ -76,9 +83,9 @@ The engine retains raw Windows WSL-host rows long enough to build attribution ev
 
 The TUI draws an empty loading frame immediately. Independent workers retain their prior cumulative snapshot and emit collector-level updates:
 
-1. Current WSL samples `/proc` after a fixed 150 ms startup warmup, then at the normal interval. It retries an unavailable initial baseline. Non-Windows collectors publish independently using a clearly marked provisional WSL-visible CPU count until host discovery completes.
+1. The platform-selected primary takes a baseline, waits a fixed 150 ms startup warmup, then samples at the normal interval. It reads local `/proc` on WSL and remote `/proc` through `wsl.exe` on Windows. It retries an unavailable initial baseline. Non-Windows collectors publish independently using a clearly marked provisional CPU count visible to the executing platform until host discovery completes.
 2. Windows samples cumulative process time independently at the normal interval. Its first snapshot publishes the host CPU count returned by the collector script (CIM first, then `[Environment]::ProcessorCount` fallback). Each normalized collector event carries the CPU count it used. If the published Windows count differs from the provisional count, cached non-Windows rows are invalidated and delayed old-scale events are rejected before later samples repopulate them. The first successful CIM value is cached; failed initial snapshots are retried.
-3. Additional WSL, WSLC, and Docker use a minimum two-second cadence.
+3. Additional WSL, WSLC, and Docker use a minimum two-second cadence. Additional WSL emits running, delta-ready, and failed source state. Baseline-only success leaves startup loading pending; a delta, an empty running set, or an error ends loading. Baselines and last-good rows survive transient discovery/snapshot failures; confirmed stopped sources are removed. Primary and additional workers poll stop requests at most every 50 ms during cadence waits; this does not bound an in-flight external command.
 4. WSLC and Docker publish aggregate container statistics separately from process detail. Details are enabled by default for text/TUI output and can be disabled with `--hide-container-processes`; aggregate refreshes retain same-scale last-good details, and failed per-container detail commands do not erase them. Detail caches carry their normalization CPU count, while aggregate and detail warnings remain separate so an aggregate success cannot hide an unresolved detail failure.
 5. Detail requests use a separate capacity-one queue per runtime. Per-container commands run in bounded batches of at most four workers and time out after five seconds, so detail latency cannot stall aggregate cadence or create an unbounded backlog.
 6. The aggregator replaces only the source named by an aggregate event, rebuilds both views, and publishes a partial snapshot. Delayed detail events merge process lists only into containers still present in the latest aggregate and never clear aggregate errors or roll back CPU/memory. An error records status but retains that source's last successful data.
@@ -146,7 +153,7 @@ The TUI renders the same text views from incrementally rebuilt snapshots. Its `t
 
 ## Degradation and lifecycle
 
-The platform-selected primary WSL collector is required for a sample: local `/proc` when running inside WSL, or the selected remote `wsl.exe` collector when running on Windows. Unless `--wsl-only` is used, Windows host collection is also required. Optional collectors degrade independently:
+The platform-selected primary WSL collector is required for a one-shot sample: local `/proc` when running inside WSL, or the selected remote `wsl.exe` collector when running on Windows. Unless `--wsl-only` is used, Windows host collection is also required for one-shot sampling. In the TUI, plan-selection failure is fatal to streaming startup, while subsequent collector errors are status events: workers retry and retain last-good rows. Optional collectors degrade independently:
 
 - additional-distribution failure: continue with the primary WSL distribution and other sources
 - missing WSLC executable: silently continue without WSLC rows
@@ -160,7 +167,7 @@ Warnings are written to stderr in one-shot mode and surfaced in TUI status. `Ter
 
 - Snapshots across collectors are not atomic.
 - Windows collection starts a PowerShell process for each cumulative snapshot.
-- Remote WSL distributions are sampled serially through `wsl.exe` and have extra skew; on Windows this includes the required primary distribution.
+- Additional remote WSL distributions are sampled serially through `wsl.exe` and have extra skew. The Windows-native primary also uses `wsl.exe`, but has an independent TUI worker.
 - WSLC mapping covers the current/default CLI session conservatively.
 - `docker top` process CPU is a ps-style average rather than an interval sample.
 - GUI presentation is outside the current CLI/TUI architecture.

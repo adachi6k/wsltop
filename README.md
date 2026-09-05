@@ -4,7 +4,7 @@
 
 > Windows Task Manager says `VmmemWSL` is busy. `wsltop` shows which Windows, WSL, WSLC, or Docker workload is responsible.
 
-`wsltop` provides a one-shot CLI on both Windows and WSL. The terminal UI currently runs from WSL; Windows-native TUI support is the next migration stage. A graphical UI is outside the current scope.
+`wsltop` provides a one-shot CLI and interactive terminal UI on both Windows and WSL. A graphical UI is outside the current scope.
 
 ![wsltop terminal UI showing flat and tree views](docs/assets/wsltop-demo.gif)
 
@@ -119,7 +119,7 @@ Requirements:
 - Optional: `wslc.exe` for WSL Containers data
 - Optional: Docker CLI plus a reachable Docker daemon for Docker data
 
-### Windows-native one-shot
+### Windows-native CLI and TUI
 
 Building on Windows produces `wsltop.exe`. It collects the primary WSL
 distribution through `wsl.exe`, while Windows, WSLC, and Docker collectors run
@@ -130,9 +130,35 @@ NAME`, the WSL default distribution, then the first running distribution.
 cargo build --release --locked
 .\target\release\wsltop.exe --once
 .\target\release\wsltop.exe --distro Ubuntu-24.04 --tree
+.\target\release\wsltop.exe --distro Ubuntu-24.04 --interactive
 ```
 
-Windows-native interactive mode is not enabled yet; run the TUI from WSL.
+Run these source-build commands from a checkout in PowerShell with a Rust
+toolchain and the Visual Studio C++ build tools installed. At least one usable
+WSL2 distribution is required, including when only Windows rows are of interest.
+The selected primary may be started by `wsl.exe`; additional distributions are
+collected only while running. `--distro` is accepted only by the Windows executable.
+
+The release workflow packages Windows x86_64 builds as
+`wsltop-<tag>-x86_64-pc-windows-msvc.zip` with a `.zip.sha256` checksum. For a
+release containing that asset, download both files from
+[GitHub Releases](https://github.com/adachi6k/wsltop/releases), then run in PowerShell
+(replace `<tag>` with the downloaded version):
+
+```powershell
+$archive = 'wsltop-<tag>-x86_64-pc-windows-msvc.zip'
+$expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
+if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
+Expand-Archive $archive -DestinationPath .
+& ".\wsltop-<tag>-x86_64-pc-windows-msvc\wsltop.exe" --interactive
+```
+
+The ZIP includes `wsltop.exe`, README, and license; using it requires no Rust
+toolchain. Releases predating Windows packaging may have only Linux assets.
+The source checkout documents the current development version; use a release's
+bundled README for the features available in that binary.
+
+### WSL-native CLI and TUI
 
 Install with Cargo (requires a Rust toolchain):
 
@@ -168,6 +194,7 @@ wsltop [OPTIONS]
 --interval-ms N        Sampling/refresh interval (default: 3000, minimum: 100)
 --show-wsl-host        Show raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views
 --wsl-only             Skip Windows, additional-distro, and WSLC collectors
+--distro NAME          Select the primary WSL distro (Windows executable only)
 --no-wslc              Disable WSLC collection
 --no-docker            Disable Docker collection
 --show-container-processes Include Docker/WSLC processes (default for text/TUI)
@@ -181,7 +208,9 @@ Options that affect collection or the initial view also apply to interactive mod
 
 ## Interactive TUI
 
-Start the terminal UI with `wsltop --interactive`. It draws immediately and accepts partial collector updates instead of waiting for every source. Current-WSL `/proc` data uses a fixed 150 ms startup warmup, then the configured interval. While Windows host discovery is pending, non-Windows collectors use the WSL-visible CPU count and are marked provisional. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` explicitly keeps the WSL-visible scale. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize local sampling.
+Start the terminal UI with `wsltop --interactive` in WSL or `wsltop.exe --interactive` in Windows. It draws immediately and accepts partial collector updates instead of waiting for every source. The primary WSL collector reads local `/proc` in WSL or samples remotely through `wsl.exe` on Windows. After its first successful baseline it waits a fixed 150 ms warmup, then uses the configured interval. While Windows host discovery is pending, non-Windows collectors use the executing platform's visible CPU count and are marked provisional. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` keeps the executing platform's visible CPU count. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize primary sampling. Windows primary selection may still require synchronous default/fallback discovery.
+
+Additional distro discovery runs in its own worker and discovers newly started distributions during the session. Its initial baseline remains `loading` until a CPU delta is available, no additional distro is running, or an error is reported. Transient failures retain last-good rows; confirmed stopped distributions lose their rows and baseline. Distribution-name matching ignores ASCII casing.
 
 The TUI retains each collector's last successful result. While collectors start, the footer reports `loading`; after a collector error its previous rows remain visible and the footer reports the error. Docker/WSLC aggregate rows are collected separately from internal process details. Details are enabled by default for text/TUI output and use a separate bounded queue and five-second command timeout, so slow process inspection does not block aggregate refreshes. Use `--hide-container-processes` to skip process rows in flat output.
 
@@ -251,7 +280,7 @@ Application CPU is exactly the sum of observed member-process CPU; child PIDs ex
 
 When wsltop runs inside WSL, the current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These additional remote samples are best-effort and introduce more timing skew than direct `/proc` access.
 
-When `wsltop.exe` runs on Windows, the selected primary distribution and every additional distribution are sampled remotely through `wsl.exe`; failure of the primary is fatal, while additional distributions remain best-effort. `--distro NAME` selects the required primary explicitly.
+When `wsltop.exe` runs on Windows, the selected primary distribution and every additional distribution are sampled remotely through `wsl.exe`. Primary failure aborts a one-shot sample; the TUI reports sampling errors and retries while retaining last-good data. Failure to select a primary prevents streaming startup. Additional distributions remain best-effort. `--distro NAME` selects the required primary explicitly. JSON omits `source` for the primary and includes the distro name for additional sources.
 
 `--wsl-only` limits WSL distribution collection to the primary distribution and disables Windows and WSLC collection. Optional Docker collection remains enabled unless `--no-docker` is also passed. In WSL-native execution it uses the WSL-visible logical CPU count and warns that exact Windows-host normalization is unavailable. In Windows-native execution it uses the Windows logical CPU count but still disables Windows host-process attribution.
 
@@ -274,7 +303,8 @@ JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 - WSLC session attribution is deliberately conservative when multiple host mappings are possible.
 - Docker process `%CPU` from `docker top` is a ps-style lifetime/decay average and may not align precisely with interval-sampled container or `/proc` CPU.
 - Memory values from Windows, WSLC, and Docker have different meanings and are not attributed by subtraction.
-- This is a WSL2-hosted CLI/TUI, not a native Windows executable or GUI.
+- Both executables require access to a WSL2 distribution; Windows-only monitoring without WSL is not supported.
+- Remote WSL discovery and snapshots can wait on `wsl.exe`. Optional TUI discovery runs separately from primary sampling, but primary selection/collection can still be delayed.
 
 ## Documentation
 
@@ -295,7 +325,7 @@ cargo build --release --locked
 cargo package --locked
 ```
 
-CI runs portable build, lint, test, and help/version smoke checks on Ubuntu. Windows/WSL interoperability, WSLC, Docker, attribution accuracy, and terminal recovery require real-host validation; see the test plan.
+CI runs build, lint, test, and help/version checks on Ubuntu, a Windows GNU cross-target check, and native Windows tests and release-build checks. Tagged releases package Linux x86_64 archives and Windows x86_64 ZIPs with SHA-256 checksums. Windows/WSL interoperability, WSLC, Docker, attribution accuracy, and terminal recovery require real-host validation; see the test plan.
 
 ## License
 
