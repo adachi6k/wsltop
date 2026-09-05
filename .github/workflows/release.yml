@@ -34,10 +34,62 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.sha256
+  windows-x86_64:
+    name: Windows x86_64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Verify tag matches package version
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
+          if ($env:GITHUB_REF_NAME -ne "v$($metadata.packages[0].version)") {
+            throw 'Tag does not match package version'
+          }
+      - name: Build locked release binary
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Smoke test executable
+        run: |
+          & target/x86_64-pc-windows-msvc/release/wsltop.exe --help
+          if ($LASTEXITCODE -ne 0) { throw 'Help smoke test failed' }
+          & target/x86_64-pc-windows-msvc/release/wsltop.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Version smoke test failed' }
+      - name: Package
+        run: |
+          $name = "wsltop-$env:GITHUB_REF_NAME-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Path "dist/$name" -Force | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/wsltop.exe, README.md, LICENSE "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name.zip" | Set-Content -Encoding ascii "dist/$name.zip.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wsltop-${{ github.ref_name }}-x86_64-pc-windows-msvc
+          path: |
+            dist/*.zip
+            dist/*.sha256
+
+  publish:
+    name: Publish release assets
+    needs: [linux-x86_64, windows-x86_64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wsltop-*
+          merge-multiple: true
+          path: dist
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.sha256

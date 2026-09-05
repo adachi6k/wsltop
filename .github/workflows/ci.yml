@@ -50,3 +50,12 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         run: cargo test --locked --all-targets
+      - name: Build Windows release executable
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Smoke test Windows executable
+        shell: pwsh
+        run: |
+          & target/x86_64-pc-windows-msvc/release/wsltop.exe --help
+          if ($LASTEXITCODE -ne 0) { throw 'Help smoke test failed' }
+          & target/x86_64-pc-windows-msvc/release/wsltop.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Version smoke test failed' }
