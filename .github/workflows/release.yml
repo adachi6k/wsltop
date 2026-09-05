@@ -31,6 +31,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: wsltop-${{ github.ref_name }}-x86_64-unknown-linux-gnu
+          if-no-files-found: error
           path: |
             dist/*.tar.gz
             dist/*.sha256
@@ -71,6 +72,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: wsltop-${{ github.ref_name }}-x86_64-pc-windows-msvc
+          if-no-files-found: error
           path: |
             dist/*.zip
             dist/*.sha256
@@ -84,11 +86,22 @@ jobs:
         with:
           pattern: wsltop-*
           merge-multiple: true
+          # Upload paths share dist/ as their root, so archive basenames land here.
           path: dist
+      - name: Verify downloaded release assets
+        working-directory: dist
+        run: |
+          for suffix in x86_64-unknown-linux-gnu.tar.gz x86_64-pc-windows-msvc.zip; do
+            archive="wsltop-${GITHUB_REF_NAME}-${suffix}"
+            test -s "$archive"
+            test -s "$archive.sha256"
+            sha256sum --check "$archive.sha256"
+          done
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
             dist/*.zip
