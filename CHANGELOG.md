@@ -4,17 +4,29 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-06
+
 ### Added
 
 - Windows-target compile checking, native Windows test execution, and target-specific command timeout implementations as groundwork for native Windows collection.
 - A mockable process-snapshot collector boundary and a stable one-shot collector plan for current and additional WSL distributions.
 - Windows-native one-shot collection with `--distro NAME`, default-distro, and running-distro primary selection.
+- Windows-native interactive monitoring with independent collector scheduling, partial updates, and terminal restoration.
+- Shared CPU, memory, and name sorting with `--sort cpu|memory|name` and `--sort-order asc|desc`; TUI keys `c`, `m`, `n`, and `r` update the displayed order immediately.
+- Linux x86_64 and Windows x86_64 MSVC release archives with SHA-256 checksums and extracted-executable verification; release packaging can be validated without publishing a tag.
 
 ### Changed
 
 - Linux `/proc` parsing is target-neutral and separate from local filesystem collection; `libc` is now a Unix-only dependency.
 - One-shot sampling now fixes the additional WSL collector set once per sample, verifies running status before each optional capture to avoid restarting stopped distributions, and keeps optional discovery and distro failures as warnings.
-- Windows-native execution uses remote WSL snapshots while preserving `source: None` for the primary distro and connecting the existing Windows, WSLC, and Docker collectors; interactive mode remains WSL-native for now.
+- Windows-native CLI and TUI use remote WSL snapshots while preserving `source: None` for the primary distro and connecting the existing Windows, WSLC, and Docker collectors.
+- CLI/JSON and TUI share sorting and snapshot projections. Child processes remain grouped beneath their containers, with limits applied after sorting and deterministic tie-breaking.
+- Memory/name tree views include idle Windows applications and processes. CPU descending remains the default; JSON fields, CPU accounting, and collector-provided memory values are preserved.
+
+### Fixed
+
+- WSL distribution matching is case-insensitive, preventing duplicate primary collection and mismatched remote snapshots.
+- Optional distro discovery no longer delays initial TUI sampling; additional distro rows remain loading until an interval delta is available.
 
 ## [0.3.0] - 2026-08-29
 
@@ -87,7 +99,8 @@ All notable changes to this project will be documented in this file. The format 
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/adachi6k/wsltop/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/adachi6k/wsltop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/adachi6k/wsltop/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/adachi6k/wsltop/releases/tag/v0.1.0
