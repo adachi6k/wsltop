@@ -353,6 +353,7 @@ JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 
 ## Documentation
 
+- [WinGet registration and release automation](docs/winget.md) (community registration pending)
 - [Architecture](docs/architecture.md)
 - [CPU accounting](docs/cpu-accounting.md)
 - [Validation and test plan](docs/test-plan.md)
