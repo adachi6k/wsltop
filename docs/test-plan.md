@@ -130,6 +130,9 @@ procedure or passing CI does not mark it complete.
 | Flat JSON | `wsltop --json` | Top-level value remains the compatible PID-level resource array with `kind` fields and optional additive `cpu_time_seconds` |
 | Tree JSON | `wsltop --tree --json` | Structured object includes host CPU count, additive Windows application groups, attribution groups, residuals, and unresolved resources |
 | Interactive TUI | `wsltop --interactive` | An immediate loading frame is followed by current-WSL data after the short warmup; slow optional collectors do not block it and keyboard navigation remains responsive |
+| Shared resource sorting | `--sort memory`, `--sort name --sort-order asc`, and TUI `c/m/n/r` | Header reflects TUI sort/direction; the ranking changes immediately and survives collector updates; CPU remains the default |
+| Sorting with grouped limits | `--sort memory --limit 1 --container-process-limit 1` with a container having distinct CPU-heavy and memory-heavy children | Parent selected by memory, correct memory-heavy child retained beneath it; tree keeps all children and unchanged residuals |
+| Sort before limit | Change TUI from CPU to memory with `--limit 1` and a long interval | A memory-heavy resource outside the previous CPU limit can appear without waiting for another sample |
 | Partial collector failure | Allow a collector to succeed, then fail it during TUI operation | Its last successful rows remain visible and the footer reports the error while other collectors continue updating |
 | Hidden container detail | Start with `--hide-container-processes`, then press `t` | Flat output omits process rows; tree view requests and displays process detail on the next slow refresh |
 | Initial interactive options | Combine `--interactive` with interval, collector switches, limit, tree, infra, and host options | Initial state and all collection/filter choices are honored |

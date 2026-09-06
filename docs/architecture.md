@@ -34,6 +34,7 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | `docker.rs` | Collect Docker statistics and Docker-namespace process observations |
 | `sampler.rs` | Convert cumulative process-time deltas into host-normalized `ResourceUsage` values |
 | `monitor.rs` | Orchestrate collectors, sampling interval, degradation warnings, flat filtering, and snapshot construction |
+| `query.rs` | Shared numeric/name ordering, flat filtering and limits, and hierarchical tree projections |
 | `stream.rs` | Run stateful, independently scheduled TUI collectors and aggregate partial events |
 | `attribution.rs` | Build WSL, WSLC, and Docker CPU attribution groups without double-counting |
 | `render.rs` | Render a `MonitorSnapshot` as the flat table or text tree |
@@ -41,6 +42,22 @@ Linux /proc    Windows PowerShell    WSLC CLI    Docker CLI    wsl.exe
 | `main.rs` | Parse/validate CLI options and choose JSON, text, or interactive presentation |
 
 Collector parsing and accounting are shared between interfaces. `Monitor::sample()` preserves atomic one-shot and JSON behavior. The TUI uses the stateful streaming orchestrator, which publishes the same `MonitorSnapshot` type after each collector event.
+
+`MonitorSnapshot::from_collected` is the common projection boundary for one-shot
+and streaming collection. `ResourceQuery` applies `SortKey` / `SortOrder`, host
+and infrastructure filters, and grouped flat limits. Container children match
+both their environment and parent identifier, are sorted using the same key,
+and are limited only after selection. Tree projections sort peers within each
+existing hierarchy and retain the accounting/residual values and all children.
+
+The snapshot retains an untruncated `QuerySource` alongside its projected views.
+The TUI requeries that source immediately on sort/filter keys and reapplies its
+current query to each arriving sample. A previous CPU limit therefore cannot
+hide a memory-heavy candidate or preselect the wrong container children. This
+retains additional in-memory view data but does not trigger collector work or
+add an Agent cache protocol. CLI/JSON uses the same projection implementation;
+no ranking is computed from rendered strings. Future environment/name filters
+and MCP query operations can extend this boundary rather than duplicate it.
 
 One-shot runtime collection now selects a platform plan. On WSL, `CollectorPlan`
 treats the invoking distribution's local `/proc` collector as required. On
@@ -145,7 +162,7 @@ Memory attribution is deliberately absent because Windows working set, WSLC memo
 
 ## Output paths and compatibility
 
-Flat text consumes the application-ranked `MonitorSnapshot.resources`, while flat JSON consumes the PID-compatible `MonitorSnapshot.pid_resources`. One-shot flat JSON therefore skips Windows application metadata and container process rows by default; tree JSON and human-readable views retain detail. Host resources are hidden unless `--show-wsl-host` is set; Docker and WSLC process rows are included by default in text/TUI and suppressed with `--hide-container-processes` (the old Docker-specific show name remains an alias); `--hide-infra`, sorting, and `--limit` are applied by the engine. Containers participate in top-level sorting and limiting by their total CPU value, then up to `--container-process-limit` CPU-sorted process rows are placed directly after the selected container without counting toward `--limit`. Text output summarizes omitted process count and CPU; residual accounting still uses every observed process. Existing container rows are preserved.
+Flat text consumes the application-ranked `MonitorSnapshot.resources`, while flat JSON consumes the PID-compatible `MonitorSnapshot.pid_resources`. One-shot flat JSON therefore skips Windows application metadata and container process rows by default; tree JSON and human-readable views retain detail. Host resources are hidden unless `--show-wsl-host` is set; Docker and WSLC process rows are included by default in text/TUI and suppressed with `--hide-container-processes` (the old Docker-specific show name remains an alias); `--hide-infra`, sorting, and `--limit` are applied by the engine. Containers participate in top-level sorting and limiting by the selected sort key (CPU by default), then up to `--container-process-limit` process rows sorted by the same key are placed directly after the selected container without counting toward `--limit`. Text output summarizes omitted process count and CPU; residual accounting still uses every observed process. Existing container rows are preserved.
 
 Tree text and tree JSON consume `MonitorSnapshot.tree`. Tree mode uses host rows internally regardless of `--show-wsl-host`. Plain `--json` remains a flat resource array for compatibility; `--tree --json` is a separate structured schema.
 

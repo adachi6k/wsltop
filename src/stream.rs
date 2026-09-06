@@ -5,7 +5,7 @@ use crate::collector::{
 };
 use crate::docker::DockerUsage;
 use crate::model::{ContainerProcessUsage, ResourceUsage};
-use crate::monitor::{prepare_flat_resources, MonitorConfig, MonitorSnapshot};
+use crate::monitor::{MonitorConfig, MonitorSnapshot};
 use crate::windows_app::WindowsMetadata;
 use crate::wslc::WslcUsage;
 use crate::{docker, sampler, windows, windows_app, wslc};
@@ -305,23 +305,21 @@ impl Aggregate {
             tree.windows_applications =
                 windows_app::group_processes(&self.windows, &self.windows_metadata);
         }
-        if config.hide_infra {
-            attribution::hide_infra(&mut tree);
-        }
-
         let mut resources = linux;
         resources.extend(self.windows.clone());
         resources.extend(self.wslc.resources.clone());
         if config.show_container_processes {
-            append_processes(
-                &mut resources,
-                &self.wslc.process_resources,
-                config.container_process_limit,
+            resources.extend(
+                self.wslc
+                    .process_resources
+                    .iter()
+                    .flat_map(|item| item.processes.iter().cloned()),
             );
-            append_processes(
-                &mut resources,
-                &self.docker.resources,
-                config.container_process_limit,
+            resources.extend(
+                self.docker
+                    .resources
+                    .iter()
+                    .flat_map(|item| item.processes.iter().cloned()),
             );
         }
         resources.extend(
@@ -330,27 +328,7 @@ impl Aggregate {
                 .iter()
                 .map(|item| item.resource.clone()),
         );
-        let mut pid_resources = resources.clone();
-        prepare_flat_resources(&mut pid_resources, config);
-        if config.collect_windows_applications && !config.wsl_only {
-            resources.retain(|row| {
-                row.environment != crate::model::EnvironmentKind::Windows
-                    || row.kind != crate::model::ResourceKind::Process
-            });
-            resources.extend(
-                tree.windows_applications
-                    .iter()
-                    .map(|application| application.resource.clone()),
-            );
-        }
-        prepare_flat_resources(&mut resources, config);
-        MonitorSnapshot {
-            host_logical_cpu_count: self.host_cpu_count,
-            resources,
-            pid_resources,
-            tree,
-            warnings,
-        }
+        MonitorSnapshot::from_collected(resources, tree, warnings, config)
     }
 }
 
@@ -371,19 +349,6 @@ impl Event {
             | Self::Windows(_)
             | Self::WindowsMetadata(_) => false,
         }
-    }
-}
-
-fn append_processes(
-    output: &mut Vec<ResourceUsage>,
-    containers: &[crate::model::ContainerProcessUsage],
-    limit: usize,
-) {
-    for container in containers {
-        let mut rows = container.processes.clone();
-        rows.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent));
-        rows.truncate(limit);
-        output.extend(rows);
     }
 }
 
@@ -875,6 +840,7 @@ mod tests {
 
     fn config() -> MonitorConfig {
         MonitorConfig {
+            sort: Default::default(),
             interval: Duration::from_secs(1),
             limit: 30,
             show_wsl_host: false,
