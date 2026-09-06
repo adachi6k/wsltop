@@ -89,7 +89,7 @@ Windows 11 and a usable WSL2 distribution are required to monitor workloads.
 - [x] Only one package version and its three manifest files are included.
 - [x] Validated with `winget validate --manifest`.
 - [x] Tested local manifest installation and installed executable version/help.
-- [x] Uses manifest schema 1.12.0.
+- [x] Uses manifest schema 1.10.0.
 - [ ] Contributor License Agreement, if required by the Microsoft CLA bot.
 """
     is_new = api(f"{upstream}/contents/manifests/a/Adachi6k/wsltop", missing_ok=True) is None

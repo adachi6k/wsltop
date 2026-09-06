@@ -17,7 +17,7 @@ python3 scripts/winget.py --tag v0.4.0 --output generated
 
 Requires Python 3.10+ and authenticated GitHub CLI. Generation accepts only a
 published stable version, downloads the fixed release ZIP and SHA-256 sidecar,
-checks the hash and exact versioned ZIP layout, and generates three schema 1.12.0
+checks the hash and exact versioned ZIP layout, and generates three schema 1.10.0
 YAML files. A changed ZIP layout or checksum fails instead of silently submitting
 an invalid installer. The initial manifest is under `packaging/winget/manifests`.
 Future manifests are regenerated from each release; the nested executable path

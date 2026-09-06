@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
 
 PackageIdentifier: Adachi6k.wsltop
 PackageVersion: 0.4.0
@@ -24,4 +24,4 @@ Tags:
 - docker
 ReleaseNotesUrl: https://github.com/adachi6k/wsltop/releases/tag/v0.4.0
 ManifestType: defaultLocale
-ManifestVersion: 1.12.0
+ManifestVersion: 1.10.0

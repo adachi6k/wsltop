@@ -84,7 +84,7 @@ jobs:
         shell: pwsh
         run: |
           $installed = if (Get-Command winget -ErrorAction SilentlyContinue) { [version]((winget --version).TrimStart('v')) } else { [version]'0.0' }
-          if ($installed -lt [version]'1.12.0') {
+          if ($installed -lt [version]'1.10.0') {
             Install-Module Microsoft.WinGet.Client -Repository PSGallery -Force -Scope CurrentUser
             Repair-WinGetPackageManager -AllUsers -Force -Latest
           }

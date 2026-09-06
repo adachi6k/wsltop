@@ -11,7 +11,7 @@ import zipfile
 
 PACKAGE = "Adachi6k.wsltop"
 REPO = "adachi6k/wsltop"
-SCHEMA = "1.12.0"
+SCHEMA = "1.10.0"
 
 
 def version_from_tag(tag):
