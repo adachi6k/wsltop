@@ -100,7 +100,7 @@ impl Sort {
         // case-sensitive Rust string ordering, consistently across adapters.
         selected
             .then_with(|| a.name.cmp(&b.name))
-            .then_with(|| (a.environment as u8).cmp(&(b.environment as u8)))
+            .then_with(|| environment_rank(a.environment).cmp(&environment_rank(b.environment)))
             .then_with(|| a.kind.as_str().cmp(b.kind.as_str()))
             .then_with(|| a.source.cmp(&b.source))
             .then_with(|| a.id.cmp(&b.id))
@@ -109,6 +109,16 @@ impl Sort {
 
     pub fn resources(self, rows: &mut [ResourceUsage]) {
         rows.sort_by(|a, b| self.compare(a, b));
+    }
+}
+
+// Preserve the environment tie-break order independently of enum discriminants.
+fn environment_rank(environment: EnvironmentKind) -> u8 {
+    match environment {
+        EnvironmentKind::Windows => 0,
+        EnvironmentKind::Wsl => 1,
+        EnvironmentKind::WslContainer => 2,
+        EnvironmentKind::Docker => 3,
     }
 }
 
@@ -293,6 +303,34 @@ pub(crate) mod tests {
             names(&query.flat(&[row("nan", f64::NAN, 1), row("busy", 1.0, 1)])),
             ["busy", "nan"]
         );
+    }
+
+    #[test]
+    fn environment_ties_keep_the_same_order_for_every_sort_mode() {
+        let expected = [
+            EnvironmentKind::Windows,
+            EnvironmentKind::Wsl,
+            EnvironmentKind::WslContainer,
+            EnvironmentKind::Docker,
+        ];
+        for key in [SortKey::Cpu, SortKey::Memory, SortKey::Name] {
+            for order in [SortOrder::Asc, SortOrder::Desc] {
+                let mut rows: Vec<_> = expected
+                    .iter()
+                    .rev()
+                    .map(|&environment| {
+                        let mut resource = row("same", 2.0, 20);
+                        resource.environment = environment;
+                        resource
+                    })
+                    .collect();
+                Sort { key, order }.resources(&mut rows);
+                assert_eq!(
+                    rows.iter().map(|row| row.environment).collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
     }
 
     #[test]
