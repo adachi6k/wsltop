@@ -15,6 +15,7 @@ struct RawWindowsSnapshot {
     logical_cpu_count: u32,
     logical_cpu_count_from_cim: bool,
     processes: Vec<RawWindowsProcess>,
+    host_cpu: Option<crate::model::HostCpuSample>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,10 +79,11 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
     // hides them by default to avoid double-counting WSL load.
     let script = snapshot_script(HOST_LOGICAL_CPU_COUNT.get().copied().unwrap_or(0));
 
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .map_err(|e| io::Error::new(e.kind(), format!("failed to execute powershell.exe: {e}")))?;
+    let output = command::output_with_timeout(
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]),
+        Duration::from_secs(10),
+    )
+    .map_err(|e| io::Error::new(e.kind(), format!("failed to execute powershell.exe: {e}")))?;
 
     if !output.status.success() {
         return Err(format!(
@@ -123,6 +125,7 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
             processes,
         },
         host_logical_cpu_count: raw.logical_cpu_count,
+        host_cpu: raw.host_cpu,
     })
 }
 
@@ -199,7 +202,36 @@ $items = @(Get-Process | ForEach-Object {
         memory_bytes = [uint64]$_.WorkingSet64
     }
 })
+$hostCpu = $null
+try {
+    Add-Type -ErrorAction Stop -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class WsltopSystemTimes {
+    [DllImport("kernel32.dll")]
+    public static extern ushort GetActiveProcessorGroupCount();
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetSystemTimes(out ulong idle, out ulong kernel, out ulong user);
+}
+'@
+    if ([WsltopSystemTimes]::GetActiveProcessorGroupCount() -eq 1) {
+        [uint64]$idle = 0; [uint64]$kernel = 0; [uint64]$user = 0
+        if ([WsltopSystemTimes]::GetSystemTimes([ref]$idle, [ref]$kernel, [ref]$user)) {
+            $hostCpu = [PSCustomObject]@{ idle = $idle; timestamp = $kernel + $user }
+        }
+    } else {
+        # GetSystemTimes covers only the calling processor group; use the system total instead.
+        $counter = Get-CimInstance Win32_PerfRawData_PerfOS_Processor -Filter "Name='_Total'" -OperationTimeoutSec 1 -ErrorAction Stop
+        if ($null -ne $counter.PercentProcessorTime -and $null -ne $counter.Timestamp_Sys100NS) {
+            $hostCpu = [PSCustomObject]@{
+                idle = [uint64]$counter.PercentProcessorTime
+                timestamp = [uint64]$counter.Timestamp_Sys100NS
+            }
+        }
+    }
+} catch { }
 [PSCustomObject]@{
+    host_cpu = $hostCpu
     logical_cpu_count = $cpuCount
     logical_cpu_count_from_cim = $cpuCountFromCim
     processes = $items

@@ -28,6 +28,7 @@ pub struct Monitor {
 }
 
 pub struct MonitorSnapshot {
+    pub host_cpu_percent: Option<f64>,
     pub sort: Sort,
     pub query_source: Option<QuerySource>,
     pub host_logical_cpu_count: u32,
@@ -70,6 +71,7 @@ impl MonitorSnapshot {
         apply_windows_application_view(&mut resources, &tree.windows_applications, config);
         let query = config.query();
         Self {
+            host_cpu_percent: None,
             sort: config.sort,
             host_logical_cpu_count: tree.host_logical_cpu_count,
             resources: query.flat(&resources),
@@ -246,12 +248,12 @@ impl Monitor {
             );
         }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
-        Ok(MonitorSnapshot::from_collected(
-            resources,
-            tree,
-            warnings,
-            &self.config,
-        ))
+        let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, &self.config);
+        snapshot.host_cpu_percent = windows_after
+            .and_then(|sample| sample.host_cpu)
+            .zip(windows_before.and_then(|sample| sample.host_cpu))
+            .and_then(|(after, before)| after.usage_since(before));
+        Ok(snapshot)
     }
 }
 

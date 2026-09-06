@@ -22,7 +22,7 @@ enum Event {
     HostCpuCount(u32),
     CollectorWarnings(Vec<String>),
     Linux(Normalized<Result<Vec<ResourceUsage>, String>>),
-    Windows(Result<(Vec<ResourceUsage>, u32), String>),
+    Windows(Result<(Vec<ResourceUsage>, u32, Option<f64>), String>),
     WindowsMetadata(Result<WindowsMetadata, String>),
     ExtraWsl(Normalized<Result<ExtraWslUpdate, String>>),
     WslcAggregate(Normalized<Result<WslcUsage, String>>),
@@ -67,6 +67,7 @@ impl Event {
 
 #[derive(Default)]
 struct Aggregate {
+    host_cpu_percent: Option<f64>,
     host_cpu_count: u32,
     host_cpu_authoritative: bool,
     linux: Vec<ResourceUsage>,
@@ -191,10 +192,14 @@ impl Aggregate {
             Event::HostCpuCount(_) => unreachable!(),
             Event::CollectorWarnings(_) => unreachable!(),
             Event::Linux(value) => value.value.map(|rows| self.linux = rows),
-            Event::Windows(value) => value.map(|(rows, count)| {
-                self.windows = rows;
-                self.host_cpu_count = count;
-            }),
+            Event::Windows(value) => {
+                self.host_cpu_percent = None;
+                value.map(|(rows, count, total)| {
+                    self.windows = rows;
+                    self.host_cpu_count = count;
+                    self.host_cpu_percent = total;
+                })
+            }
             Event::WindowsMetadata(value) => value.map(|metadata| {
                 self.windows_metadata = metadata;
             }),
@@ -328,7 +333,9 @@ impl Aggregate {
                 .iter()
                 .map(|item| item.resource.clone()),
         );
-        MonitorSnapshot::from_collected(resources, tree, warnings, config)
+        let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, config);
+        snapshot.host_cpu_percent = self.host_cpu_percent;
+        snapshot
     }
 }
 
@@ -640,7 +647,14 @@ fn sample_windows(
                 }
                 if let Some(old) = &before {
                     let rows = sampler::calculate_usage(&old.snapshot, &after.snapshot, count);
-                    if sender.send(Event::Windows(Ok((rows, count)))).is_err() {
+                    let total = after
+                        .host_cpu
+                        .zip(old.host_cpu)
+                        .and_then(|(after, before)| after.usage_since(before));
+                    if sender
+                        .send(Event::Windows(Ok((rows, count, total))))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -1102,6 +1116,22 @@ mod tests {
     }
 
     #[test]
+    fn host_total_is_independent_of_rows_and_cleared_on_collection_failure() {
+        let mut options = config();
+        options.limit = 1;
+        let mut aggregate = Aggregate::new(&options);
+        assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
+        aggregate.apply(Event::Windows(Ok((vec![], 16, Some(42.5)))));
+        let mut snapshot = aggregate.snapshot(&options);
+        snapshot.requery(&options.query());
+        assert_eq!(snapshot.host_cpu_percent, Some(42.5));
+        aggregate.apply(Event::Windows(Err("offline".into())));
+        assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
+        aggregate.apply(Event::Windows(Ok((vec![], 16, None))));
+        assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
+    }
+
+    #[test]
     fn windows_applications_are_ranked_once_while_pid_rows_remain_for_json() {
         let mut options = config();
         options.limit = 1;
@@ -1114,7 +1144,7 @@ mod tests {
         second.pid = Some(11);
         second.name = "chrome".into();
         second.cpu_percent = 2.0;
-        aggregate.apply(Event::Windows(Ok((vec![first, second], 16))));
+        aggregate.apply(Event::Windows(Ok((vec![first, second], 16, None))));
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::new())));
 
         let snapshot = aggregate.snapshot(&options);
@@ -1137,7 +1167,7 @@ mod tests {
         let mut process = row(EnvironmentKind::Windows, ResourceKind::Process, "10");
         process.pid = Some(10);
         process.name = "chrome".into();
-        aggregate.apply(Event::Windows(Ok((vec![process], 16))));
+        aggregate.apply(Event::Windows(Ok((vec![process], 16, None))));
 
         let snapshot = aggregate.snapshot(&options);
         assert_eq!(snapshot.resources.len(), 1);
@@ -1156,7 +1186,7 @@ mod tests {
         webview.pid = Some(11);
         webview.start_id = Some(11);
         webview.name = "msedgewebview2".into();
-        aggregate.apply(Event::Windows(Ok((vec![teams, webview], 16))));
+        aggregate.apply(Event::Windows(Ok((vec![teams, webview], 16, None))));
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::from([
             (
                 10,
