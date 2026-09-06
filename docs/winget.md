@@ -1,6 +1,8 @@
 # WinGet distribution
 
-Package ID: `Adachi6k.wsltop`. Initial community registration is pending; do not
+Package ID: `Adachi6k.wsltop`. Initial submission:
+[microsoft/winget-pkgs#430402](https://github.com/microsoft/winget-pkgs/pull/430402)
+for v0.4.0. Community registration is pending; do not
 advertise `winget install --id Adachi6k.wsltop --exact` as available until the
 upstream PR is merged and the package appears in the WinGet source.
 
@@ -10,6 +12,11 @@ The official GitHub Release ZIP is used unchanged as a nested portable package.
 The command alias is `wsltop`. Minimum Windows version is Windows 11
 (`10.0.22000.0`); the description explains the required primary WSL2 distribution.
 Installing the package does not provision WSL or a distribution.
+
+The [initial Windows CI run](https://github.com/adachi6k/wsltop/actions/runs/34032216509)
+passed generation, native validation, user-scope installation, installed
+version/help, and local-manifest uninstallation. The Microsoft submission checks
+also passed; moderator approval/source indexing remain external steps.
 
 ```console
 python3 scripts/winget.py --tag v0.4.0 --output generated
