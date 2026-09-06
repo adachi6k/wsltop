@@ -3,7 +3,7 @@ use crate::query::{ResourceQuery, SortKey};
 use crate::render;
 use crate::render::CpuScale;
 use crate::stream;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -74,12 +74,12 @@ pub fn run(
         })?;
 
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if state.key(key.code) {
+            if let Some(code) = actionable_key(event::read()?) {
+                if state.key(code) {
                     break;
                 }
                 if matches!(
-                    key.code,
+                    code,
                     KeyCode::Char('t' | 'i' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
                 ) {
                     state.rebuild_lines();
@@ -89,6 +89,13 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+fn actionable_key(event: Event) -> Option<KeyCode> {
+    match event {
+        Event::Key(key) if key.kind != KeyEventKind::Release => Some(key.code),
+        _ => None,
+    }
 }
 
 #[derive(Default)]
@@ -347,4 +354,26 @@ mod tests {
         state.rebuild_lines();
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
     }
+}
+#[test]
+fn windows_key_release_does_not_undo_toggles() {
+    use crossterm::event::{KeyEvent, KeyModifiers};
+    let mut state = State::default();
+    for code in [KeyCode::Char('r'), KeyCode::Char('t')] {
+        for kind in [KeyEventKind::Press, KeyEventKind::Release] {
+            let event = Event::Key(KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind));
+            if let Some(code) = actionable_key(event) {
+                state.key(code);
+            }
+        }
+    }
+    assert_eq!(state.query.sort.order, crate::query::SortOrder::Asc);
+    assert!(state.tree);
+    let repeat = Event::Key(KeyEvent::new_with_kind(
+        KeyCode::Down,
+        KeyModifiers::NONE,
+        KeyEventKind::Repeat,
+    ));
+    state.key(actionable_key(repeat).unwrap());
+    assert_eq!(state.scroll, 1);
 }
