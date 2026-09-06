@@ -111,7 +111,7 @@ jobs:
             & $exe --help
             if ($LASTEXITCODE -ne 0) { throw 'Installed help failed' }
           } finally {
-            winget uninstall --id Adachi6k.wsltop --exact --silent --disable-interactivity
+            winget uninstall --id Adachi6k.wsltop --exact --silent --accept-source-agreements --disable-interactivity
             if ($LASTEXITCODE -ne 0) { throw 'Portable uninstall failed' }
           }
       - uses: actions/upload-artifact@v7

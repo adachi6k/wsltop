@@ -5,6 +5,7 @@ import base64
 import json
 from pathlib import Path
 import subprocess
+import time
 from urllib.parse import urlencode
 
 from winget import PACKAGE, manifests, version_from_tag
@@ -21,6 +22,26 @@ def api(path, data=None, missing_ok=False):
             return None
         raise RuntimeError(result.stderr.strip())
     return json.loads(result.stdout)
+
+
+def wait_for_fork(path):
+    # GitHub returns before the fork's repository and Git data are provisioned.
+    for delay in [1, 2, 4, 8, 16, 0]:
+        fork = api(path, missing_ok=True)
+        if fork is not None:
+            if not fork.get("fork") or fork.get("parent", {}).get("full_name") != "microsoft/winget-pkgs":
+                raise ValueError("Expected the authenticated user's winget-pkgs fork")
+            try:
+                ref = api(f"{path}/git/ref/heads/{fork['default_branch']}", missing_ok=True)
+            except RuntimeError as error:
+                if "HTTP 409" not in str(error):
+                    raise
+                ref = None  # Empty Git repository while provisioning.
+            if ref is not None:
+                return fork
+        if delay:
+            time.sleep(delay)
+    raise RuntimeError("Fork provisioning did not complete; rerun after GitHub finishes creating it")
 
 
 def submit(directory, tag):
@@ -48,7 +69,7 @@ def submit(directory, tag):
     fork = api(fork_path, missing_ok=True)
     if fork is None:
         api(upstream + "/forks", {"default_branch_only": True})
-        fork = api(fork_path)
+        fork = wait_for_fork(fork_path)
     if not fork.get("fork") or fork.get("parent", {}).get("full_name") != "microsoft/winget-pkgs":
         raise ValueError("Expected the authenticated user's winget-pkgs fork")
     branch = f"wsltop-{version}"

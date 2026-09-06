@@ -14,6 +14,22 @@ spec.loader.exec_module(submit_winget)
 
 
 class WingetTests(unittest.TestCase):
+    def test_fork_waits_for_repository_and_git_data(self):
+        fork = {'fork': True, 'parent': {'full_name': 'microsoft/winget-pkgs'}, 'default_branch': 'master'}
+        replies = [None, fork, RuntimeError('HTTP 409'), fork, None, fork, {'object': {'sha': 'ready'}}]
+        with patch.object(submit_winget, 'api', side_effect=replies), patch.object(submit_winget.time, 'sleep') as sleep:
+            self.assertEqual(submit_winget.wait_for_fork('repos/tester/winget-pkgs'), fork)
+            self.assertEqual([c.args[0] for c in sleep.call_args_list], [1, 2, 4])
+
+    def test_fork_wait_is_bounded_and_does_not_hide_permission_errors(self):
+        with patch.object(submit_winget, 'api', return_value=None) as api, patch.object(submit_winget.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'provisioning'):
+                submit_winget.wait_for_fork('repos/tester/winget-pkgs')
+            self.assertEqual(api.call_count, 6)
+        with patch.object(submit_winget, 'api', side_effect=RuntimeError('HTTP 403')):
+            with self.assertRaisesRegex(RuntimeError, 'HTTP 403'):
+                submit_winget.wait_for_fork('repos/tester/winget-pkgs')
+
     def test_existing_upstream_version_does_not_mutate(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
