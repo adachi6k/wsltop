@@ -52,7 +52,7 @@ class WingetTests(unittest.TestCase):
             if path == 'user':
                 return {'login': 'tester'}
             if path == 'repos/tester/winget-pkgs':
-                return {'fork': True, 'parent': {'full_name': 'microsoft/winget-pkgs'}}
+                return {'fork': True, 'parent': {'full_name': 'microsoft/winget-pkgs'}, 'default_branch': 'master'}
             if '/git/ref/' in path:
                 return {'object': {'sha': 'existing'}}
             if '/contents/' in path:

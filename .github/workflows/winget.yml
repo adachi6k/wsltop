@@ -111,7 +111,9 @@ jobs:
             & $exe --help
             if ($LASTEXITCODE -ne 0) { throw 'Installed help failed' }
           } finally {
-            winget uninstall --id Adachi6k.wsltop --exact --silent --accept-source-agreements --disable-interactivity
+            # The package is not in the public source yet; use its local manifest
+            # for identity matching rather than a source-resolved package ID.
+            winget uninstall --manifest $manifest --scope user --silent --accept-source-agreements --disable-interactivity
             if ($LASTEXITCODE -ne 0) { throw 'Portable uninstall failed' }
           }
       - uses: actions/upload-artifact@v7

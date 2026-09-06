@@ -69,7 +69,7 @@ def submit(directory, tag):
     fork = api(fork_path, missing_ok=True)
     if fork is None:
         api(upstream + "/forks", {"default_branch_only": True})
-        fork = wait_for_fork(fork_path)
+    fork = wait_for_fork(fork_path)
     if not fork.get("fork") or fork.get("parent", {}).get("full_name") != "microsoft/winget-pkgs":
         raise ValueError("Expected the authenticated user's winget-pkgs fork")
     branch = f"wsltop-{version}"
