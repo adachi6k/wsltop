@@ -25,5 +25,5 @@ attribution skew; optional detail collectors may lag aggregate rows.
 Each archive contains its executable, `README.md`, and `LICENSE` in a versioned
 directory. Each `.sha256` sidecar uses `<sha256>  <filename>` format.
 
-See [CHANGELOG](../CHANGELOG.md) for the full changes and
-[release validation](validation/2026-09-06-v0.4.0.md) for verification scope.
+See [CHANGELOG](https://github.com/adachi6k/wsltop/blob/v0.4.0/CHANGELOG.md) for the full changes and
+[release validation](https://github.com/adachi6k/wsltop/blob/v0.4.0/docs/validation/2026-09-06-v0.4.0.md) for verification scope.

@@ -26,6 +26,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- Windows TUI key-release events no longer undo toggle actions such as reverse sorting and tree view.
 - WSL distribution matching is case-insensitive, preventing duplicate primary collection and mismatched remote snapshots.
 - Optional distro discovery no longer delays initial TUI sampling; additional distro rows remain loading until an interval delta is available.
 
