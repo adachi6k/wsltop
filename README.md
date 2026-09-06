@@ -1,6 +1,6 @@
 # wsltop
 
-`wsltop` is a unified Windows, WSL, WSL Containers (WSLC), and Docker resource monitor for WSL2. It combines host and guest observations on one host-wide CPU scale and can explain the workload behind WSL virtual-machine CPU use.
+`wsltop` is a unified top-like resource monitor for Windows, WSL2, Docker, and WSL Containers (WSLC). It runs natively on both Windows and WSL, combining host and guest observations on one host-wide CPU scale.
 
 > Windows Task Manager says `VmmemWSL` is busy. `wsltop` shows which Windows, WSL, WSLC, or Docker workload is responsible.
 
@@ -42,6 +42,23 @@ Parent and child CPU values are attribution views, not values to add together.
 
 ## Quick start
 
+### Windows
+
+Download `wsltop-v0.4.0-x86_64-pc-windows-msvc.zip` and its `.sha256` file from
+[GitHub Releases](https://github.com/adachi6k/wsltop/releases). Verify the checksum
+as described under Installation, extract the ZIP, and open PowerShell in the
+extracted directory:
+
+```powershell
+.\wsltop.exe --version
+.\wsltop.exe --interactive
+```
+
+Windows 11 and a usable primary WSL2 distribution are required. Docker and WSLC
+are optional. Use `--distro NAME` to select a primary (Windows executable only).
+
+### WSL
+
 Install from [crates.io](https://crates.io/crates/wsltop) and start the TUI:
 
 ```console
@@ -71,7 +88,7 @@ Run `./wsltop --help` for the complete option reference.
 The flat view is a host-wide activity ranking. Windows and WSL processes appear alongside Docker and WSLC containers. A container is ranked once by its total CPU; optional process rows are an indented explanation of that total, not extra CPU to add to it.
 
 ```text
-flat | CPU 1 core = 100% | interval 3000ms
+flat | CPU 1 core = 100% | sort cpu desc | interval 3000ms
 
 ENV     TYPE               ID/PID    CPU%       MEM      TIME+ COMMAND
 -------------------------------------------------------------------------------------------------
@@ -324,6 +341,8 @@ JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 
 ## Limitations
 
+- WSL1 is unsupported and untested; use WSL2.
+- Additional-distro startup/stop discovery is best effort. Docker/WSLC process detail may lag aggregate rows because collection runs at independent cadences.
 - Sampling is best effort. Linux, PowerShell, WSLC, Docker, and remote-distro snapshots are not captured atomically.
 - PowerShell process collection adds latency, but runs independently of other interactive collectors; the Windows logical CPU count is cached after its first successful query.
 - WSLC session attribution is deliberately conservative when multiple host mappings are possible.

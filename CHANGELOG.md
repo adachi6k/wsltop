@@ -8,8 +8,9 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
+- Windows-native execution is now supported for both the one-shot CLI and interactive TUI.
 - Windows-target compile checking, native Windows test execution, and target-specific command timeout implementations as groundwork for native Windows collection.
-- A mockable process-snapshot collector boundary and a stable one-shot collector plan for current and additional WSL distributions.
+- A mockable process-snapshot collector boundary and shared `CollectorPlan` selection for current and additional WSL distributions across one-shot and streaming collection.
 - Windows-native one-shot collection with `--distro NAME`, default-distro, and running-distro primary selection.
 - Windows-native interactive monitoring with independent collector scheduling, partial updates, and terminal restoration.
 - Shared CPU, memory, and name sorting with `--sort cpu|memory|name` and `--sort-order asc|desc`; TUI keys `c`, `m`, `n`, and `r` update the displayed order immediately.
@@ -20,7 +21,7 @@ All notable changes to this project will be documented in this file. The format 
 - Linux `/proc` parsing is target-neutral and separate from local filesystem collection; `libc` is now a Unix-only dependency.
 - One-shot sampling now fixes the additional WSL collector set once per sample, verifies running status before each optional capture to avoid restarting stopped distributions, and keeps optional discovery and distro failures as warnings.
 - Windows-native CLI and TUI use remote WSL snapshots while preserving `source: None` for the primary distro and connecting the existing Windows, WSLC, and Docker collectors.
-- CLI/JSON and TUI share sorting and snapshot projections. Child processes remain grouped beneath their containers, with limits applied after sorting and deterministic tie-breaking.
+- CLI/JSON and TUI share `ResourceQuery` sorting and snapshot projections. Child processes remain grouped beneath their containers, with limits applied after sorting and deterministic tie-breaking.
 - Memory/name tree views include idle Windows applications and processes. CPU descending remains the default; JSON fields, CPU accounting, and collector-provided memory values are preserved.
 
 ### Fixed
