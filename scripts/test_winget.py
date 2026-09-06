@@ -1,13 +1,58 @@
 import hashlib
+import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from winget import manifests, verify_archive, version_from_tag
 
+spec = importlib.util.spec_from_file_location('submit_winget', Path(__file__).with_name('submit-winget.py'))
+submit_winget = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(submit_winget)
+
 
 class WingetTests(unittest.TestCase):
+    def test_existing_upstream_version_does_not_mutate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            for name, content in manifests('v0.4.0', '0' * 64, 'wsltop.exe').items():
+                (directory / name).write_text(content)
+            with patch.object(submit_winget, 'api', return_value=[{'name': 'manifest'}]) as api:
+                submit_winget.submit(directory, 'v0.4.0')
+                api.assert_called_once_with(
+                    'repos/microsoft/winget-pkgs/contents/manifests/a/Adachi6k/wsltop/0.4.0', missing_ok=True)
+
+    def test_existing_branch_with_unrelated_changes_is_not_submitted(self):
+        import base64
+        contents = manifests('v0.4.0', '0' * 64, 'wsltop.exe')
+        def fake_api(path, data=None, missing_ok=False):
+            self.assertIsNone(data, 'Existing-branch validation must not mutate anything')
+            if path.startswith('repos/microsoft/winget-pkgs/contents/'):
+                return None
+            if path.startswith('search/issues?'):
+                return {'items': []}
+            if path == 'user':
+                return {'login': 'tester'}
+            if path == 'repos/tester/winget-pkgs':
+                return {'fork': True, 'parent': {'full_name': 'microsoft/winget-pkgs'}}
+            if '/git/ref/' in path:
+                return {'object': {'sha': 'existing'}}
+            if '/contents/' in path:
+                name = path.split('/')[-1].split('?')[0]
+                return {'content': base64.b64encode(contents[name].encode()).decode()}
+            if '/compare/' in path:
+                return {'files': [{'filename': 'unrelated.yaml', 'status': 'added'}]}
+            self.fail(path)
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            for name, content in contents.items():
+                (directory / name).write_text(content)
+            with patch.object(submit_winget, 'api', side_effect=fake_api):
+                with self.assertRaisesRegex(ValueError, 'only this version'):
+                    submit_winget.submit(directory, 'v0.4.0')
+
     def test_stable_tags_only(self):
         for invalid in ["v0.4.0-rc1", "0.4.0", "v01.2.3", "v1.2.3/../bad", "v1.2.3\n"]:
             with self.assertRaises(ValueError):

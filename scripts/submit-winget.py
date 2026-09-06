@@ -71,6 +71,11 @@ def submit(directory, tag):
             "message": f"Add {PACKAGE} {version}", "tree": tree["sha"], "parents": [base],
         })
         api(fork_path + "/git/refs", {"ref": "refs/heads/" + branch, "sha": commit["sha"]})
+    comparison = api(f"{upstream}/compare/master...{owner}:{branch}")
+    changes = comparison.get("files", [])
+    if ({item["filename"] for item in changes} != {f"{prefix}/{name}" for name in files}
+            or any(item["status"] != "added" for item in changes)):
+        raise ValueError("Submission branch must add only this version's three manifests")
     body = f"""## Description
 
 Add {PACKAGE} {version}, a portable Windows/WSL resource monitor.
