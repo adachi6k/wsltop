@@ -35,6 +35,7 @@ Parent and child CPU values are attribution views, not values to add together.
 - WSL and WSLC host attribution trees with an `unattributed` remainder
 - Host-wide CPU normalization: all environments use Windows host logical CPUs = 100%
 - Interactive terminal UI with flat/tree views, scrolling, and display toggles
+- Shared CPU/memory/name sorting with ascending/descending order in TUI, CLI, and JSON
 - Flat and tree JSON output
 - Resource classification as `process`, `container`, `infra`, or internal `host`
 - Best-effort degradation when optional WSLC, Docker, or additional-distro collectors are unavailable
@@ -201,10 +202,33 @@ wsltop [OPTIONS]
 --hide-container-processes Hide Docker/WSLC processes from flat output
 --container-process-limit N Show at most N processes per container (default: 5)
 --cpu-scale core|host CPU display scale for text/TUI output (default: core)
+--sort cpu|memory|name Sort resources and their children (default: cpu)
+--sort-order asc|desc  Sort direction (default: desc)
 --hide-infra           Hide infrastructure rows
 ```
 
 Options that affect collection or the initial view also apply to interactive mode. `--once` remains an explicit alias for the default one-shot behavior.
+
+For a memory ranking, use `wsltop --sort memory`; for alphabetical JSON, use
+`wsltop --json --sort name --sort-order asc`. TUI keys `c`, `m`, and `n` select
+CPU, memory, and name; `r` reverses the current direction. Changing the key keeps
+the current direction. The header displays both, and a key change immediately
+requeries the latest observation, including candidates outside the previous limit.
+
+Flat sorting ranks parents before applying `--limit`; their process children stay
+attached and use the same sort before `--container-process-limit` is applied.
+Tree sections keep their hierarchy and sort peers within each section, including
+Windows applications and their member processes. Tree output keeps all collected
+children; the flat limits do not truncate the attribution tree or its residuals.
+Memory/name tree views include idle Windows applications and processes; the
+default CPU tree retains its existing activity-focused Windows view.
+
+CPU ties prefer memory; memory ties prefer CPU. Names use case-sensitive string
+ordering. Remaining ties use name and resource identity in ascending order,
+independently of direction. CPU and memory sorting use numeric observations, not
+formatted strings or the selected CPU display scale. Windows working set, Linux
+RSS, and container memory have different meanings: sorting does not make their
+memory values additive or enable parent-minus-child memory accounting.
 
 ## Interactive TUI
 
@@ -223,6 +247,8 @@ Controls:
 | `q`, `Esc` | Quit |
 | Up/Down, Page Up/Page Down | Scroll |
 | `t` | Toggle flat/tree view |
+| `c`, `m`, `n` | Sort by CPU, memory, or name |
+| `r` | Reverse sort direction |
 | `i` | Toggle infrastructure rows |
 | `h` | Toggle raw WSL host rows in flat view |
 | `0` | Toggle zero-CPU rows |

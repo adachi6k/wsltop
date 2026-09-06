@@ -169,10 +169,20 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
 }
 
 pub fn tree(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
-    tree_model(&snapshot.tree, snapshot.host_logical_cpu_count, scale)
+    tree_model(
+        &snapshot.tree,
+        snapshot.host_logical_cpu_count,
+        scale,
+        snapshot.sort.key != crate::query::SortKey::Cpu,
+    )
 }
 
-fn tree_model(tree: &AttributionTree, cpus: u32, scale: CpuScale) -> String {
+fn tree_model(
+    tree: &AttributionTree,
+    cpus: u32,
+    scale: CpuScale,
+    include_idle_windows: bool,
+) -> String {
     let mut out = format!(
         "Host logical CPUs: {cpus} | CPU scale: {}\n\n",
         scale.label()
@@ -180,7 +190,7 @@ fn tree_model(tree: &AttributionTree, cpus: u32, scale: CpuScale) -> String {
     let active_applications: Vec<_> = tree
         .windows_applications
         .iter()
-        .filter(|application| application.resource.cpu_percent > 0.0)
+        .filter(|application| include_idle_windows || application.resource.cpu_percent > 0.0)
         .collect();
     if !active_applications.is_empty() {
         out.push_str("Windows applications\n");
@@ -201,7 +211,7 @@ fn tree_model(tree: &AttributionTree, cpus: u32, scale: CpuScale) -> String {
             let contributors: Vec<_> = application
                 .processes
                 .iter()
-                .filter(|process| process.cpu_percent > 0.0)
+                .filter(|process| include_idle_windows || process.cpu_percent > 0.0)
                 .collect();
             for (process_index, process) in contributors.iter().enumerate() {
                 let child = if process_index + 1 == contributors.len() {
@@ -494,6 +504,8 @@ mod tests {
 
     fn snapshot(row: ResourceUsage) -> MonitorSnapshot {
         MonitorSnapshot {
+            sort: Default::default(),
+            query_source: None,
             host_logical_cpu_count: 16,
             resources: vec![row.clone()],
             pid_resources: vec![row.clone()],
@@ -511,6 +523,31 @@ mod tests {
                 windows_applications: Vec::new(),
             },
             warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn memory_and_name_tree_views_include_idle_windows_processes() {
+        let mut process = crate::query::tests::row("idle-worker", 0.0, 4096);
+        process.environment = EnvironmentKind::Windows;
+        let mut app = process.clone();
+        app.kind = crate::model::ResourceKind::Application;
+        app.name = "idle-app".into();
+        let mut snapshot = snapshot(app.clone());
+        snapshot.tree.docker_groups.clear();
+        snapshot
+            .tree
+            .windows_applications
+            .push(crate::model::WindowsApplicationUsage {
+                resource: app,
+                processes: vec![process],
+            });
+        assert!(!super::tree(&snapshot, CpuScale::Host).contains("idle-app"));
+        for key in [crate::query::SortKey::Memory, crate::query::SortKey::Name] {
+            snapshot.sort.key = key;
+            let output = super::tree(&snapshot, CpuScale::Host);
+            assert!(output.contains("idle-app"));
+            assert!(output.contains("idle-worker"));
         }
     }
 

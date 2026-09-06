@@ -41,7 +41,7 @@ pub fn group_processes(
     let mut applications: Vec<_> = groups
         .into_iter()
         .map(|(key, (display, mut processes))| {
-            processes.sort_by(|left, right| right.cpu_percent.total_cmp(&left.cpu_percent));
+            crate::query::Sort::default().resources(&mut processes);
             WindowsApplicationUsage {
                 resource: ResourceUsage {
                     environment: EnvironmentKind::Windows,
@@ -70,11 +70,7 @@ pub fn group_processes(
         })
         .collect();
     applications.sort_by(|left, right| {
-        right
-            .resource
-            .cpu_percent
-            .total_cmp(&left.resource.cpu_percent)
-            .then_with(|| left.resource.name.cmp(&right.resource.name))
+        crate::query::Sort::default().compare(&left.resource, &right.resource)
     });
     applications
 }

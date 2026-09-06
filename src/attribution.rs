@@ -1,6 +1,6 @@
 use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
+use crate::query::Sort;
 use serde::Serialize;
-use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,12 +74,7 @@ pub fn build_tree_with_docker(
                 .cloned()
                 .collect()
         };
-        children.sort_by(|left, right| {
-            right
-                .cpu_percent
-                .partial_cmp(&left.cpu_percent)
-                .unwrap_or(Ordering::Equal)
-        });
+        Sort::default().resources(&mut children);
         let known: f64 = children.iter().map(|row| row.cpu_percent).sum();
         let difference = container.resource.cpu_percent - known;
         docker_groups.push(DockerAttributionGroup {
@@ -150,12 +145,7 @@ pub fn attach_wslc_processes(
         .iter()
         .map(|container| {
             let mut children = container.processes.clone();
-            children.sort_by(|left, right| {
-                right
-                    .cpu_percent
-                    .partial_cmp(&left.cpu_percent)
-                    .unwrap_or(Ordering::Equal)
-            });
+            Sort::default().resources(&mut children);
             let known: f64 = children.iter().map(|row| row.cpu_percent).sum();
             let difference = container.resource.cpu_percent - known;
             DockerAttributionGroup {
@@ -211,12 +201,7 @@ fn make_group(
     mut children: Vec<ResourceUsage>,
     mapping_status: MappingStatus,
 ) -> AttributionGroup {
-    children.sort_by(|left, right| {
-        right
-            .cpu_percent
-            .partial_cmp(&left.cpu_percent)
-            .unwrap_or(Ordering::Equal)
-    });
+    Sort::default().resources(&mut children);
     let known_children_cpu_percent = children.iter().map(|row| row.cpu_percent).sum::<f64>();
     let difference = host.cpu_percent - known_children_cpu_percent;
 

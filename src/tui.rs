@@ -1,4 +1,5 @@
 use crate::monitor::{MonitorConfig, MonitorSnapshot};
+use crate::query::{ResourceQuery, SortKey};
 use crate::render;
 use crate::render::CpuScale;
 use crate::stream;
@@ -43,9 +44,11 @@ pub fn run(
             .areas(frame.area());
             frame.render_widget(
                 Paragraph::new(format!(
-                    " {} | CPU {} | interval {}ms",
+                    " {} | CPU {} | sort {} {} | interval {}ms",
                     if state.tree { "tree" } else { "flat" },
                     state.cpu_scale.label(),
+                    state.query.sort.key.label(),
+                    state.query.sort.order.label(),
                     interval.as_millis()
                 )),
                 header,
@@ -75,9 +78,11 @@ pub fn run(
                 if state.key(key.code) {
                     break;
                 }
-                if matches!(key.code, KeyCode::Char('t' | 'i' | 'h' | '0')) {
+                if matches!(
+                    key.code,
+                    KeyCode::Char('t' | 'i' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
+                ) {
                     state.rebuild_lines();
-                    worker.update_filters(state.hide_infra, state.show_hosts);
                     worker.set_details(state.tree);
                 }
             }
@@ -88,6 +93,7 @@ pub fn run(
 
 #[derive(Default)]
 struct State {
+    query: ResourceQuery,
     lines: Vec<Line<'static>>,
     scroll: usize,
     tree: bool,
@@ -102,6 +108,7 @@ struct State {
 impl State {
     fn from_config(config: &MonitorConfig, tree: bool, cpu_scale: CpuScale) -> Self {
         Self {
+            query: config.query(),
             tree,
             hide_infra: config.hide_infra,
             show_hosts: config.show_wsl_host,
@@ -125,6 +132,18 @@ impl State {
             KeyCode::Char('i') => self.hide_infra = !self.hide_infra,
             KeyCode::Char('h') => self.show_hosts = !self.show_hosts,
             KeyCode::Char('0') => self.hide_zero = !self.hide_zero,
+            KeyCode::Char('c' | 'm' | 'n') => {
+                self.query.sort.key = match code {
+                    KeyCode::Char('m') => SortKey::Memory,
+                    KeyCode::Char('n') => SortKey::Name,
+                    _ => SortKey::Cpu,
+                };
+                self.scroll = 0;
+            }
+            KeyCode::Char('r') => {
+                self.query.sort.order = self.query.sort.order.reverse();
+                self.scroll = 0;
+            }
             _ => {}
         }
         false
@@ -150,9 +169,12 @@ impl State {
     }
 
     fn rebuild_lines(&mut self) {
-        let Some(snapshot) = &self.snapshot else {
+        let Some(snapshot) = &mut self.snapshot else {
             return;
         };
+        self.query.hide_infra = self.hide_infra;
+        self.query.show_wsl_host = self.show_hosts;
+        snapshot.requery(&self.query);
         let output = if self.tree {
             render::tree(snapshot, self.cpu_scale)
         } else {
@@ -191,13 +213,6 @@ impl SamplingWorker {
             config: shared_config,
             stop,
             details,
-        }
-    }
-
-    fn update_filters(&self, hide_infra: bool, show_wsl_host: bool) {
-        if let Ok(mut config) = self.config.lock() {
-            config.hide_infra = hide_infra;
-            config.show_wsl_host = show_wsl_host;
         }
     }
 
@@ -266,6 +281,7 @@ mod tests {
     #[test]
     fn applies_initial_interactive_view_options() {
         let config = MonitorConfig {
+            sort: Default::default(),
             interval: Duration::from_millis(500),
             limit: 12,
             show_wsl_host: true,
@@ -282,5 +298,53 @@ mod tests {
         assert!(state.hide_infra);
         assert!(state.show_hosts);
         assert_eq!(state.cpu_scale, CpuScale::Core);
+    }
+
+    #[test]
+    fn sort_keys_requery_untruncated_snapshot_immediately_and_survive_updates() {
+        use crate::query::{SortKey, SortOrder};
+        let config = MonitorConfig {
+            sort: Default::default(),
+            interval: Duration::from_secs(30),
+            limit: 1,
+            show_wsl_host: false,
+            wsl_only: true,
+            no_wslc: true,
+            no_docker: true,
+            hide_infra: false,
+            show_container_processes: false,
+            container_process_limit: 1,
+            collect_windows_applications: false,
+        };
+        let sample = || {
+            let rows = vec![
+                crate::query::tests::row("busy", 10.0, 1),
+                crate::query::tests::row("large", 1.0, 100),
+            ];
+            let tree = crate::attribution::build_tree_with_docker(16, &[], &rows, &[], &[]);
+            crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config)
+        };
+        let mut state = State::from_config(&config, false, CpuScale::Core);
+        state.apply_sample(Ok(sample()));
+        assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
+        state.scroll = 10;
+        state.key(KeyCode::Char('m'));
+        state.rebuild_lines();
+        assert_eq!(state.scroll, 0);
+        assert_eq!(state.query.sort.key, SortKey::Memory);
+        assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
+        state.apply_sample(Ok(sample()));
+        assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
+        state.key(KeyCode::Char('r'));
+        state.rebuild_lines();
+        assert_eq!(state.query.sort.order, SortOrder::Asc);
+        assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
+        state.key(KeyCode::Char('n'));
+        state.rebuild_lines();
+        assert_eq!(state.query.sort.key, SortKey::Name);
+        assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
+        state.key(KeyCode::Char('c'));
+        state.rebuild_lines();
+        assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
     }
 }

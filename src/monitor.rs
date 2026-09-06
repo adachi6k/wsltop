@@ -1,14 +1,15 @@
 use crate::attribution::{self, AttributionTree};
 use crate::collector::CollectorPlan;
 use crate::model::{ResourceKind, ResourceUsage, WindowsApplicationUsage};
+use crate::query::{QuerySource, ResourceQuery, Sort};
 use crate::{docker, sampler, windows, windows_app, wslc};
-use std::cmp::Ordering;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct MonitorConfig {
+    pub sort: Sort,
     pub interval: Duration,
     pub limit: usize,
     pub show_wsl_host: bool,
@@ -27,11 +28,61 @@ pub struct Monitor {
 }
 
 pub struct MonitorSnapshot {
+    pub sort: Sort,
+    pub query_source: Option<QuerySource>,
     pub host_logical_cpu_count: u32,
     pub resources: Vec<ResourceUsage>,
     pub pid_resources: Vec<ResourceUsage>,
     pub tree: AttributionTree,
     pub warnings: Vec<String>,
+}
+
+impl MonitorConfig {
+    pub fn query(&self) -> ResourceQuery {
+        ResourceQuery {
+            sort: self.sort,
+            limit: self.limit,
+            container_process_limit: self.container_process_limit,
+            show_container_processes: self.show_container_processes,
+            show_wsl_host: self.show_wsl_host,
+            hide_infra: self.hide_infra,
+        }
+    }
+}
+
+impl MonitorSnapshot {
+    pub fn requery(&mut self, query: &ResourceQuery) {
+        if let Some(source) = &self.query_source {
+            self.sort = query.sort;
+            self.resources = query.flat(&source.resources);
+            self.pid_resources = query.flat(&source.pid_resources);
+            self.tree = query.tree(&source.tree);
+        }
+    }
+
+    pub(crate) fn from_collected(
+        pid_resources: Vec<ResourceUsage>,
+        tree: AttributionTree,
+        warnings: Vec<String>,
+        config: &MonitorConfig,
+    ) -> Self {
+        let mut resources = pid_resources.clone();
+        apply_windows_application_view(&mut resources, &tree.windows_applications, config);
+        let query = config.query();
+        Self {
+            sort: config.sort,
+            host_logical_cpu_count: tree.host_logical_cpu_count,
+            resources: query.flat(&resources),
+            pid_resources: query.flat(&pid_resources),
+            tree: query.tree(&tree),
+            warnings,
+            query_source: Some(QuerySource {
+                resources,
+                pid_resources,
+                tree,
+            }),
+        }
+    }
 }
 
 impl Monitor {
@@ -178,47 +229,29 @@ impl Monitor {
         );
         attribution::attach_wslc_processes(&mut tree, &wslc_usage.process_resources);
         tree.windows_applications = applications;
-        if self.config.hide_infra {
-            attribution::hide_infra(&mut tree);
-        }
-
         let mut resources = linux_usage;
         resources.extend(windows_usage);
         resources.extend(wslc_usage.resources);
         if self.config.show_container_processes {
-            resources.extend(wslc_usage.process_resources.iter().flat_map(|item| {
-                let mut processes = item.processes.clone();
-                processes.sort_by(|a, b| {
-                    b.cpu_percent
-                        .partial_cmp(&a.cpu_percent)
-                        .unwrap_or(Ordering::Equal)
-                });
-                processes.truncate(self.config.container_process_limit);
-                processes
-            }));
-            resources.extend(docker_usage.iter().flat_map(|item| {
-                let mut processes = item.processes.clone();
-                processes.sort_by(|a, b| {
-                    b.cpu_percent
-                        .partial_cmp(&a.cpu_percent)
-                        .unwrap_or(Ordering::Equal)
-                });
-                processes.truncate(self.config.container_process_limit);
-                processes
-            }));
+            resources.extend(
+                wslc_usage
+                    .process_resources
+                    .iter()
+                    .flat_map(|item| item.processes.iter().cloned()),
+            );
+            resources.extend(
+                docker_usage
+                    .iter()
+                    .flat_map(|item| item.processes.iter().cloned()),
+            );
         }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
-        let mut pid_resources = resources.clone();
-        prepare_flat_resources(&mut pid_resources, &self.config);
-        apply_windows_application_view(&mut resources, &tree.windows_applications, &self.config);
-        prepare_flat_resources(&mut resources, &self.config);
-        Ok(MonitorSnapshot {
-            host_logical_cpu_count: host_cpu_count,
+        Ok(MonitorSnapshot::from_collected(
             resources,
-            pid_resources,
             tree,
             warnings,
-        })
+            &self.config,
+        ))
     }
 }
 
@@ -279,69 +312,22 @@ fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
     }
 }
 
-pub(crate) fn prepare_flat_resources(resources: &mut Vec<ResourceUsage>, config: &MonitorConfig) {
-    if !config.show_wsl_host {
-        resources.retain(|row| !attribution::is_host_resource(row));
-    }
-    if config.hide_infra {
-        resources.retain(|row| row.kind != ResourceKind::Infra);
-    }
-    let mut container_processes = Vec::new();
-    let mut top_level = Vec::new();
-    for row in std::mem::take(resources) {
-        if matches!(
-            row.environment,
-            crate::model::EnvironmentKind::Docker | crate::model::EnvironmentKind::WslContainer
-        ) && row.kind == ResourceKind::Process
-            && row.source.is_some()
-        {
-            container_processes.push(row);
-        } else {
-            top_level.push(row);
-        }
-    }
-    top_level.sort_by(|a, b| {
-        b.cpu_percent
-            .partial_cmp(&a.cpu_percent)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
-    });
-    top_level.truncate(config.limit);
-
-    container_processes.sort_by(|a, b| {
-        b.cpu_percent
-            .partial_cmp(&a.cpu_percent)
-            .unwrap_or(Ordering::Equal)
-    });
-    for row in top_level {
-        let container_id = (matches!(
-            row.environment,
-            crate::model::EnvironmentKind::Docker | crate::model::EnvironmentKind::WslContainer
-        ) && row.kind == ResourceKind::Container)
-            .then(|| row.id.clone());
-        resources.push(row);
-        if let Some(container_id) = container_id {
-            resources.extend(
-                container_processes
-                    .iter()
-                    .filter(|process| process.source.as_deref() == Some(container_id.as_str()))
-                    .cloned(),
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_windows_application_view, prepare_flat_resources, push_unique_warning,
-        should_collect_windows_metadata, wsl_only_warning, MonitorConfig,
+        apply_windows_application_view, push_unique_warning, should_collect_windows_metadata,
+        wsl_only_warning, MonitorConfig,
     };
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use std::time::Duration;
 
+    fn prepare_flat_resources(rows: &mut Vec<ResourceUsage>, config: &MonitorConfig) {
+        *rows = config.query().flat(rows);
+    }
+
     fn config() -> MonitorConfig {
         MonitorConfig {
+            sort: Default::default(),
             interval: Duration::from_secs(1),
             limit: 30,
             show_wsl_host: false,

@@ -9,6 +9,7 @@ mod linux_proc;
 mod model;
 mod monitor;
 mod multiwsl;
+mod query;
 mod render;
 mod sampler;
 mod stream;
@@ -18,6 +19,7 @@ mod windows_app;
 mod wslc;
 
 use crate::monitor::{Monitor, MonitorConfig};
+use crate::query::{Sort, SortKey, SortOrder};
 use crate::render::CpuScale;
 use std::env;
 use std::error::Error;
@@ -27,6 +29,7 @@ const DEFAULT_INTERVAL_MS: u64 = 3000;
 
 #[derive(Debug)]
 struct Options {
+    sort: Sort,
     interval: Duration,
     limit: usize,
     json: bool,
@@ -74,6 +77,7 @@ fn validate_options_for_platform(
 fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let collect_windows_applications = needs_windows_applications(&options);
     let config = MonitorConfig {
+        sort: options.sort,
         interval: options.interval,
         limit: options.limit,
         show_wsl_host: options.show_wsl_host,
@@ -123,6 +127,7 @@ where
     S: Into<String>,
 {
     let mut options = Options {
+        sort: Sort::default(),
         interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
         limit: 30,
         json: false,
@@ -144,6 +149,14 @@ where
     let mut args = args.into_iter().map(Into::into);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--sort" => {
+                options.sort.key =
+                    SortKey::parse(&args.next().ok_or("--sort requires cpu, memory or name")?)?;
+            }
+            "--sort-order" => {
+                options.sort.order =
+                    SortOrder::parse(&args.next().ok_or("--sort-order requires asc or desc")?)?;
+            }
             "--once" => {}
             "--json" => options.json = true,
             "--show-wsl-host" => options.show_wsl_host = true,
@@ -219,7 +232,7 @@ fn print_help() {
         "wsltop {}\n\n\
 Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2\n\n\
 USAGE:\n    wsltop [OPTIONS]\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --distro NAME          Select the primary WSL distro (Windows-native only)\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --sort KEY            Sort resources by cpu, memory or name [default: cpu]\n    --sort-order ORDER    Sort direction: asc or desc [default: desc]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --distro NAME          Select the primary WSL distro (Windows-native only)\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
         env!("CARGO_PKG_VERSION"),
         DEFAULT_INTERVAL_MS
     );
@@ -236,12 +249,32 @@ mod tests {
     fn defaults_human_output_to_per_core_scale() {
         let options = parse_args_from(Vec::<String>::new()).unwrap();
         assert_eq!(options.cpu_scale, CpuScale::Core);
+        assert_eq!(options.sort, crate::query::Sort::default());
         assert!(!options.cpu_scale_explicit);
         assert!(options.show_container_processes);
         assert_eq!(
             options.interval,
             std::time::Duration::from_millis(DEFAULT_INTERVAL_MS)
         );
+    }
+
+    #[test]
+    fn parses_shared_sort_options_for_text_json_and_tui() {
+        for mode in ["--once", "--json", "--interactive"] {
+            let options =
+                parse_args_from([mode, "--sort", "memory", "--sort-order", "asc"]).unwrap();
+            assert_eq!(options.sort.key, crate::query::SortKey::Memory);
+            assert_eq!(options.sort.order, crate::query::SortOrder::Asc);
+            assert!(validate_options_for_platform(&options, true).is_ok());
+        }
+        for args in [
+            vec!["--sort"],
+            vec!["--sort", "invalid"],
+            vec!["--sort-order"],
+            vec!["--sort-order", "invalid"],
+        ] {
+            assert!(parse_args_from(args).is_err());
+        }
     }
 
     #[test]
