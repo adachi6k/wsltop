@@ -1,10 +1,11 @@
 use crate::command;
-use crate::model::{EnvironmentKind, ProcessKey, ProcessSample, Snapshot, WindowsSnapshot};
+use crate::model::{
+    EnvironmentKind, HostCpuSample, ProcessKey, ProcessSample, Snapshot, WindowsSnapshot,
+};
 use crate::windows_app::{WindowsMetadata, WindowsProcessMetadata};
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
-use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,7 @@ struct RawWindowsSnapshot {
     logical_cpu_count: u32,
     logical_cpu_count_from_cim: bool,
     processes: Vec<RawWindowsProcess>,
-    host_cpu: Option<crate::model::HostCpuSample>,
+    host_cpu: Option<RawHostCpuSample>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +31,25 @@ struct RawWindowsProcess {
 #[derive(Debug, Deserialize)]
 struct RawMetadataSnapshot {
     processes: Vec<WindowsProcessMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+enum RawHostCpuSample {
+    SystemTimes { idle: u64, kernel: u64, user: u64 },
+    PerfTotal { idle: u64, timestamp: u64 },
+}
+
+impl RawHostCpuSample {
+    fn into_sample(self) -> Option<HostCpuSample> {
+        match self {
+            Self::SystemTimes { idle, kernel, user } => Some(HostCpuSample {
+                idle,
+                timestamp: kernel.checked_add(user)?,
+            }),
+            Self::PerfTotal { idle, timestamp } => Some(HostCpuSample { idle, timestamp }),
+        }
+    }
 }
 
 pub fn application_metadata() -> Result<WindowsMetadata, Box<dyn Error>> {
@@ -48,7 +68,10 @@ $items = @(Get-CimInstance Win32_Process | ForEach-Object {
 [PSCustomObject]@{ processes = $items } | ConvertTo-Json -Compress -Depth 3
 "#;
     let output = command::output_with_timeout(
-        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", script]),
+        command::CommandSpec::new(
+            "powershell.exe",
+            &["-NoProfile", "-NonInteractive", "-Command", script],
+        ),
         Duration::from_secs(5),
     )
     .map_err(|error| {
@@ -80,7 +103,10 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
     let script = snapshot_script(HOST_LOGICAL_CPU_COUNT.get().copied().unwrap_or(0));
 
     let output = command::output_with_timeout(
-        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]),
+        command::CommandSpec::new(
+            "powershell.exe",
+            &["-NoProfile", "-NonInteractive", "-Command", &script],
+        ),
         Duration::from_secs(10),
     )
     .map_err(|e| io::Error::new(e.kind(), format!("failed to execute powershell.exe: {e}")))?;
@@ -125,7 +151,7 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
             processes,
         },
         host_logical_cpu_count: raw.logical_cpu_count,
-        host_cpu: raw.host_cpu,
+        host_cpu: raw.host_cpu.and_then(RawHostCpuSample::into_sample),
     })
 }
 
@@ -136,12 +162,15 @@ pub fn host_logical_cpu_count() -> Result<u32, Box<dyn Error>> {
     }
 
     let output = command::output_with_timeout(
-        Command::new("powershell.exe").args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            host_logical_cpu_count_script(),
-        ]),
+        command::CommandSpec::new(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                host_logical_cpu_count_script(),
+            ],
+        ),
         Duration::from_secs(5),
     )
     .map_err(|error| {
@@ -217,13 +246,19 @@ public static class WsltopSystemTimes {
     if ([WsltopSystemTimes]::GetActiveProcessorGroupCount() -eq 1) {
         [uint64]$idle = 0; [uint64]$kernel = 0; [uint64]$user = 0
         if ([WsltopSystemTimes]::GetSystemTimes([ref]$idle, [ref]$kernel, [ref]$user)) {
-            $hostCpu = [PSCustomObject]@{ idle = $idle; timestamp = $kernel + $user }
+            $hostCpu = [PSCustomObject]@{
+                source = 'system_times'
+                idle = $idle
+                kernel = $kernel
+                user = $user
+            }
         }
     } else {
         # GetSystemTimes covers only the calling processor group; use the system total instead.
         $counter = Get-CimInstance Win32_PerfRawData_PerfOS_Processor -Filter "Name='_Total'" -OperationTimeoutSec 1 -ErrorAction Stop
         if ($null -ne $counter.PercentProcessorTime -and $null -ne $counter.Timestamp_Sys100NS) {
             $hostCpu = [PSCustomObject]@{
+                source = 'perf_total'
                 idle = [uint64]$counter.PercentProcessorTime
                 timestamp = [uint64]$counter.Timestamp_Sys100NS
             }
@@ -242,7 +277,10 @@ public static class WsltopSystemTimes {
 
 #[cfg(test)]
 mod tests {
-    use super::{host_logical_cpu_count_script, parse_host_logical_cpu_count, snapshot_script};
+    use super::{
+        host_logical_cpu_count_script, parse_host_logical_cpu_count, snapshot_script,
+        RawHostCpuSample,
+    };
 
     #[test]
     fn embeds_cached_cpu_count_without_powershell_command_arguments() {
@@ -252,6 +290,10 @@ mod tests {
         assert!(script.contains("StartTime.ToFileTimeUtc()"));
         assert!(script.contains("start_id = $startId"));
         assert!(script.contains("[Environment]::ProcessorCount"));
+        assert!(script.contains("source = 'system_times'"));
+        assert!(script.contains("source = 'perf_total'"));
+        assert!(script.contains("GetActiveProcessorGroupCount() -eq 1"));
+        assert!(script.contains("Win32_PerfRawData_PerfOS_Processor"));
         assert!(!script.contains("__WSLTOP_CPU_COUNT__"));
         assert!(!script.contains("$args"));
     }
@@ -269,5 +311,52 @@ mod tests {
         assert_eq!(parse_host_logical_cpu_count(b"128\r\n").unwrap(), 128);
         assert!(parse_host_logical_cpu_count(b"0\r\n").is_err());
         assert!(parse_host_logical_cpu_count(b"unknown\r\n").is_err());
+    }
+
+    #[test]
+    fn converts_single_group_system_times_to_host_cpu_sample() {
+        let sample = RawHostCpuSample::SystemTimes {
+            idle: 100,
+            kernel: 200,
+            user: 50,
+        }
+        .into_sample()
+        .unwrap();
+        assert_eq!(sample.idle, 100);
+        assert_eq!(sample.timestamp, 250);
+    }
+
+    #[test]
+    fn rejects_overflowing_single_group_system_times() {
+        assert!(RawHostCpuSample::SystemTimes {
+            idle: 100,
+            kernel: u64::MAX,
+            user: 1,
+        }
+        .into_sample()
+        .is_none());
+    }
+
+    #[test]
+    fn converts_multi_group_perf_total_to_host_cpu_sample() {
+        let sample = RawHostCpuSample::PerfTotal {
+            idle: 123,
+            timestamp: 456,
+        }
+        .into_sample()
+        .unwrap();
+        assert_eq!(sample.idle, 123);
+        assert_eq!(sample.timestamp, 456);
+    }
+
+    #[test]
+    fn deserializes_unavailable_host_cpu_as_none() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            host_cpu: Option<RawHostCpuSample>,
+        }
+
+        let wrapper: Wrapper = serde_json::from_str(r#"{"host_cpu":null}"#).unwrap();
+        assert!(wrapper.host_cpu.is_none());
     }
 }

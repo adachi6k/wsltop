@@ -3,7 +3,6 @@ use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, Resourc
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
-use std::process::Command;
 use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
@@ -35,13 +34,16 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<d
         return Ok(DockerUsage::default());
     }
     let output = match command::output_with_timeout(
-        Command::new("docker").args([
-            "stats",
-            "--no-stream",
-            "--no-trunc",
-            "--format",
-            "{{json .}}",
-        ]),
+        command::CommandSpec::new(
+            "docker",
+            &[
+                "stats",
+                "--no-stream",
+                "--no-trunc",
+                "--format",
+                "{{json .}}",
+            ],
+        ),
         Duration::from_secs(5),
     ) {
         Ok(output) => output,
@@ -119,7 +121,7 @@ fn container_processes(
         "pid,ppid,pcpu,rss,comm,args",
     ] {
         let output = command::output_with_timeout(
-            Command::new("docker").args(["top", id, "-eo", columns]),
+            command::CommandSpec::new("docker", &["top", id, "-eo", columns]),
             Duration::from_secs(5),
         )?;
         if output.status.success() {

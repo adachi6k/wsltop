@@ -3,7 +3,6 @@ use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, Resourc
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
-use std::process::Command;
 use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
@@ -42,7 +41,7 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
     }
 
     let output = match command::output_with_timeout(
-        Command::new("wslc.exe").args(["stats", "--format", "json", "--no-trunc"]),
+        command::CommandSpec::new("wslc.exe", &["stats", "--format", "json", "--no-trunc"]),
         Duration::from_secs(5),
     ) {
         Ok(output) => output,
@@ -162,7 +161,7 @@ fn container_processes(
         "pid,ppid,pcpu,rss,comm,args",
     ] {
         let output = command::output_with_timeout(
-            Command::new("wslc.exe").args(["exec", id, "ps", "-eo", columns]),
+            command::CommandSpec::new("wslc.exe", &["exec", id, "ps", "-eo", columns]),
             Duration::from_secs(5),
         )?;
         if output.status.success() {
