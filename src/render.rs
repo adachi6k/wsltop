@@ -504,6 +504,7 @@ mod tests {
 
     fn snapshot(row: ResourceUsage) -> MonitorSnapshot {
         MonitorSnapshot {
+            host_cpu_percent: None,
             sort: Default::default(),
             query_source: None,
             host_logical_cpu_count: 16,

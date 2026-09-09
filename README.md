@@ -274,6 +274,8 @@ Terminal raw mode, alternate-screen state, and cursor visibility are restored on
 
 ## CPU display and accounting
 
+The TUI header shows `Host CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Windows system counter deltas, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
+
 Text and TUI output default to the familiar Linux `top` convention where one fully busy logical CPU is 100%; multi-threaded workloads can exceed 100%. Use `--cpu-scale host` for the Task Manager-style whole-host display where all Windows host logical CPUs together equal 100%.
 
 Internally, every CPU percentage remains on the common host-wide denominator. Display scaling is applied only while rendering, so sorting, attribution, residual accounting, and JSON values do not change.

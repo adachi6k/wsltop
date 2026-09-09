@@ -44,8 +44,9 @@ pub fn run(
             .areas(frame.area());
             frame.render_widget(
                 Paragraph::new(format!(
-                    " {} | CPU {} | sort {} {} | interval {}ms",
+                    " {} | Host CPU {} | CPU {} | sort {} {} | interval {}ms",
                     if state.tree { "tree" } else { "flat" },
+                    host_cpu_label(state.snapshot.as_ref()),
                     state.cpu_scale.label(),
                     state.query.sort.key.label(),
                     state.query.sort.order.label(),
@@ -96,6 +97,12 @@ fn actionable_key(event: Event) -> Option<KeyCode> {
         Event::Key(key) if key.kind != KeyEventKind::Release => Some(key.code),
         _ => None,
     }
+}
+
+fn host_cpu_label(snapshot: Option<&MonitorSnapshot>) -> String {
+    snapshot
+        .and_then(|snapshot| snapshot.host_cpu_percent)
+        .map_or_else(|| "N/A".to_string(), |cpu| format!("{cpu:.1}%"))
 }
 
 #[derive(Default)]
@@ -329,9 +336,13 @@ mod tests {
                 crate::query::tests::row("large", 1.0, 100),
             ];
             let tree = crate::attribution::build_tree_with_docker(16, &[], &rows, &[], &[]);
-            crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config)
+            let mut snapshot =
+                crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config);
+            snapshot.host_cpu_percent = Some(42.5);
+            snapshot
         };
         let mut state = State::from_config(&config, false, CpuScale::Core);
+        assert_eq!(super::host_cpu_label(None), "N/A");
         state.apply_sample(Ok(sample()));
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
         state.scroll = 10;
@@ -340,6 +351,7 @@ mod tests {
         assert_eq!(state.scroll, 0);
         assert_eq!(state.query.sort.key, SortKey::Memory);
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
+        assert_eq!(super::host_cpu_label(state.snapshot.as_ref()), "42.5%");
         state.apply_sample(Ok(sample()));
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
         state.key(KeyCode::Char('r'));

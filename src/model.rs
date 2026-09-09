@@ -80,6 +80,47 @@ pub struct Snapshot {
 pub struct WindowsSnapshot {
     pub snapshot: Snapshot,
     pub host_logical_cpu_count: u32,
+    pub host_cpu: Option<HostCpuSample>,
+}
+
+/// Cumulative idle and total CPU ticks, independent of process visibility.
+/// Multi-group Windows hosts use `_Total` PERF_100NSEC_TIMER_INV counters instead.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+pub struct HostCpuSample {
+    pub idle: u64,
+    pub timestamp: u64,
+}
+
+impl HostCpuSample {
+    pub fn usage_since(self, before: Self) -> Option<f64> {
+        let elapsed = self.timestamp.checked_sub(before.timestamp)?;
+        let idle = self.idle.checked_sub(before.idle)?;
+        if elapsed == 0 || idle > elapsed {
+            return None;
+        }
+        Some(100.0 * (elapsed - idle) as f64 / elapsed as f64)
+    }
+}
+
+#[cfg(test)]
+mod host_cpu_tests {
+    use super::HostCpuSample;
+
+    #[test]
+    fn host_usage_uses_counter_deltas_and_rejects_invalid_intervals() {
+        let before = HostCpuSample {
+            idle: 100,
+            timestamp: 1000,
+        };
+        let usage = |idle, timestamp| HostCpuSample { idle, timestamp }.usage_since(before);
+        assert_eq!(usage(175, 1100), Some(25.0));
+        assert_eq!(usage(200, 1100), Some(0.0));
+        assert_eq!(usage(100, 1100), Some(100.0));
+        assert_eq!(usage(100, 1000), None);
+        assert_eq!(usage(99, 1100), None);
+        assert_eq!(usage(100, 999), None);
+        assert_eq!(usage(201, 1100), None);
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- TUI header displays Windows host-wide CPU usage from system counters, independent of visible resource rows and CPU display scaling; unavailable readings display `N/A`.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added
