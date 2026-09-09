@@ -451,7 +451,8 @@ mod tests {
         assert_eq!(quote_arg("two words"), "\"two words\"");
         assert_eq!(quote_arg(""), "\"\"");
         assert_eq!(quote_arg(r#"a"b"#), r#""a\"b""#);
-        assert_eq!(quote_arg(r#"C:\path\"#), r#""C:\path\\""#);
+        assert_eq!(quote_arg(r#"C:\path\"#), r#"C:\path\"#);
+        assert_eq!(quote_arg(r#"C:\two words\"#), r#""C:\two words\\""#);
         assert_eq!(
             command_line(CommandSpec::new("cmd.exe", &["/D", "/C", "echo done"])),
             "cmd.exe /D /C \"echo done\""
