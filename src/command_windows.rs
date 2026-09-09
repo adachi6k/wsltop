@@ -159,19 +159,11 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
             }
         }
         if started.elapsed() >= timeout {
-            let terminated = job.terminate().is_ok();
-            if terminated {
-                if status.is_none() {
-                    let _ = child.wait();
-                }
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-            } else {
+            if job.terminate().is_err() {
                 let _ = child.kill();
-                let _ = child.wait();
-                drop(stdout_reader);
-                drop(stderr_reader);
             }
+            drop(stdout_reader);
+            drop(stderr_reader);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("command exceeded {} ms", timeout.as_millis()),
