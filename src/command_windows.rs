@@ -1,19 +1,141 @@
+use std::ffi::c_void;
 use std::io::{self, Read};
+use std::os::windows::io::AsRawHandle;
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+type HandleValue = *mut c_void;
+
+const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: u32 = 9;
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+#[repr(C)]
+#[derive(Default)]
+struct JobObjectBasicLimitInformation {
+    per_process_user_time_limit: i64,
+    per_job_user_time_limit: i64,
+    limit_flags: u32,
+    minimum_working_set_size: usize,
+    maximum_working_set_size: usize,
+    active_process_limit: u32,
+    affinity: usize,
+    priority_class: u32,
+    scheduling_class: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct IoCounters {
+    read_operation_count: u64,
+    write_operation_count: u64,
+    other_operation_count: u64,
+    read_transfer_count: u64,
+    write_transfer_count: u64,
+    other_transfer_count: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct JobObjectExtendedLimitInformation {
+    basic_limit_information: JobObjectBasicLimitInformation,
+    io_info: IoCounters,
+    process_memory_limit: usize,
+    job_memory_limit: usize,
+    peak_process_memory_used: usize,
+    peak_job_memory_used: usize,
+}
+
+unsafe extern "system" {
+    fn AssignProcessToJobObject(job: HandleValue, process: HandleValue) -> i32;
+    fn CloseHandle(handle: HandleValue) -> i32;
+    fn CreateJobObjectW(attributes: *mut c_void, name: *const u16) -> HandleValue;
+    fn SetInformationJobObject(
+        job: HandleValue,
+        information_class: u32,
+        information: *const c_void,
+        information_length: u32,
+    ) -> i32;
+    fn TerminateJobObject(job: HandleValue, exit_code: u32) -> i32;
+}
+
+struct JobObject {
+    handle: HandleValue,
+}
+
+impl JobObject {
+    fn create() -> io::Result<Self> {
+        let handle = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let job = Self { handle };
+        job.set_kill_on_close()?;
+        Ok(job)
+    }
+
+    fn assign(&self, process: HandleValue) -> io::Result<()> {
+        if unsafe { AssignProcessToJobObject(self.handle, process) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn terminate(&self) -> io::Result<()> {
+        if unsafe { TerminateJobObject(self.handle, 1) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn set_kill_on_close(&self) -> io::Result<()> {
+        let mut limits = JobObjectExtendedLimitInformation::default();
+        limits.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if unsafe {
+            SetInformationJobObject(
+                self.handle,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                (&limits as *const JobObjectExtendedLimitInformation).cast(),
+                std::mem::size_of::<JobObjectExtendedLimitInformation>() as u32,
+            )
+        } == 0
+        {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for JobObject {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
 /// Runs a command with a bounded wait on Windows.
 ///
-/// This first Windows implementation terminates the direct child on timeout.
-/// A future implementation can attach the process to a Windows Job Object so
-/// descendants are terminated with the same guarantees as the Unix process
-/// group implementation.
+/// The child is assigned to a Job Object so timeout cleanup terminates the
+/// whole process tree. That prevents recurring collector timeouts from leaving
+/// descendants alive with inherited stdout/stderr pipes.
 pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+    let job = JobObject::create()?;
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    if let Err(error) = job.assign(child.as_raw_handle()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+
     let stdout = child
         .stdout
         .take()
@@ -25,21 +147,31 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
     let stdout_reader = thread::spawn(move || read_all(stdout));
     let stderr_reader = thread::spawn(move || read_all(stderr));
     let started = Instant::now();
+    let mut status = None;
 
     loop {
-        if let Some(status) = child.try_wait()? {
+        if status.is_none() {
+            status = child.try_wait()?;
+        }
+        if let Some(status) = status {
             if stdout_reader.is_finished() && stderr_reader.is_finished() {
                 return collect_output(status, stdout_reader, stderr_reader);
             }
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
-            // Waiting for Windows process termination is not guaranteed to be
-            // bounded. Drop the join handles so inherited pipes cannot extend
-            // this API's deadline; the reader threads finish when those pipes
-            // eventually close.
-            drop(stdout_reader);
-            drop(stderr_reader);
+            let terminated = job.terminate().is_ok();
+            if terminated {
+                if status.is_none() {
+                    let _ = child.wait();
+                }
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+            } else {
+                let _ = child.kill();
+                let _ = child.wait();
+                drop(stdout_reader);
+                drop(stderr_reader);
+            }
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("command exceeded {} ms", timeout.as_millis()),
