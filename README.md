@@ -269,12 +269,81 @@ Controls:
 | `i` | Toggle infrastructure rows |
 | `h` | Toggle raw WSL host rows in flat view |
 | `0` | Toggle zero-CPU rows |
+| `?` | Open/close summary help (arrows/Pg scroll; Esc closes help) |
 
 Terminal raw mode, alternate-screen state, and cursor visibility are restored on normal exit and propagated errors.
 
+### Compact resource summary
+
+The TUI defaults to a two-line CPU/RAM summary. Windows, WSL, WSLC and Docker
+labels use the same colors in the summary and resource list: blue, green, magenta
+and cyan respectively. A neutral separator divides the summary from the resource
+table; its length follows the wider of the summary and table headings/rule,
+capped by terminal width. Long commands do not stretch it. The existing rule
+below column headings remains. A single footer groups
+view, sort, CPU scale and interval as `[flat cpu↓ core 3.0s]`, followed by option states and
+key hints. Press `?` for metric definitions, detailed controls and collector status.
+
+Host CPU and RAM have short history graphs alongside their totals when all four
+environment labels fit. Left is older, right is now. Both use a fixed 0–100%
+scale (RAM is physical memory in use / total), with 23 time slots at 120 columns
+or wider and 15 slots at 80–119 columns. Each slot spans the configured refresh
+interval: at the default 3 seconds these cover 69 and 45 seconds respectively.
+Both graphs share a fixed clock and
+shift left together once per interval. Until a new result arrives, the previous
+value is held; these held values are not new measurements. Before the first result,
+slots are blank. An explicitly failed or unavailable reading shows `!` until a
+successful reading arrives; `▁` represents low/zero usage. Redraws and other
+collectors do not advance the clock or append observations. The graphs are not
+rescaled to exaggerate small changes. `TERM=dumb` uses ASCII levels (`_` through `#`)
+with the same `!` failure marker.
+
+The Windows collector includes query time in its refresh interval: a 0.8-second
+query with a 3-second interval waits another 2.2 seconds. If collection takes longer
+than the interval, the next query starts when it finishes, without overlapping
+queries. The history holds the last value during that wait.
+Below 80 columns, only CPU/RAM totals remain in the summary; history continues
+to be recorded while hidden. Classic and WSL-only views do not show host graphs.
+Totals are left-aligned in fixed-width fields, so both values and graphs start
+at matching columns. Environment observations also have fixed columns, with three
+spaces between blocks at 120+ columns and one on medium terminals, including while
+values are unavailable or change digit count. Large memory
+values use fewer decimals or larger binary units to keep columns stable. Very short
+terminals reduce the summary to one line. The footer progressively omits hints,
+preserving flat/tree, sort key/order and `q quit` whenever physically possible.
+
+```text
+CPU 23.4%      ▄▃▂▂▂▂▄▃▂▂▂▂▄▃▂ | Win   5.0% WSL  10.0% WSLC   2.0% Docker   4.0%
+RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2.10G WSLC   300M Docker   800M
+```
+
+These example values are **independent observations, not an additive breakdown**:
+
+- `Win` sums observed Windows processes, excluding WSL/WSLC VM host rows.
+- `WSL` sums observed processes in the primary and collected additional WSL distributions. It can include
+  Docker workloads also reported under `Docker`.
+- `WSLC` and `Docker` sum container statistics, excluding child process detail rows.
+- Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
+  statistics respectively. Shared pages and overlapping observations mean these
+  values must not be summed or subtracted from host physical RAM.
+
+`RAM` is physical total minus available memory, collected using
+[GlobalMemoryStatusEx](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-globalmemorystatusex).
+`K`, `M`, `G`, `T`, `P`, and `E` use powers of 1024. Missing, disabled, warming-up or incomplete
+collectors display `N/A`; a successful empty collection displays zero. Host RAM can
+appear before the first CPU interval. With `--wsl-only`, host totals are unavailable
+and CPU observations use the WSL CPU scale, as explained in help.
+Summary observations are independent of row filters, limits, sorting and `--cpu-scale`.
+
+Use `--header classic` for the existing one-line header, or `--header compact`
+for the new default. `--color auto|always|never` controls TUI colors; `auto` honors
+nonempty `NO_COLOR` and disables colors with `TERM=dumb`, while `always` explicitly
+overrides them. `--color never` retains all labels and numbers. These display options
+do not change text or JSON output.
+
 ## CPU display and accounting
 
-The TUI header shows `Host CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Windows system counter deltas, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
+The TUI header shows `CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Windows system counter deltas, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
 
 Text and TUI output default to the familiar Linux `top` convention where one fully busy logical CPU is 100%; multi-threaded workloads can exceed 100%. Use `--cpu-scale host` for the Task Manager-style whole-host display where all Windows host logical CPUs together equal 100%.
 

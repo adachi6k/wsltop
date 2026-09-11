@@ -416,7 +416,7 @@ fn env_name(environment: EnvironmentKind) -> &'static str {
         EnvironmentKind::Docker => "Docker",
     }
 }
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     let value = bytes as f64;
     if value >= 1024.0 * 1024.0 * 1024.0 {
         format!("{:.2}G", value / (1024.0 * 1024.0 * 1024.0))
@@ -504,6 +504,9 @@ mod tests {
 
     fn snapshot(row: ResourceUsage) -> MonitorSnapshot {
         MonitorSnapshot {
+            host_memory: None,
+            host_history: Default::default(),
+            environment_summary: Default::default(),
             host_cpu_percent: None,
             sort: Default::default(),
             query_source: None,

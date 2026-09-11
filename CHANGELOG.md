@@ -4,8 +4,18 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- Summary separator length follows summary/table heading width instead of filling wide terminals, independently of long command rows and scrolling.
+
+- Summary totals now align both value starts and history columns; wide terminals add space between fixed-width environment blocks. Footer CPU scale is grouped with view, sort and interval instead of trailing the key hints.
+
+- TUI layout now uses a two-line summary, a neutral separator above the resource table, and a single status/key footer with bracketed view/sort/interval indicators. Removing the `obs` label gives CPU/RAM history three more columns: 23 slots on wide terminals and 15 on medium terminals. Narrow terminals prioritize totals and essential controls. Environment labels retain their colors, with WSL overlap explained in help.
+
 ### Added
 
+- Compact host CPU/RAM history graphs with a shared fixed clock, a 0–100% scale, held values between results, explicit failure markers, and fixed aligned columns. Windows refresh periods include query time.
+- Compact two-line TUI CPU/RAM summary with host physical memory and colorized Windows/WSL/WSLC/Docker observations, independent of display filters. Overlapping observations are explicitly labeled; `?` explains metrics, `--header classic` restores the one-line header, and `--color` controls TUI colors.
 - TUI header displays Windows host-wide CPU usage from system counters, independent of visible resource rows and CPU display scaling; unavailable readings display `N/A`.
 
 ## [0.4.0] - 2026-09-06

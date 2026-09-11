@@ -2,6 +2,8 @@ mod attribution;
 mod collector;
 mod command;
 mod docker;
+mod header;
+mod history;
 #[cfg(unix)]
 mod linux;
 #[cfg_attr(windows, allow(dead_code))]
@@ -13,6 +15,7 @@ mod query;
 mod render;
 mod sampler;
 mod stream;
+mod summary;
 mod tui;
 mod windows;
 mod windows_app;
@@ -29,6 +32,8 @@ const DEFAULT_INTERVAL_MS: u64 = 3000;
 
 #[derive(Debug)]
 struct Options {
+    header: header::HeaderMode,
+    color: header::ColorMode,
     sort: Sort,
     interval: Duration,
     limit: usize,
@@ -90,7 +95,14 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         collect_windows_applications,
     };
     if options.interactive {
-        return tui::run(config, options.distro, options.tree, options.cpu_scale);
+        return tui::run(
+            config,
+            options.distro,
+            options.tree,
+            options.cpu_scale,
+            options.header,
+            options.color,
+        );
     }
 
     let mut monitor = Monitor::new(config, options.distro);
@@ -127,6 +139,8 @@ where
     S: Into<String>,
 {
     let mut options = Options {
+        header: Default::default(),
+        color: Default::default(),
         sort: Sort::default(),
         interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
         limit: 30,
@@ -149,6 +163,18 @@ where
     let mut args = args.into_iter().map(Into::into);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--header" => {
+                options.header = header::HeaderMode::parse(
+                    &args.next().ok_or("--header requires classic or compact")?,
+                )?;
+            }
+            "--color" => {
+                options.color = header::ColorMode::parse(
+                    &args
+                        .next()
+                        .ok_or("--color requires auto, always or never")?,
+                )?;
+            }
             "--sort" => {
                 options.sort.key =
                     SortKey::parse(&args.next().ok_or("--sort requires cpu, memory or name")?)?;
@@ -236,6 +262,7 @@ OPTIONS:\n    --once                 Take one sampled measurement (default behav
         env!("CARGO_PKG_VERSION"),
         DEFAULT_INTERVAL_MS
     );
+    println!("TUI DISPLAY:\n    --header MODE          compact (two lines, default) or classic (one line)\n    --color MODE           auto (default), always or never; auto honors NO_COLOR\n\nPress ? in the TUI for summary metrics and controls. Environment observations\nmay overlap (WSL* can include Docker); they are not an additive host breakdown.");
 }
 
 #[cfg(test)]
@@ -244,6 +271,25 @@ mod tests {
         parse_args_from, validate_options, validate_options_for_platform, DEFAULT_INTERVAL_MS,
     };
     use crate::render::CpuScale;
+
+    #[test]
+    fn parses_tui_display_options() {
+        let defaults = parse_args_from(Vec::<String>::new()).unwrap();
+        assert_eq!(defaults.header, crate::header::HeaderMode::Compact);
+        assert_eq!(defaults.color, crate::header::ColorMode::Auto);
+        let options =
+            parse_args_from(["--interactive", "--header", "classic", "--color", "never"]).unwrap();
+        assert_eq!(options.header, crate::header::HeaderMode::Classic);
+        assert_eq!(options.color, crate::header::ColorMode::Never);
+        for args in [
+            vec!["--header"],
+            vec!["--header", "huge"],
+            vec!["--color"],
+            vec!["--color", "blue"],
+        ] {
+            assert!(parse_args_from(args).is_err());
+        }
+    }
 
     #[test]
     fn defaults_human_output_to_per_core_scale() {
