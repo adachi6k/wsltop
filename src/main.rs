@@ -262,7 +262,7 @@ OPTIONS:\n    --once                 Take one sampled measurement (default behav
         env!("CARGO_PKG_VERSION"),
         DEFAULT_INTERVAL_MS
     );
-    println!("TUI DISPLAY:\n    --header MODE          compact (two lines, default) or classic (one line)\n    --color MODE           auto (default), always or never; auto honors NO_COLOR\n\nPress ? in the TUI for summary metrics and controls. Environment observations\nmay overlap (WSL* can include Docker); they are not an additive host breakdown.");
+    println!("TUI DISPLAY:\n    --header MODE          compact (two lines, default) or classic (one line)\n    --color MODE           auto (default), always or never; auto honors NO_COLOR\n\nPress ? in the TUI for summary metrics and controls. Environment observations\nmay overlap (WSL can include Docker); they are not an additive host breakdown.");
 }
 
 #[cfg(test)]

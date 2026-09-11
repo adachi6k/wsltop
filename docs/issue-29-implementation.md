@@ -41,7 +41,7 @@ WSLでリポジトリ直下から:
 - Summary 2行、枠なしResource table、footer 1行の3層に整理。Resourcesタイトル行を削除し、view/sort/interval/optionをfooterへ移動。`cpu↓` / `mem↓` / `name↑` の短縮表記を使用し、幅不足では操作ヒントを段階的に省略する。flat/tree・sort・q quitは可能な限り残す。高さ不足では全体値だけの1行にする。classic指定では従来のview・Host CPU・CPU scale・sort・intervalの1行ヘッダーを表示する。
 - 正常更新時の `updated` を削除。収集状態がある場合はfooterに `!`、幅に余裕があれば詳細も表示する。詳細はhelpでも確認できる。
 - 最終polishで全体値を固定幅内の左揃えとし、CPU/RAMのvalue/bar開始位置を統一。環境ブロックの幅を固定し、120列以上では間隔3文字、80〜119列では1文字にする。Footerは `[flat cpu↓ core 3.0s]` とCPU scaleを左側に統合。狭幅では補助キー、interval、scaleの順に省略し、view/sort/qを維持する。
-- Summary下にdimの区切り線を追加し、表の見出し下の線も維持する（上部は線込み5行）。高さが足りない場合は追加の線を省略。ASCII環境では `-`、単色指定では装飾なし。Footer左端は `[flat cpu↓ 3.0s]` とまとめ、幅不足では補助キーを右側から省略する。
+- Summary下にdimの区切り線を追加し、表の見出し下の線も維持する（上部は線込み5行）。高さが足りない場合は追加の線を省略。ASCII環境では `-`、単色指定では装飾なし。Footer左端は `[flat cpu↓ core 3.0s]` とまとめ、幅不足では補助キーを右側から省略する。
 - `--header classic|compact`、`--color auto|always|never` を追加。autoはNO_COLOR/TERM=dumbを尊重し、alwaysは明示指定を優先する。
 - 通常のテキスト・JSON出力形式は維持する。
 

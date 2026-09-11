@@ -259,7 +259,7 @@ pub fn resource_line(line: &str, colors: bool) -> Line<'static> {
     for (label, environment) in labels {
         if line
             .strip_prefix(label)
-            .is_some_and(|rest| rest.starts_with(' '))
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
         {
             return Line::from(vec![
                 Span::styled(label, environment_style(environment, colors)),
@@ -370,6 +370,14 @@ mod tests {
 
     #[test]
     fn colors_apply_to_labels_only() {
+        assert_eq!(
+            resource_line("Docker", true).spans[0].style.fg,
+            Some(Color::Cyan)
+        );
+        assert_eq!(
+            resource_line("Docker", false).spans[0].style,
+            Style::default()
+        );
         let line = resource_line("Docker  container 123 Docker-command", true);
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
         assert_eq!(line.spans[1].style, Style::default());
