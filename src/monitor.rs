@@ -29,6 +29,9 @@ pub struct Monitor {
 
 pub struct MonitorSnapshot {
     pub host_cpu_percent: Option<f64>,
+    pub host_memory: Option<crate::model::HostMemory>,
+    pub host_history: crate::history::HostHistory,
+    pub environment_summary: crate::summary::EnvironmentSummary,
     pub sort: Sort,
     pub query_source: Option<QuerySource>,
     pub host_logical_cpu_count: u32,
@@ -72,6 +75,9 @@ impl MonitorSnapshot {
         let query = config.query();
         Self {
             host_cpu_percent: None,
+            host_memory: None,
+            host_history: Default::default(),
+            environment_summary: Default::default(),
             sort: config.sort,
             host_logical_cpu_count: tree.host_logical_cpu_count,
             resources: query.flat(&resources),
@@ -249,6 +255,7 @@ impl Monitor {
         }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
         let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, &self.config);
+        snapshot.host_memory = windows_after.as_ref().and_then(|sample| sample.host_memory);
         snapshot.host_cpu_percent = windows_after
             .and_then(|sample| sample.host_cpu)
             .zip(windows_before.and_then(|sample| sample.host_cpu))

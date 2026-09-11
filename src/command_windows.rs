@@ -463,7 +463,9 @@ mod tests {
     fn returns_output_for_completed_command() {
         let output = output_with_timeout(
             CommandSpec::new("cmd.exe", &["/D", "/C", "echo done"]),
-            Duration::from_secs(5),
+            // This tests successful capture, not a startup deadline. Loaded CI
+            // runners can take more than five seconds to schedule cmd.exe.
+            Duration::from_secs(30),
         )
         .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "done");

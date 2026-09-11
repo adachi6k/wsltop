@@ -1,6 +1,7 @@
 use crate::command;
 use crate::model::{
-    EnvironmentKind, HostCpuSample, ProcessKey, ProcessSample, Snapshot, WindowsSnapshot,
+    EnvironmentKind, HostCpuSample, HostMemory, ProcessKey, ProcessSample, Snapshot,
+    WindowsSnapshot,
 };
 use crate::windows_app::{WindowsMetadata, WindowsProcessMetadata};
 use serde::Deserialize;
@@ -17,6 +18,7 @@ struct RawWindowsSnapshot {
     logical_cpu_count_from_cim: bool,
     processes: Vec<RawWindowsProcess>,
     host_cpu: Option<RawHostCpuSample>,
+    host_memory: Option<HostMemory>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +154,9 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
         },
         host_logical_cpu_count: raw.logical_cpu_count,
         host_cpu: raw.host_cpu.and_then(RawHostCpuSample::into_sample),
+        host_memory: raw
+            .host_memory
+            .filter(|memory| memory.used_bytes().is_some()),
     })
 }
 
@@ -236,6 +241,15 @@ try {
     Add-Type -ErrorAction Stop -TypeDefinition @'
 using System.Runtime.InteropServices;
 public static class WsltopSystemTimes {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MemoryStatus {
+        public uint length, memoryLoad;
+        public ulong totalPhys, availPhys, totalPageFile, availPageFile;
+        public ulong totalVirtual, availVirtual, availExtendedVirtual;
+    }
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
     [DllImport("kernel32.dll")]
     public static extern ushort GetActiveProcessorGroupCount();
     [DllImport("kernel32.dll")]
@@ -265,8 +279,20 @@ public static class WsltopSystemTimes {
         }
     }
 } catch { }
+$hostMemory = $null
+try {
+    $memory = New-Object WsltopSystemTimes+MemoryStatus
+    $memory.length = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($memory)
+    if ([WsltopSystemTimes]::GlobalMemoryStatusEx([ref]$memory)) {
+        $hostMemory = [PSCustomObject]@{
+            total_bytes = $memory.totalPhys
+            available_bytes = $memory.availPhys
+        }
+    }
+} catch { }
 [PSCustomObject]@{
     host_cpu = $hostCpu
+    host_memory = $hostMemory
     logical_cpu_count = $cpuCount
     logical_cpu_count_from_cim = $cpuCountFromCim
     processes = $items
@@ -358,5 +384,34 @@ mod tests {
 
         let wrapper: Wrapper = serde_json::from_str(r#"{"host_cpu":null}"#).unwrap();
         assert!(wrapper.host_cpu.is_none());
+    }
+
+    #[test]
+    fn host_memory_handles_full_free_missing_and_invalid_samples() {
+        use crate::model::HostMemory;
+        for (total, available, expected) in [
+            (1024, 0, Some(1024)),
+            (1024, 1024, Some(0)),
+            (1024, 256, Some(768)),
+            (0, 0, None),
+            (1024, 2048, None),
+        ] {
+            assert_eq!(
+                HostMemory {
+                    total_bytes: total,
+                    available_bytes: available
+                }
+                .used_bytes(),
+                expected
+            );
+        }
+        let raw: super::RawWindowsSnapshot = serde_json::from_str(
+            r#"{"logical_cpu_count":16,"logical_cpu_count_from_cim":true,"processes":[],"host_memory":{"total_bytes":34359738368,"available_bytes":8589934592}}"#
+        ).unwrap();
+        assert_eq!(raw.host_memory.unwrap().used_bytes(), Some(25769803776));
+        let raw: super::RawWindowsSnapshot = serde_json::from_str(
+            r#"{"logical_cpu_count":16,"logical_cpu_count_from_cim":true,"processes":[],"host_memory":null}"#
+        ).unwrap();
+        assert!(raw.host_memory.is_none());
     }
 }

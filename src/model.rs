@@ -81,6 +81,21 @@ pub struct WindowsSnapshot {
     pub snapshot: Snapshot,
     pub host_logical_cpu_count: u32,
     pub host_cpu: Option<HostCpuSample>,
+    pub host_memory: Option<HostMemory>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub struct HostMemory {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+impl HostMemory {
+    pub fn used_bytes(self) -> Option<u64> {
+        (self.total_bytes > 0)
+            .then(|| self.total_bytes.checked_sub(self.available_bytes))
+            .flatten()
+    }
 }
 
 /// Cumulative idle and total CPU ticks, independent of process visibility.
