@@ -20,10 +20,13 @@ const SLOW_COLLECTOR_MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 enum Event {
     HostCpuCount(u32),
-    HostMemory(Option<crate::model::HostMemory>),
+    HostMemory(std::time::Instant, Option<crate::model::HostMemory>),
     CollectorWarnings(Vec<String>),
     Linux(Normalized<Result<Vec<ResourceUsage>, String>>),
-    Windows(Result<(Vec<ResourceUsage>, u32, Option<f64>), String>),
+    Windows(
+        std::time::Instant,
+        Result<(Vec<ResourceUsage>, u32, Option<f64>), String>,
+    ),
     WindowsMetadata(Result<WindowsMetadata, String>),
     ExtraWsl(Normalized<Result<ExtraWslUpdate, String>>),
     WslcAggregate(Normalized<Result<WslcUsage, String>>),
@@ -55,10 +58,10 @@ impl Event {
     fn name(&self) -> &'static str {
         match self {
             Self::HostCpuCount(_) => "Windows host CPU",
-            Self::HostMemory(_) => "Windows host RAM",
+            Self::HostMemory(..) => "Windows host RAM",
             Self::CollectorWarnings(_) => "WSL collector plan",
             Self::Linux(_) => "current WSL",
-            Self::Windows(_) => "Windows",
+            Self::Windows(..) => "Windows",
             Self::WindowsMetadata(_) => "Windows applications",
             Self::ExtraWsl(_) => "additional WSL",
             Self::WslcAggregate(_) | Self::WslcDetails(_) => "WSLC",
@@ -119,10 +122,10 @@ impl Aggregate {
     }
 
     fn apply(&mut self, event: Event) {
-        if let Event::HostMemory(memory) = event {
+        if let Event::HostMemory(captured_at, memory) = event {
             self.host_memory = memory;
             self.host_history.memory.record(
-                std::time::Instant::now(),
+                captured_at,
                 memory.and_then(|memory| {
                     memory
                         .used_bytes()
@@ -210,20 +213,18 @@ impl Aggregate {
         }
         let result = match event {
             Event::HostCpuCount(_) => unreachable!(),
-            Event::HostMemory(_) => unreachable!(),
+            Event::HostMemory(..) => unreachable!(),
             Event::CollectorWarnings(_) => unreachable!(),
             Event::Linux(value) => value.value.map(|rows| self.linux = rows),
-            Event::Windows(value) => {
+            Event::Windows(captured_at, value) => {
                 self.host_cpu_percent = None;
                 self.host_history.cpu.record(
-                    std::time::Instant::now(),
+                    captured_at,
                     value.as_ref().ok().and_then(|(_, _, total)| *total),
                 );
                 if value.is_err() {
                     self.host_memory = None;
-                    self.host_history
-                        .memory
-                        .record(std::time::Instant::now(), None);
+                    self.host_history.memory.record(captured_at, None);
                 }
                 value.map(|(rows, count, total)| {
                     self.windows = rows;
@@ -408,9 +409,9 @@ impl Event {
             Self::DockerAggregate(value) => value.cpu_count != current_count,
             Self::DockerDetails(value) => value.cpu_count != current_count,
             Self::HostCpuCount(_)
-            | Self::HostMemory(_)
+            | Self::HostMemory(..)
             | Self::CollectorWarnings(_)
-            | Self::Windows(_)
+            | Self::Windows(..)
             | Self::WindowsMetadata(_) => false,
         }
     }
@@ -698,12 +699,16 @@ fn sample_windows(
         let started = std::time::Instant::now();
         match windows::snapshot() {
             Ok(after) => {
+                let captured_at = after.snapshot.captured_at;
                 let count = after.host_logical_cpu_count;
                 cpus.store(count, Ordering::Relaxed);
                 if sender.send(Event::HostCpuCount(count)).is_err() {
                     break;
                 }
-                if sender.send(Event::HostMemory(after.host_memory)).is_err() {
+                if sender
+                    .send(Event::HostMemory(captured_at, after.host_memory))
+                    .is_err()
+                {
                     break;
                 }
                 if let Some(old) = &before {
@@ -713,7 +718,7 @@ fn sample_windows(
                         .zip(old.host_cpu)
                         .and_then(|(after, before)| after.usage_since(before));
                     if sender
-                        .send(Event::Windows(Ok((rows, count, total))))
+                        .send(Event::Windows(captured_at, Ok((rows, count, total))))
                         .is_err()
                     {
                         break;
@@ -723,9 +728,10 @@ fn sample_windows(
             }
             Err(error) => {
                 if sender
-                    .send(Event::Windows(Err(format!(
-                        "Windows collector unavailable: {error}"
-                    ))))
+                    .send(Event::Windows(
+                        std::time::Instant::now(),
+                        Err(format!("Windows collector unavailable: {error}")),
+                    ))
                     .is_err()
                 {
                     break;
@@ -1185,11 +1191,17 @@ mod tests {
     fn history_only_records_host_results_not_other_collectors_or_requeries() {
         let options = config();
         let mut aggregate = Aggregate::new(&options);
-        aggregate.apply(Event::HostMemory(Some(crate::model::HostMemory {
-            total_bytes: 4096,
-            available_bytes: 1024,
-        })));
-        aggregate.apply(Event::Windows(Ok((vec![], 16, Some(50.0)))));
+        aggregate.apply(Event::HostMemory(
+            std::time::Instant::now(),
+            Some(crate::model::HostMemory {
+                total_bytes: 4096,
+                available_bytes: 1024,
+            }),
+        ));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![], 16, Some(50.0))),
+        ));
         let mut snapshot = aggregate.snapshot(&options);
         let history = snapshot.host_history.clone();
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::new())));
@@ -1202,13 +1214,56 @@ mod tests {
             assert_eq!(snapshot.host_history, history);
             assert_eq!(aggregate.snapshot(&options).host_history, history);
         }
-        aggregate.apply(Event::Windows(Err("offline".into())));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Err("offline".into()),
+        ));
         let failed = aggregate.snapshot(&options).host_history;
         assert_ne!(failed.cpu, history.cpu);
         assert_ne!(failed.memory, history.memory);
         let now = std::time::Instant::now();
         assert!(failed.cpu.sparkline(12, now, false).ends_with('!'));
         assert!(failed.memory.sparkline(12, now, false).ends_with('!'));
+    }
+
+    #[test]
+    fn queued_windows_metrics_share_collection_slots_across_boundaries() {
+        let mut options = config();
+        options.interval = Duration::from_secs(1);
+        let mut aggregate = Aggregate::new(&options);
+        // Collection happened earlier; handling now is several slots late.
+        // No sleeps or scheduler assumptions are needed to reproduce the bug.
+        let origin = std::time::Instant::now() - Duration::from_secs(10);
+        aggregate.host_history = crate::history::HostHistory::new(origin, options.interval);
+        for (millis, used) in [(999, 50), (1001, 100)] {
+            let captured_at = origin + Duration::from_millis(millis);
+            aggregate.apply(Event::HostMemory(
+                captured_at,
+                Some(crate::model::HostMemory {
+                    total_bytes: 100,
+                    available_bytes: 100 - used,
+                }),
+            ));
+            // A snapshot can be constructed between the two queued events.
+            let _ = aggregate.snapshot(&options);
+            aggregate.apply(Event::Windows(
+                captured_at,
+                Ok((vec![], 16, Some(used as f64))),
+            ));
+        }
+        let at = origin + Duration::from_secs(3);
+        for history in [&aggregate.host_history.cpu, &aggregate.host_history.memory] {
+            let graph = history.sparkline(4, at, false);
+            assert_eq!(graph.chars().next(), Some('▅'));
+            assert!(graph.ends_with("███"));
+        }
+        aggregate.apply(Event::Windows(
+            origin + Duration::from_secs(2),
+            Err("offline".into()),
+        ));
+        for history in [&aggregate.host_history.cpu, &aggregate.host_history.memory] {
+            assert_eq!(history.sparkline(4, at, false), "▅█!!");
+        }
     }
 
     #[test]
@@ -1231,17 +1286,26 @@ mod tests {
             total_bytes: 4096,
             available_bytes: 1024,
         };
-        aggregate.apply(Event::HostMemory(Some(memory)));
+        aggregate.apply(Event::HostMemory(std::time::Instant::now(), Some(memory)));
         assert_eq!(aggregate.snapshot(&options).host_memory, Some(memory));
         assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
-        aggregate.apply(Event::Windows(Ok((vec![], 16, Some(42.5)))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![], 16, Some(42.5))),
+        ));
         let mut snapshot = aggregate.snapshot(&options);
         snapshot.requery(&options.query());
         assert_eq!(snapshot.host_cpu_percent, Some(42.5));
-        aggregate.apply(Event::Windows(Err("offline".into())));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Err("offline".into()),
+        ));
         assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
         assert_eq!(aggregate.snapshot(&options).host_memory, None);
-        aggregate.apply(Event::Windows(Ok((vec![], 16, None))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![], 16, None)),
+        ));
         assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
     }
 
@@ -1316,7 +1380,10 @@ mod tests {
         second.pid = Some(11);
         second.name = "chrome".into();
         second.cpu_percent = 2.0;
-        aggregate.apply(Event::Windows(Ok((vec![first, second], 16, None))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![first, second], 16, None)),
+        ));
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::new())));
 
         let snapshot = aggregate.snapshot(&options);
@@ -1339,7 +1406,10 @@ mod tests {
         let mut process = row(EnvironmentKind::Windows, ResourceKind::Process, "10");
         process.pid = Some(10);
         process.name = "chrome".into();
-        aggregate.apply(Event::Windows(Ok((vec![process], 16, None))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![process], 16, None)),
+        ));
 
         let snapshot = aggregate.snapshot(&options);
         assert_eq!(snapshot.resources.len(), 1);
@@ -1358,7 +1428,10 @@ mod tests {
         webview.pid = Some(11);
         webview.start_id = Some(11);
         webview.name = "msedgewebview2".into();
-        aggregate.apply(Event::Windows(Ok((vec![teams, webview], 16, None))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![teams, webview], 16, None)),
+        ));
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::from([
             (
                 10,

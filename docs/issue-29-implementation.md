@@ -57,6 +57,8 @@ PR全体ではTUI・header・historyに加え、CLIオプションをmainに追�
 
 ## 検証結果
 
+- Windows収集のCPU/RAMイベントに同じsnapshot収集時刻を付け、Aggregateでの処理時刻に依存せず同じ履歴スロットへ記録する。失敗イベントも両指標に同じ時刻を使う。キュー処理の遅延・境界前後・失敗記録をsleepなしの回帰テストで検証。
+
 - Helpのスクロール上限はRatatui Paragraphの実際のword wrap行数で算出する。`unstable-rendered-line-info` featureを有効化し、描画と同じ折り返し処理を使う。19/40/80/120列、長い状態文・日本語、Pg操作で末尾に到達できることを描画結果から検証。
 
 - PRレビュー対応: classicの従来ヘッダーを復元し、treeのresource rowsを区切り線幅の算出から除外。長いtree行とclassic表示の回帰テストを追加。
@@ -75,7 +77,7 @@ PR全体ではTUI・header・historyに加え、CLIオプションをmainに追�
 
 - TUI整理後の実機120/80/60列で、履歴20/12点と狭幅での非表示、footerの短縮を確認。tree・memory・昇順への切り替え、help開閉、q終了も確認。実画面キャプチャ: `/tmp/wsltop-polish-preview.svg`。
 
-- `cargo test --locked --all-targets`: 159件成功。
+- `cargo test --locked --all-targets`: 160件成功。
 - `cargo clippy --locked --all-targets --all-features -- -D warnings`: 成功。
 - `cargo check --locked --target x86_64-pc-windows-gnu`: 成功。
 - `cargo build --release --locked`: 成功。
