@@ -38,7 +38,7 @@ WSLでリポジトリ直下から:
 - 表示件数・フィルター・ソート・一覧のCPUスケールを変えてもサマリーは変わらない。
 - 未取得・無効化・収集失敗・不完全な収集はN/A。正常な空の収集結果はゼロにする。
 - `obs` ラベルを削除し、その3文字分を履歴に回す。ラベルは `CPU` / `RAM` / `WSL` に短縮し、観測値の意味・primary・包含関係はhelpで説明。`?` で指標と操作の説明を開き、矢印/Pgでスクロールできる。
-- Summary 2行、枠なしResource table、footer 1行の3層に整理。Resourcesタイトル行を削除し、view/sort/interval/optionをfooterへ移動。`cpu↓` / `mem↓` / `name↑` の短縮表記を使用し、幅不足では操作ヒントを段階的に省略する。flat/tree・sort・q quitは可能な限り残す。高さ不足やclassic指定では全体値だけの1行にする。
+- Summary 2行、枠なしResource table、footer 1行の3層に整理。Resourcesタイトル行を削除し、view/sort/interval/optionをfooterへ移動。`cpu↓` / `mem↓` / `name↑` の短縮表記を使用し、幅不足では操作ヒントを段階的に省略する。flat/tree・sort・q quitは可能な限り残す。高さ不足では全体値だけの1行にする。classic指定では従来のview・Host CPU・CPU scale・sort・intervalの1行ヘッダーを表示する。
 - 正常更新時の `updated` を削除。収集状態がある場合はfooterに `!`、幅に余裕があれば詳細も表示する。詳細はhelpでも確認できる。
 - 最終polishで全体値を固定幅内の左揃えとし、CPU/RAMのvalue/bar開始位置を統一。環境ブロックの幅を固定し、120列以上では間隔3文字、80〜119列では1文字にする。Footerは `[flat cpu↓ core 3.0s]` とCPU scaleを左側に統合。狭幅では補助キー、interval、scaleの順に省略し、view/sort/qを維持する。
 - Summary下にdimの区切り線を追加し、表の見出し下の線も維持する（上部は線込み5行）。高さが足りない場合は追加の線を省略。ASCII環境では `-`、単色指定では装飾なし。Footer左端は `[flat cpu↓ 3.0s]` とまとめ、幅不足では補助キーを右側から省略する。
@@ -53,9 +53,13 @@ RAMはWindows working set、WSL RSS、コンテナCLI統計で定義が異なり
 
 `--wsl-only` のCPU観測値はWSL可視CPUを分母とすることをhelpで説明する。このモードのホストCPU/RAMは取得しない。
 
-今回のTUI整理では `src/tui.rs`、`src/header.rs`、表示履歴の保持数のみを変更。着手前とのハッシュ比較で、collector、CPU accounting、JSON、query/sort、集計、既存rendererのファイルが変更されていないことを確認した。
+PR全体ではTUI・header・historyに加え、CLIオプションをmainに追加し、model・windows・monitor・streamにホストRAMの取得と受け渡し、summaryに環境別観測値の集計を追加している。streamでは履歴の状態管理とWindows収集周期に処理時間を含める変更も行った。renderは共有メモリ書式関数の公開範囲とテスト用snapshot初期化を変更した。CPU accountingの計算式、公開JSON schema/output、query/sort semantics、コンテナの親子グループ化は維持する。「変更ファイルがTUI周辺だけ」という制限とハッシュ比較は後段の見た目調整に限った確認であり、PR全体の範囲ではない。
 
 ## 検証結果
+
+- PRレビュー対応: classicの従来ヘッダーを復元し、treeのresource rowsを区切り線幅の算出から除外。長いtree行とclassic表示の回帰テストを追加。
+- Windows RAMの新しいP/Invoke経路は、Windows 11 Pro + WSL2実機で埋め込みスクリプトを実行して検証済み。[実測記録](validation/2026-09-12-summary-memory.md)を参照。
+- Windows CIの正常終了コマンドテストが5秒の起動待ちで失敗したため、そのテストのみ30秒に緩和。製品のタイムアウトと専用タイムアウトテストは維持。
 
 - Summaryの縦区切り `|` も横separatorと共通のDimスタイルに統一。数値・履歴・環境色への非適用と、単色指定時の装飾なしを幅別テストで確認。
 
@@ -69,7 +73,7 @@ RAMはWindows working set、WSL RSS、コンテナCLI統計で定義が異なり
 
 - TUI整理後の実機120/80/60列で、履歴20/12点と狭幅での非表示、footerの短縮を確認。tree・memory・昇順への切り替え、help開閉、q終了も確認。実画面キャプチャ: `/tmp/wsltop-polish-preview.svg`。
 
-- `cargo test --locked --all-targets`: 156件成功。
+- `cargo test --locked --all-targets`: 158件成功。
 - `cargo clippy --locked --all-targets --all-features -- -D warnings`: 成功。
 - `cargo check --locked --target x86_64-pc-windows-gnu`: 成功。
 - `cargo build --release --locked`: 成功。

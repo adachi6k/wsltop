@@ -89,16 +89,26 @@ fn draw_ui(
     interval: Duration,
 ) {
     let [summary, separator, table, footer] = layout_areas(frame.area(), mode);
-    let summary_lines = header::compact(
-        state.snapshot.as_ref(),
-        summary.width,
-        summary.height,
-        state.colors,
-        wsl_only,
-        interval,
-        std::time::Instant::now(),
-    );
-    let separator_width = summary_separator_width(separator.width, &summary_lines, &state.lines);
+    let summary_lines = if mode == HeaderMode::Classic {
+        vec![Line::raw(state.classic_header(summary.width, interval))]
+    } else {
+        header::compact(
+            state.snapshot.as_ref(),
+            summary.width,
+            summary.height,
+            state.colors,
+            wsl_only,
+            interval,
+            std::time::Instant::now(),
+        )
+    };
+    let structural_lines = if state.tree {
+        &[][..]
+    } else {
+        &state.lines[..]
+    };
+    let separator_width =
+        summary_separator_width(separator.width, &summary_lines, structural_lines);
     frame.render_widget(Paragraph::new(summary_lines), summary);
     let ascii = std::env::var_os("TERM").is_some_and(|term| term == "dumb");
     frame.render_widget(
@@ -188,7 +198,6 @@ fn actionable_key(event: Event) -> Option<KeyCode> {
     }
 }
 
-#[cfg(test)]
 fn host_cpu_label(snapshot: Option<&MonitorSnapshot>) -> String {
     snapshot
         .and_then(|snapshot| snapshot.host_cpu_percent)
@@ -213,6 +222,21 @@ struct State {
 }
 
 impl State {
+    fn classic_header(&self, width: u16, interval: Duration) -> String {
+        fit_text(
+            &format!(
+                " {} | Host CPU {} | CPU {} | sort {} {} | interval {}ms",
+                if self.tree { "tree" } else { "flat" },
+                host_cpu_label(self.snapshot.as_ref()),
+                self.cpu_scale.label(),
+                self.query.sort.key.label(),
+                self.query.sort.order.label(),
+                interval.as_millis()
+            ),
+            usize::from(width),
+        )
+    }
+
     fn footer(&self, width: u16, interval: Duration) -> String {
         let width = usize::from(width);
         let view = if self.tree { "tree" } else { "flat" };
@@ -415,7 +439,8 @@ impl State {
             .enumerate()
             .filter(|(_, line)| !self.hide_zero || !line.contains(" 0.00%"))
             .map(|(index, line)| {
-                if index == 1 && !line.is_empty() && line.bytes().all(|ch| ch == b'-') {
+                if !self.tree && index == 1 && !line.is_empty() && line.bytes().all(|ch| ch == b'-')
+                {
                     Line::styled(line.to_owned(), separator_style(self.colors))
                 } else {
                     header::resource_line(line, self.colors)
@@ -747,6 +772,76 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn classic_header_restores_view_cpu_scale_sort_and_interval() {
+        let mut state = layout_state();
+        state.snapshot.as_mut().unwrap().host_cpu_percent = Some(42.5);
+        for tree in [false, true] {
+            state.tree = tree;
+            let view = if tree { "tree" } else { "flat" };
+            assert_eq!(state.classic_header(160, Duration::from_secs(3)),
+                format!(" {view} | Host CPU 42.5% | CPU 1 core = 100% | sort cpu desc | interval 3000ms"));
+            for width in [0, 40, 80, 160] {
+                use ratatui::{backend::TestBackend, Terminal};
+                let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        draw_ui(
+                            frame,
+                            &mut state,
+                            HeaderMode::Classic,
+                            false,
+                            Duration::from_secs(3),
+                        )
+                    })
+                    .unwrap();
+                let row: String = (0..width)
+                    .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+                    .collect();
+                assert_eq!(
+                    row.trim_end(),
+                    state
+                        .classic_header(width, Duration::from_secs(3))
+                        .trim_end()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tree_commands_do_not_stretch_summary_separator() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = layout_state();
+        state.tree = true;
+        state.rebuild_lines();
+        for width in [80, 160, 240] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            let mut lengths = Vec::new();
+            for name in ["short".to_owned(), "command".repeat(100)] {
+                state.lines = vec![Line::raw("Windows applications"), Line::raw(name)];
+                terminal
+                    .draw(|frame| {
+                        draw_ui(
+                            frame,
+                            &mut state,
+                            HeaderMode::Compact,
+                            false,
+                            Duration::from_secs(3),
+                        )
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                lengths.push(
+                    (0..width)
+                        .filter(|&x| matches!(buffer[(x, 2)].symbol(), "─" | "-"))
+                        .count(),
+                );
+            }
+            assert_eq!(lengths[0], lengths[1]);
+            assert!(lengths[0] < 100);
+        }
+    }
+
     #[test]
     fn summary_separator_tracks_content_instead_of_terminal_or_commands() {
         let summary = [Line::raw("s".repeat(94))];
