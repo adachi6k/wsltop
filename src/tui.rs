@@ -116,23 +116,14 @@ fn draw_ui(
         separator,
     );
     if state.help {
-        let text = state.help_text(interval);
-        let inner_width = usize::from(table.width.max(1));
-        let help_lines: usize = text
-            .lines()
-            .map(|line| Line::raw(line).width().div_ceil(inner_width).max(1))
-            .sum();
+        let paragraph = Paragraph::new(state.help_text(interval)).wrap(Wrap { trim: false });
+        let help_lines = paragraph.line_count(table.width);
         state.help_scroll = state.help_scroll.min(
             help_lines
                 .saturating_sub(usize::from(table.height))
                 .min(usize::from(u16::MAX)) as u16,
         );
-        frame.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: false })
-                .scroll((state.help_scroll, 0)),
-            table,
-        );
+        frame.render_widget(paragraph.scroll((state.help_scroll, 0)), table);
     } else {
         let height = usize::from(table.height);
         state.clamp_scroll(height);
@@ -772,6 +763,59 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn help_scroll_reaches_last_wrapped_row_and_reclamps_after_resize() {
+        use ratatui::{
+            backend::TestBackend,
+            buffer::Buffer,
+            widgets::{Paragraph, Widget, Wrap},
+            Terminal,
+        };
+        let mut state = layout_state();
+        state.help = true;
+        state.status = "A long collector status with words that wrap at boundaries. 日本語の状態も表示します。".repeat(5);
+        let interval = Duration::from_secs(3);
+        for width in [19, 40, 80, 120, 19] {
+            // Independently render the complete help into a tall buffer and find
+            // its actual last occupied row, rather than duplicating the counter.
+            let text = state.help_text(interval);
+            let mut full = Buffer::empty(Rect::new(0, 0, width, 2000));
+            Paragraph::new(text.clone())
+                .wrap(Wrap { trim: false })
+                .render(full.area, &mut full);
+            let last = (0..2000)
+                .rev()
+                .find(|&y| (0..width).any(|x| full[(x, y)].symbol() != " "))
+                .unwrap();
+            let [_, _, table, _] = layout_areas(Rect::new(0, 0, width, 12), HeaderMode::Compact);
+            let expected_scroll = (last + 1).saturating_sub(table.height);
+            if width == 19 {
+                let old_count: usize = text
+                    .lines()
+                    .map(|line| Line::raw(line).width().div_ceil(usize::from(width)).max(1))
+                    .sum();
+                assert!(usize::from(last + 1) > old_count);
+            }
+            for _ in 0..200 {
+                state.key(KeyCode::PageDown);
+            }
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal
+                .draw(|frame| draw_ui(frame, &mut state, HeaderMode::Compact, false, interval))
+                .unwrap();
+            assert_eq!(state.help_scroll, expected_scroll);
+            let buffer = terminal.backend().buffer();
+            for x in 0..width {
+                assert_eq!(
+                    buffer[(x, table.y + table.height - 1)].symbol(),
+                    full[(x, last)].symbol()
+                );
+            }
+            state.key(KeyCode::PageUp);
+            assert_eq!(state.help_scroll, expected_scroll.saturating_sub(10));
+        }
+    }
+
     #[test]
     fn classic_header_restores_view_cpu_scale_sort_and_interval() {
         let mut state = layout_state();
