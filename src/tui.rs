@@ -764,6 +764,34 @@ mod tests {
         }
     }
     #[test]
+    fn release_display_options_do_not_change_flat_or_tree_json() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = layout_state();
+        let json = |state: &State| {
+            let snapshot = state.snapshot.as_ref().unwrap();
+            (
+                serde_json::to_value(&snapshot.pid_resources).unwrap(),
+                serde_json::to_value(&snapshot.tree).unwrap(),
+            )
+        };
+        let expected = json(&state);
+        for mode in [HeaderMode::Classic, HeaderMode::Compact] {
+            for colors in [false, true] {
+                state.colors = colors;
+                for width in [75, 90, 120, 200] {
+                    let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            draw_ui(frame, &mut state, mode, false, Duration::from_secs(3))
+                        })
+                        .unwrap();
+                    assert_eq!(json(&state), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn help_scroll_reaches_last_wrapped_row_and_reclamps_after_resize() {
         use ratatui::{
             backend::TestBackend,

@@ -6,6 +6,11 @@
 
 `wsltop` provides a one-shot CLI and interactive terminal UI on both Windows and WSL. A graphical UI is outside the current scope.
 
+The default TUI has a compact two-line host CPU/RAM summary, history graphs and
+colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity.
+Use `--header classic` for the traditional one-line header and `--color never`
+for monochrome output. See [v0.5.0 release notes](docs/release-v0.5.0.md).
+
 ![wsltop terminal UI showing flat and tree views](docs/assets/wsltop-demo.gif)
 
 ## Why wsltop?
@@ -44,7 +49,7 @@ Parent and child CPU values are attribution views, not values to add together.
 
 ### Windows
 
-Download `wsltop-v0.4.0-x86_64-pc-windows-msvc.zip` and its `.sha256` file from
+Download `wsltop-v0.5.0-x86_64-pc-windows-msvc.zip` and its `.sha256` file from
 [GitHub Releases](https://github.com/adachi6k/wsltop/releases). Verify the checksum
 as described under Installation, extract the ZIP, and open PowerShell in the
 extracted directory:
