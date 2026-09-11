@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- Windows TUI restores the caller's exact console input/output modes on exit, including flags changed by event handling.
 - CPU and RAM from one Windows collection share a history timestamp, preventing slot drift when event processing crosses an interval boundary.
 - Help scroll bounds use actual word wrapping so the last lines remain reachable on narrow terminals.
 - Classic mode restores its original header fields; long tree commands do not stretch the summary separator, and standalone Docker headings receive their environment color.

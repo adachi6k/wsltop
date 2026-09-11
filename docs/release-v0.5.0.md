@@ -32,12 +32,14 @@ This release aligns CPU/RAM history timestamps, fixes narrow-terminal help
 scrolling, restores classic header fields and polishes tree rendering. Windows
 command execution includes Job Object and timeout-race fixes. Windows refresh
 periods account for query duration without overlapping collection.
+Final acceptance testing also fixed restoration of the caller's exact Windows
+console input/output modes after leaving the TUI.
 
 JSON fields/schema and the host-wide CPU accounting model are unchanged.
 Existing sorting, container grouping and key bindings are retained. No process
 actions, MCP integration, new collectors or machine-readable fields are added.
-Release preparation itself changes only versioning, documentation, validation
-and packaging; the runtime fixes above were already merged into main.
+Release preparation changes versioning, documentation, validation and packaging,
+plus the console-mode restoration fix found by its real-host acceptance test.
 
 ## Distribution
 
