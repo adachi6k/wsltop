@@ -55,9 +55,9 @@ must not be summed into a host total.
 
 ## Remaining integration
 
-The CLI does not yet call this module. The [Query service](query-service.md) owns
+The [MCP adapter](mcp.md) calls this module through the Query service. The service owns
 synchronous collection/refresh, allocates session epochs, and coordinates explicit
 collector replacement. Until automatic namespace continuity is available, it uses
-observation-scoped resource IDs. A later stdio MCP adapter can map the four
-operations and typed errors to its protocol. The existing
+observation-scoped resource IDs. The adapter maps the four operations and typed
+errors to structured tool results. The existing
 CLI/JSON/TUI behavior is unchanged. The API contains no process/container actions.

@@ -4,27 +4,27 @@ mod command;
 mod docker;
 mod header;
 mod history;
-// Read-only identity foundation for the forthcoming Query API (#24).
-// It is intentionally not exposed through the compatibility CLI/JSON yet.
+// Includes identity-comparison primitives reserved for future action backends.
 #[allow(dead_code)]
 mod identity;
 #[cfg(unix)]
 mod linux;
 #[cfg_attr(windows, allow(dead_code))]
 mod linux_proc;
+mod mcp;
 mod model;
 mod monitor;
 mod multiwsl;
 mod query;
-// Read-only API over retained snapshots; transport/refresh integration follows.
+// Read-only API over retained snapshots, used by MCP.
 #[allow(dead_code)]
 mod query_api;
-// Collection/cache orchestration; transport integration follows.
+// Includes explicit collector replacement for future reconfiguration adapters.
 #[allow(dead_code)]
 mod query_service;
 mod render;
 mod sampler;
-// Snapshot lifecycle foundation; the external Query API is a later slice of #24.
+// Includes lower-level insertion modes for producers with verified namespaces.
 #[allow(dead_code)]
 mod snapshot_store;
 mod stream;
@@ -67,6 +67,9 @@ struct Options {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if env::args().nth(1).as_deref() == Some("mcp") {
+        return mcp::run(env::args().skip(2).collect());
+    }
     let options = parse_args()?;
     validate_options(&options)?;
     run(options)
@@ -270,7 +273,7 @@ fn print_help() {
     println!(
         "wsltop {}\n\n\
 Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2\n\n\
-USAGE:\n    wsltop [OPTIONS]\n\n\
+USAGE:\n    wsltop [OPTIONS]\n    wsltop mcp [COLLECTOR OPTIONS] (read-only stdio; see wsltop mcp --help)\n\n\
 OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --sort KEY            Sort resources by cpu, memory or name [default: cpu]\n    --sort-order ORDER    Sort direction: asc or desc [default: desc]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --distro NAME          Select the primary WSL distro (Windows-native only)\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
         env!("CARGO_PKG_VERSION"),
         DEFAULT_INTERVAL_MS

@@ -56,13 +56,13 @@ store does not supervise collector tasks or detect host/distro/container restart
 
 ## Integration still required
 
-This module is intentionally unused by the production CLI until the Query service
-is connected. The [internal Query API](query-api.md) supplies
+This module is used by the [MCP adapter](mcp.md) through the Query service.
+The [internal Query API](query-api.md) supplies
 list/inspect/children/summary operations on the retained source. The
 [Query service](query-service.md) supplies session epochs, collection timing,
 synchronous refresh, and explicit collector replacement. It uses observation-scoped
-identities until automatic namespace continuity is available. A transport adapter
-is still needed before the external snapshot contract and MCP tools can be exposed.
+identities until automatic namespace continuity is available. The MCP adapter
+exposes the snapshot contract and four read-only tools in development builds.
 Retaining an observation
 does not make it suitable for destructive actions: live native revalidation is
 still required.

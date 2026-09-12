@@ -101,6 +101,7 @@ impl Monitor {
         let mut warnings = Vec::new();
         let collector_plan = CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
         let linux_before = collector_plan.capture()?;
+        let linux_before_complete = linux_before.warnings.is_empty();
         for warning in linux_before.warnings {
             push_unique_warning(&mut warnings, warning);
         }
@@ -146,6 +147,15 @@ impl Monitor {
                 .unwrap_or_else(|_| Err("Docker collector panicked".to_string()))
         });
         let (linux_after, windows_after) = after_result?;
+        let linux_complete = linux_before_complete
+            && linux_after.warnings.is_empty()
+            && linux_before.additional.len() == linux_after.additional.len()
+            && linux_before.additional.iter().all(|(name, _)| {
+                linux_after
+                    .additional
+                    .iter()
+                    .any(|(other, _)| name == other)
+            });
         for warning in linux_after.warnings {
             push_unique_warning(&mut warnings, warning);
         }
@@ -187,6 +197,16 @@ impl Monitor {
             wslc_result = None;
             docker_result = None;
         }
+        // Empty optional results can also mean an unavailable executable/daemon
+        // in the legacy collectors. Do not turn that ambiguity into a known zero.
+        let summary_available = [
+            windows_before.is_some()
+                && windows_after.is_some()
+                && collector_cpu_count == host_cpu_count,
+            linux_complete && collector_cpu_count == host_cpu_count,
+            matches!(wslc_result.as_ref(), Some(Ok(usage)) if !usage.resources.is_empty() && usage.warnings.is_empty()),
+            matches!(docker_result.as_ref(), Some(Ok(usage)) if !usage.resources.is_empty() && usage.warnings.is_empty()),
+        ];
         let wslc_usage = match wslc_result {
             None => wslc::WslcUsage::default(),
             Some(result) => match result {
@@ -255,6 +275,14 @@ impl Monitor {
         }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
         let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, &self.config);
+        snapshot.environment_summary = crate::summary::EnvironmentSummary::collect(
+            &snapshot
+                .query_source
+                .as_ref()
+                .expect("collected snapshot retains query source")
+                .pid_resources,
+            summary_available,
+        );
         snapshot.host_memory = windows_after.as_ref().and_then(|sample| sample.host_memory);
         snapshot.host_cpu_percent = windows_after
             .and_then(|sample| sample.host_cpu)

@@ -71,7 +71,8 @@ authorization check. A future backend must acquire fresh native state and handle
 the check/act race (for example, by retaining an appropriate native process
 handle). No termination or container-control backend is added here.
 
-The module and query entry point are intentionally allowed to be unused by the
-production CLI until the Query API is wired in. Tests exercise identity lifetime,
+The MCP path uses these identities through the Query API. Lower-level process
+comparison and verified-namespace helpers remain reserved for future adapters.
+Tests exercise identity lifetime,
 PID reuse, namespace separation, aggregate rejection, ambiguous lookup, query
 limits, and unchanged compatibility JSON.

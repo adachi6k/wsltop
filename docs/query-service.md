@@ -6,7 +6,8 @@ Tracked in [#41](https://github.com/adachi6k/wsltop/issues/41), within roadmap
 The internal `QueryService` connects the existing `Monitor` collector to the
 [snapshot store](snapshot-store.md) and [four read-only operations](query-api.md).
 It owns both collector and cache and returns a query view of one observation.
-There is still no CLI/MCP transport or background sampler.
+The [stdio MCP adapter](mcp.md) exposes these operations in development builds.
+There is no background sampler.
 
 ## Request policy
 
@@ -59,7 +60,6 @@ inspects the retained data. It can be run with:
 cargo test --locked native_monitor_service_smoke -- --ignored
 ```
 
-The next step is an external read-only adapter with a wire schema and stdio MCP
-transport. It must serialize access or explicitly coordinate concurrent requests,
-carry snapshot metadata/errors, and document observation-scoped IDs. Automatic
-namespace continuity and any native action revalidation remain separate work.
+The [MCP adapter](mcp.md) serializes collection-bearing requests, carries snapshot
+metadata/errors, and documents observation-scoped IDs. Automatic namespace
+continuity and any native action revalidation remain separate work.
