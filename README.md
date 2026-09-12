@@ -23,7 +23,7 @@ Requires Windows 11 with a usable WSL2 distribution; the Linux binary runs
 inside WSL2. Docker and WSLC are optional.
 
 With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
-Rust users can fetch the x64 GitHub Releases binaries without a source build,
+you can fetch the x64 GitHub Releases binaries without a source build,
 which is faster than `cargo install`.
 
 ### Windows
@@ -36,7 +36,7 @@ Extract it and open PowerShell in the versioned directory:
 .\wsltop.exe --interactive
 ```
 
-Rust users can instead install with `cargo binstall wsltop`, then run
+You can instead install with `cargo binstall wsltop`, then run
 `wsltop --interactive`.
 
 ### WSL / Linux
@@ -95,22 +95,27 @@ Parent and child CPU values are attribution views, not values to add together.
 
 The flat view is a host-wide activity ranking. Windows and WSL processes appear alongside Docker and WSLC containers. A container is ranked once by its total CPU; optional process rows are an indented explanation of that total, not extra CPU to add to it.
 
-```text
-flat | CPU 1 core = 100% | sort cpu desc | interval 3000ms
+This example uses 16 host logical CPUs: summary CPU percentages are host-wide, while table rows use the core scale (Docker's `11.99%` becomes `0.7%` in the summary).
 
-ENV     TYPE               ID/PID    CPU%       MEM      TIME+ COMMAND
+```text
+CPU 12.0%      ▁▁▂▁▁▁▂▂▁▁▁▁▂▁▁▁▂▂▁▁▁▁▁ | Win   5.7%   WSL   0.3%   WSLC   0.4%   Docker   0.7%
+RAM 15.7/31.9G ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ | Win 16.79G   WSL  1.50G   WSLC   348M   Docker   520M
+─────────────────────────────────────────────────────────────────────────────────────────────────
+ENV     TYPE              ID/PID    CPU%       MEM      TIME+ COMMAND
 -------------------------------------------------------------------------------------------------
-Docker  container  68dae66282ff  11.99%      520M          -  act-CI-simulate...
-        process           34692  11.75%      157M   62:03.46    |- simx
-        residual              -   0.24%          -          -    `- unattributed
-WSLC    container  5e0c144e6a3c   5.94%      348M          -  mighty_flinders
-        process             806   5.71%       31M    4:12.08    |- cc1plus
-        process             470   0.19%        6M    0:03.20    |- ninja
-        residual              -   0.04%          -          -    `- unattributed
-Windows application     3 PIDs   4.82%     1.24G  103:27.51  Teams
-Windows application    12 PIDs   2.37%     1.68G  248:10.03  Chrome
+Docker  container   68dae66282ff  11.99%      520M          -  act-CI-simulate...
+        process            34692  11.75%      157M   62:03.46    |- simx
+        residual               -   0.24%         -          -    `- unattributed
+WSLC    container   5e0c144e6a3c   5.94%      348M          -  mighty_flinders
+        process              806   5.71%       31M    4:12.08    |- cc1plus
+        process              470   0.19%        6M    0:03.20    |- ninja
+        residual               -   0.04%         -          -    `- unattributed
+Windows application       3 PIDs   4.82%     1.24G  103:27.51  Teams
+Windows application      12 PIDs   2.37%     1.68G  248:10.03  Chrome
 Windows application        31460   1.20%      198M  178:27.95  Taskmgr
-WSL     infra                 5   0.05%        4M    0:14.82  plan9
+WSL     infra                  5   0.05%        4M    0:14.82  plan9
+
+[flat cpu↓ core 3.0s]  q quit  ? help  t tree  i infra:on  h hosts:off  0 zero:on
 ```
 
 In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. Windows rows are ranked by application, so multi-process applications such as Teams and Chrome appear once. By default, at most five processes are shown per container and additional processes are summarized.
