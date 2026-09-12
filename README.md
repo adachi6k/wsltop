@@ -95,6 +95,8 @@ Parent and child CPU values are attribution views, not values to add together.
 
 The flat view is a host-wide activity ranking. Windows and WSL processes appear alongside Docker and WSLC containers. A container is ranked once by its total CPU; optional process rows are an indented explanation of that total, not extra CPU to add to it.
 
+This example uses 16 host logical CPUs: summary CPU percentages are host-wide, while table rows use the core scale (Docker's `11.99%` becomes `0.7%` in the summary).
+
 ```text
 CPU 12.0%      ▁▁▂▁▁▁▂▂▁▁▁▁▂▁▁▁▂▂▁▁▁▁▁ | Win   5.7%   WSL   0.3%   WSLC   0.4%   Docker   0.7%
 RAM 15.7/31.9G ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ | Win 16.79G   WSL  1.50G   WSLC   348M   Docker   520M
@@ -102,16 +104,16 @@ RAM 15.7/31.9G ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄�
 ENV     TYPE              ID/PID    CPU%       MEM      TIME+ COMMAND
 -------------------------------------------------------------------------------------------------
 Docker  container   68dae66282ff  11.99%      520M          -  act-CI-simulate...
-        process           34692  11.75%      157M   62:03.46    |- simx
-        residual              -   0.24%         -          -    `- unattributed
+        process            34692  11.75%      157M   62:03.46    |- simx
+        residual               -   0.24%         -          -    `- unattributed
 WSLC    container   5e0c144e6a3c   5.94%      348M          -  mighty_flinders
-        process             806   5.71%       31M    4:12.08    |- cc1plus
-        process             470   0.19%        6M    0:03.20    |- ninja
-        residual              -   0.04%         -          -    `- unattributed
-Windows application      3 PIDs   4.82%     1.24G  103:27.51  Teams
-Windows application     12 PIDs   2.37%     1.68G  248:10.03  Chrome
-Windows application       31460   1.20%      198M  178:27.95  Taskmgr
-WSL     infra                 5   0.05%        4M    0:14.82  plan9
+        process              806   5.71%       31M    4:12.08    |- cc1plus
+        process              470   0.19%        6M    0:03.20    |- ninja
+        residual               -   0.04%         -          -    `- unattributed
+Windows application       3 PIDs   4.82%     1.24G  103:27.51  Teams
+Windows application      12 PIDs   2.37%     1.68G  248:10.03  Chrome
+Windows application        31460   1.20%      198M  178:27.95  Taskmgr
+WSL     infra                  5   0.05%        4M    0:14.82  plan9
 
 [flat cpu↓ core 3.0s]  q quit  ? help  t tree  i infra:on  h hosts:off  0 zero:on
 ```
