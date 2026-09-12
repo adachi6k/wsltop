@@ -1,0 +1,27 @@
+{
+    "version": "0.5.0",
+    "description": "Unified resource monitor for Windows, WSL2, Docker and WSL Containers",
+    "homepage": "https://github.com/adachi6k/wsltop",
+    "license": "MIT",
+    "notes": "Requires Windows 11 and a usable WSL2 distribution. Docker and WSL Containers are optional.",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/adachi6k/wsltop/releases/download/v0.5.0/wsltop-v0.5.0-x86_64-pc-windows-msvc.zip",
+            "hash": "ca5164d22c0b0da3e52f5519dc5f2e1d6777e0cc38f0cfb5dd42d1c36fa1af17"
+        }
+    },
+    "extract_dir": "wsltop-v0.5.0-x86_64-pc-windows-msvc",
+    "bin": "wsltop.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/adachi6k/wsltop/releases/download/v$version/wsltop-v$version-x86_64-pc-windows-msvc.zip",
+                "hash": {
+                    "url": "$url.sha256"
+                }
+            }
+        },
+        "extract_dir": "wsltop-v$version-x86_64-pc-windows-msvc"
+    }
+}
