@@ -18,8 +18,11 @@ and not a security boundary. It is not a compact display label or a secret.
 | Process/infra missing PID or start ID | One observation | Unverifiable; never fall back to PID alone |
 | Application, host, or container row | One observation | Unsupported by process comparison, even if a PID is present |
 
-CPU, memory, command name, and sorting do not change an identity. `None` and an
-explicit source remain distinct. Containers currently lack an incarnation field,
+CPU, memory, and sorting do not change an identity. Command name changes preserve
+identity only when the derived resource kind stays the same. Renaming to or from
+`plan9` in WSL or a recognized Windows host-process name changes that kind and
+therefore the ID, even with the same PID and start ID. `None` and an explicit
+source remain distinct. Containers currently lack an incarnation field,
 so the conservative contract does not preserve their IDs across observations.
 Docker/WSLC child processes currently lack start IDs and also use observation
 lifetimes. Synthetic `unattributed` rows are presentation values, not index entries.
