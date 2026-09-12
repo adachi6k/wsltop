@@ -84,6 +84,10 @@ impl<'a> QueryView<'a> {
         request: SnapshotRequest<'_>,
     ) -> Result<Self, QueryError> {
         let snapshot = store.get(request).map_err(QueryError::Snapshot)?;
+        Self::from_snapshot(snapshot)
+    }
+
+    pub(crate) fn from_snapshot(snapshot: &'a StoredSnapshot) -> Result<Self, QueryError> {
         let source = snapshot
             .snapshot()
             .query_source

@@ -1681,6 +1681,7 @@ name = "wsltop"
 version = "0.5.0"
 dependencies = [
  "crossterm",
+ "getrandom 0.4.3",
  "libc",
  "ratatui",
  "serde",

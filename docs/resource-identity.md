@@ -47,10 +47,11 @@ inferred from a displayed PID. The future snapshot service must:
   `UnknownResource`, not proof that the live resource has exited.
 
 The [snapshot store](snapshot-store.md) supplies observation IDs, explicit namespace
-rotation, and bounded retention. Unique service-session allocation and automatic
-namespace restart detection still belong to the future collector/service adapter.
-Until that adapter exists, these types remain an internal foundation and must not
-be exposed as persistent external handles.
+rotation, and bounded retention. The [Query service](query-service.md) allocates
+unique session epochs and uses observation-scoped identities until automatic
+namespace continuity is available. These types remain internal; external adapters
+must not promise persistent resource handles across observations without verified
+namespace continuity.
 
 ## Query boundary and validation
 

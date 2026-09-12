@@ -53,6 +53,23 @@ pub enum SnapshotError {
     SequenceExhausted,
 }
 
+pub enum IdentityLifetime {
+    Namespace,
+    /// Use when namespace continuity cannot be verified across collections.
+    Observation,
+}
+
+pub enum InsertError<E> {
+    Snapshot(SnapshotError),
+    Validation(E),
+}
+
+impl<E> From<SnapshotError> for InsertError<E> {
+    fn from(error: SnapshotError) -> Self {
+        Self::Snapshot(error)
+    }
+}
+
 pub enum SnapshotRequest<'a> {
     Latest {
         max_age: Duration,
@@ -155,14 +172,46 @@ impl SnapshotStore {
         timing: SampleTiming,
         now: Instant,
     ) -> Result<SnapshotId, SnapshotError> {
+        self.insert_checked_at(
+            snapshot,
+            timing,
+            || now,
+            IdentityLifetime::Namespace,
+            |_| Ok::<(), std::convert::Infallible>(()),
+        )
+        .map_err(|error| match error {
+            InsertError::Snapshot(error) => error,
+            InsertError::Validation(never) => match never {},
+        })
+    }
+
+    pub fn insert_checked<E>(
+        &mut self,
+        snapshot: MonitorSnapshot,
+        timing: SampleTiming,
+        lifetime: IdentityLifetime,
+        validate: impl FnOnce(&StoredSnapshot) -> Result<(), E>,
+    ) -> Result<SnapshotId, InsertError<E>> {
+        self.insert_checked_at(snapshot, timing, Instant::now, lifetime, validate)
+    }
+
+    fn insert_checked_at<E>(
+        &mut self,
+        snapshot: MonitorSnapshot,
+        timing: SampleTiming,
+        clock: impl Fn() -> Instant,
+        lifetime: IdentityLifetime,
+        validate: impl FnOnce(&StoredSnapshot) -> Result<(), E>,
+    ) -> Result<SnapshotId, InsertError<E>> {
+        let now = clock();
         if snapshot.query_source.is_none() {
-            return Err(SnapshotError::MissingQuerySource);
+            return Err(SnapshotError::MissingQuerySource.into());
         }
         if timing.captured > now || self.last_capture.is_some_and(|last| timing.captured < last) {
-            return Err(SnapshotError::InvalidTiming);
+            return Err(SnapshotError::InvalidTiming.into());
         }
         if now.duration_since(timing.captured) >= self.retention {
-            return Err(SnapshotError::TooOld);
+            return Err(SnapshotError::TooOld.into());
         }
         let sequence = self
             .sequence
@@ -173,26 +222,40 @@ impl SnapshotStore {
         let id = SnapshotId(
             serde_json::to_string(&(&self.service, sequence)).expect("scope and counter serialize"),
         );
+        let observation_scope = match lifetime {
+            IdentityLifetime::Namespace => None,
+            IdentityLifetime::Observation => Some(sequence),
+        };
         let scope = IdentityScope::new(
-            serde_json::to_string(&(&self.service, self.namespace))
+            serde_json::to_string(&(&self.service, self.namespace, observation_scope))
                 .expect("scope and counter serialize"),
         )
         .expect("encoded scope is nonempty");
         let observation = ObservationId::new(id.0.clone()).expect("encoded ID is nonempty");
-        self.entries
-            .retain(|entry| now.duration_since(entry.timing.captured) < self.retention);
-        while self.entries.len() >= self.capacity.get() {
-            self.entries.pop_front();
-        }
-        self.sequence = sequence;
-        self.last_capture = Some(timing.captured);
-        self.entries.push_back(StoredSnapshot {
+        let entry = StoredSnapshot {
             id: id.clone(),
             scope,
             observation,
             timing,
             snapshot,
-        });
+        };
+        // Reject malformed query catalogs before eviction/counter mutation.
+        validate(&entry).map_err(InsertError::Validation)?;
+        let committed = clock();
+        if committed < now {
+            return Err(SnapshotError::InvalidTiming.into());
+        }
+        if committed.duration_since(entry.timing.captured) >= self.retention {
+            return Err(SnapshotError::TooOld.into());
+        }
+        self.entries
+            .retain(|entry| committed.duration_since(entry.timing.captured) < self.retention);
+        while self.entries.len() >= self.capacity.get() {
+            self.entries.pop_front();
+        }
+        self.sequence = sequence;
+        self.last_capture = Some(entry.timing.captured);
+        self.entries.push_back(entry);
         Ok(id)
     }
 
@@ -226,7 +289,7 @@ impl SnapshotStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::attribution::AttributionTree;
     use crate::model::ResourceUsage;
@@ -241,7 +304,7 @@ mod tests {
         .unwrap()
     }
 
-    fn snapshot(cpu: f64) -> MonitorSnapshot {
+    pub(crate) fn snapshot(cpu: f64) -> MonitorSnapshot {
         let rows: Vec<ResourceUsage> = vec![crate::query::tests::row("worker", cpu, 1024)];
         let tree = AttributionTree {
             host_logical_cpu_count: 16,
@@ -578,5 +641,32 @@ mod tests {
             Err(SnapshotError::SequenceExhausted)
         );
         assert!(first.get_at(SnapshotRequest::Id(a.as_str()), now).is_ok());
+    }
+
+    #[test]
+    fn expiration_during_validation_does_not_commit_or_evict() {
+        let now = Instant::now();
+        let mut cache = store(1);
+        let old = cache.insert_at(snapshot(1.0), timing(now), now).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let clock = || {
+            let call = calls.get();
+            calls.set(call + 1);
+            now + Duration::from_secs(if call == 0 { 0 } else { 10 })
+        };
+        let result = cache.insert_checked_at(
+            snapshot(2.0),
+            timing(now),
+            clock,
+            IdentityLifetime::Observation,
+            |_| Ok::<(), ()>(()),
+        );
+        assert!(matches!(
+            result,
+            Err(InsertError::Snapshot(SnapshotError::TooOld))
+        ));
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.entries[0].id, old);
+        assert_eq!(cache.sequence, 1);
     }
 }
