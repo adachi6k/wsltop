@@ -57,8 +57,8 @@ store does not supervise collector tasks or detect host/distro/container restart
 ## Integration still required
 
 This module is intentionally unused by the production CLI until the Query service
-is connected. The [internal Query API](query-api.md) supplies list/inspect/children/
-summary operations on the retained source. The next service layer must supply
+is connected. The [internal Query API](query-api.md) supplies
+list/inspect/children/summary operations on the retained source. The next service layer must supply
 unique session epochs, actual collection timing, collector namespace-change
 detection, and refresh/coalescing policy. Only then can the external snapshot
 contract and MCP tools be exposed. Retaining an observation

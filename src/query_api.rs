@@ -96,10 +96,21 @@ impl<'a> QueryView<'a> {
         };
         view.add_projection(&source.resources)?;
         view.add_projection(&source.pid_resources)?;
+        // Parents are source lists too: do not merge repeated groups and their
+        // potentially different child sets merely because their rows agree.
+        view.add_projection(source.tree.groups.iter().map(|group| &group.host))?;
         for group in &source.tree.groups {
             view.add_children(&group.host, &group.children)?;
         }
         view.add_projection(&source.tree.unmapped_children)?;
+        view.add_projection(
+            source
+                .tree
+                .docker_groups
+                .iter()
+                .chain(&source.tree.wslc_groups)
+                .map(|group| &group.container),
+        )?;
         for group in source
             .tree
             .docker_groups
@@ -108,6 +119,13 @@ impl<'a> QueryView<'a> {
         {
             view.add_children(&group.container, &group.children)?;
         }
+        view.add_projection(
+            source
+                .tree
+                .windows_applications
+                .iter()
+                .map(|app| &app.resource),
+        )?;
         for app in &source.tree.windows_applications {
             view.add_children(&app.resource, &app.processes)?;
         }
@@ -135,7 +153,10 @@ impl<'a> QueryView<'a> {
         Ok(())
     }
 
-    fn add_projection(&mut self, rows: &'a [ResourceUsage]) -> Result<(), QueryError> {
+    fn add_projection(
+        &mut self,
+        rows: impl IntoIterator<Item = &'a ResourceUsage>,
+    ) -> Result<(), QueryError> {
         let mut seen = HashSet::new();
         for row in rows {
             let index = self.add(row)?;
@@ -664,5 +685,50 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn duplicate_parents_in_each_hierarchy_list_are_ambiguous() {
+        for list in 0..4 {
+            for different_children in [false, true] {
+                let mut sample = fixture();
+                let tree = &mut sample.query_source.as_mut().unwrap().tree;
+                match list {
+                    0 => {
+                        let mut duplicate = tree.groups[0].clone();
+                        if different_children {
+                            duplicate.children.clear();
+                        }
+                        tree.groups.push(duplicate);
+                    }
+                    1 | 2 => {
+                        let groups = if list == 1 {
+                            &mut tree.docker_groups
+                        } else {
+                            &mut tree.wslc_groups
+                        };
+                        let mut duplicate = groups[0].clone();
+                        if different_children {
+                            duplicate.children.clear();
+                        }
+                        groups.push(duplicate);
+                    }
+                    _ => {
+                        let mut duplicate = tree.windows_applications[0].clone();
+                        if different_children {
+                            duplicate.processes.clear();
+                        }
+                        tree.windows_applications.push(duplicate);
+                    }
+                }
+                let mut store = cache();
+                let sid = insert(&mut store, sample);
+                assert_eq!(
+                    QueryView::open(&store, SnapshotRequest::Id(sid.as_str())).err(),
+                    Some(QueryError::Identity(IdentityError::AmbiguousResource)),
+                    "list {list}, different children: {different_children}"
+                );
+            }
+        }
     }
 }
