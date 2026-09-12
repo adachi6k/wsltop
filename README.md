@@ -17,6 +17,48 @@ Live v0.5.0 session with workloads in another WSL distribution and running WSLC
 and Docker containers, including their process details. The two demo containers
 are each limited to 0.25 CPU cores. [Capture details](docs/assets/README.md).
 
+## Quick start
+
+Requires Windows 11 with a usable WSL2 distribution; the Linux binary runs
+inside WSL2. Docker and WSLC are optional.
+
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
+Rust users can fetch the x64 GitHub Releases binaries without a source build,
+which is faster than `cargo install`.
+
+### Windows
+
+Download the **Windows x86_64 MSVC ZIP** from the
+[latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest).
+Extract it and open PowerShell in the versioned directory:
+
+```powershell
+.\wsltop.exe --interactive
+```
+
+Rust users can instead install with `cargo binstall wsltop`, then run
+`wsltop --interactive`.
+
+### WSL / Linux
+
+Fast prebuilt install:
+
+```console
+cargo binstall wsltop
+wsltop --interactive
+```
+
+Or build from [crates.io](https://crates.io/crates/wsltop):
+
+```console
+cargo install --locked wsltop
+```
+
+Without Cargo, download the **Linux x86_64 tar.gz** from the
+[latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest),
+extract it and run `./wsltop --interactive` from the versioned directory.
+See [checksum verification](#verify-downloads) for downloaded archives.
+
 ## Why wsltop?
 
 Task Manager may show only a VM aggregate such as `VmmemWSL 35%`. That identifies the host process, but not the guest workload. `wsltop --tree` makes the hierarchy visible:
@@ -48,60 +90,6 @@ Parent and child CPU values are attribution views, not values to add together.
 - Flat and tree JSON output
 - Resource classification as `process`, `container`, `infra`, or internal `host`
 - Best-effort degradation when optional WSLC, Docker, or additional-distro collectors are unavailable
-
-## Quick start
-
-### Windows
-
-Download `wsltop-v0.5.0-x86_64-pc-windows-msvc.zip` and its `.sha256` file from
-[GitHub Releases](https://github.com/adachi6k/wsltop/releases). Verify the checksum
-as described under Installation, extract the ZIP, and open PowerShell in the
-extracted directory:
-
-```powershell
-.\wsltop.exe --version
-.\wsltop.exe --interactive
-```
-
-Windows 11 and a usable primary WSL2 distribution are required. Docker and WSLC
-are optional. Use `--distro NAME` to select a primary (Windows executable only).
-
-### WSL
-
-Install from [crates.io](https://crates.io/crates/wsltop) and start the TUI:
-
-```console
-cargo install --locked wsltop
-wsltop --interactive
-```
-
-With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
-use the prebuilt release instead of compiling locally. This works on Linux
-`x86_64-unknown-linux-gnu` and Windows `x86_64-pc-windows-msvc`:
-
-```console
-cargo binstall wsltop
-```
-
-To require the project's own prebuilt GitHub asset and disable source-build
-fallback, use `cargo binstall wsltop --strategies crate-meta-data`.
-
-Alternatively, download the prebuilt Linux x86_64 archive and checksum from the
-[latest release](https://github.com/adachi6k/wsltop/releases/latest), then:
-
-```console
-tar -xzf wsltop-v*-x86_64-unknown-linux-gnu.tar.gz
-cd wsltop-v*-x86_64-unknown-linux-gnu
-./wsltop --interactive
-```
-
-For a single sample:
-
-```console
-./wsltop --once
-```
-
-Run `./wsltop --help` for the complete option reference.
 
 ## What the TUI shows
 
@@ -149,72 +137,45 @@ The default text/TUI scale treats one fully occupied logical CPU as `100%`; use 
 
 ## Installation
 
-Requirements:
+Choose a prebuilt or Cargo install in [Quick start](#quick-start).
+WSL execution requires Windows interoperability and `powershell.exe` on PATH.
+Docker collection needs a reachable Docker daemon; WSLC collection needs
+`wslc.exe`.
 
-- Windows 11 with WSL2
-- PowerShell available as `powershell.exe` for Windows process collection
-- For WSL-native execution, Windows interoperability enabled
-- Optional: `wslc.exe` for WSL Containers data
-- Optional: Docker CLI plus a reachable Docker daemon for Docker data
+### Build from source
 
-### Windows-native CLI and TUI
-
-Building on Windows produces `wsltop.exe`. It collects the primary WSL
-distribution through `wsl.exe`, while Windows, WSLC, and Docker collectors run
-from Windows. The primary distribution is selected in this order: `--distro
-NAME`, the WSL default distribution, then the first running distribution.
-
-```powershell
-cargo build --release --locked
-.\target\release\wsltop.exe --once
-.\target\release\wsltop.exe --distro Ubuntu-24.04 --tree
-.\target\release\wsltop.exe --distro Ubuntu-24.04 --interactive
-```
-
-Run these source-build commands from a checkout in PowerShell with a Rust
-toolchain and the Visual Studio C++ build tools installed. At least one usable
-WSL2 distribution is required, including when only Windows rows are of interest.
-The selected primary may be started by `wsl.exe`; additional distributions are
-collected only while running. `--distro` is accepted only by the Windows executable.
-
-The release workflow packages Windows x86_64 builds as
-`wsltop-<tag>-x86_64-pc-windows-msvc.zip` with a `.zip.sha256` checksum. For a
-release containing that asset, download both files from
-[GitHub Releases](https://github.com/adachi6k/wsltop/releases), then run in PowerShell
-(replace `<tag>` with the downloaded version):
-
-```powershell
-$archive = 'wsltop-<tag>-x86_64-pc-windows-msvc.zip'
-$expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
-if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
-Expand-Archive $archive -DestinationPath .
-& ".\wsltop-<tag>-x86_64-pc-windows-msvc\wsltop.exe" --interactive
-```
-
-The ZIP includes `wsltop.exe`, README, and license; using it requires no Rust
-toolchain. Releases predating Windows packaging may have only Linux assets.
-The source checkout documents the current development version; use a release's
-bundled README for the features available in that binary.
-
-### WSL-native CLI and TUI
-
-Install with Cargo (requires a Rust toolchain):
-
-```console
-cargo install --locked wsltop
-```
-
-Prebuilt Linux x86_64 archives and SHA-256 checksums are available from
-[GitHub Releases](https://github.com/adachi6k/wsltop/releases/latest) and do not
-require a Rust toolchain.
-
-Build from source:
+A Rust toolchain is required; Windows builds also need the Visual Studio C++
+build tools. From PowerShell or a WSL shell:
 
 ```console
 git clone https://github.com/adachi6k/wsltop.git
 cd wsltop
 cargo build --release --locked
-install -Dm755 target/release/wsltop ~/.local/bin/wsltop
+```
+
+Run `.\target\release\wsltop.exe --interactive` on Windows or
+`./target/release/wsltop --interactive` in WSL.
+
+### Verify downloads
+
+Each archive in the
+[latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest)
+has a `.sha256` sidecar. Download both files into the same directory. Names
+follow `wsltop-v<version>-<target>`; replace `v0.5.0` below with your downloaded
+version.
+
+Windows PowerShell:
+
+```powershell
+$archive = 'wsltop-v0.5.0-x86_64-pc-windows-msvc.zip'
+$expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
+if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
+```
+
+WSL:
+
+```console
+sha256sum --check wsltop-v0.5.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 ## Usage
@@ -414,7 +375,14 @@ Application CPU is exactly the sum of observed member-process CPU; child PIDs ex
 
 When wsltop runs inside WSL, the current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These additional remote samples are best-effort and introduce more timing skew than direct `/proc` access.
 
-When `wsltop.exe` runs on Windows, the selected primary distribution and every additional distribution are sampled remotely through `wsl.exe`. Primary failure aborts a one-shot sample; the TUI reports sampling errors and retries while retaining last-good data. Failure to select a primary prevents streaming startup. Additional distributions remain best-effort. `--distro NAME` selects the required primary explicitly. JSON omits `source` for the primary and includes the distro name for additional sources.
+When `wsltop.exe` runs on Windows, primary selection uses `--distro NAME`, then
+the WSL default, then the first running distribution. The selected primary may
+be started by `wsl.exe`; additional distributions are collected only while
+running. All are sampled remotely through `wsl.exe`. Primary failure aborts a
+one-shot sample; the TUI reports sampling errors and retries while retaining
+last-good data. Failure to select a primary prevents streaming startup.
+Additional distributions remain best-effort. JSON omits `source` for the primary
+and includes the distro name for additional sources.
 
 `--wsl-only` limits WSL distribution collection to the primary distribution and disables Windows and WSLC collection. Optional Docker collection remains enabled unless `--no-docker` is also passed. In WSL-native execution it uses the WSL-visible logical CPU count and warns that exact Windows-host normalization is unavailable. In Windows-native execution it uses the Windows logical CPU count but still disables Windows host-process attribution.
 
