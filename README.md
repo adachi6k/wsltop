@@ -75,6 +75,17 @@ cargo install --locked wsltop
 wsltop --interactive
 ```
 
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
+use the prebuilt release instead of compiling locally. This works on Linux
+`x86_64-unknown-linux-gnu` and Windows `x86_64-pc-windows-msvc`:
+
+```console
+cargo binstall wsltop
+```
+
+To require the project's own prebuilt GitHub asset and disable source-build
+fallback, use `cargo binstall wsltop --strategies crate-meta-data`.
+
 Alternatively, download the prebuilt Linux x86_64 archive and checksum from the
 [latest release](https://github.com/adachi6k/wsltop/releases/latest), then:
 
