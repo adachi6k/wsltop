@@ -55,8 +55,9 @@ must not be summed into a host total.
 
 ## Remaining integration
 
-The CLI does not yet call this module. A service adapter must own collection and
-refresh/coalescing, allocate unique session epochs, detect namespace changes, and
-coordinate in-flight samples before exposing external IDs. A later stdio MCP
-adapter can map the four operations and typed errors to its protocol. The existing
+The CLI does not yet call this module. The [Query service](query-service.md) owns
+synchronous collection/refresh, allocates session epochs, and coordinates explicit
+collector replacement. Until automatic namespace continuity is available, it uses
+observation-scoped resource IDs. A later stdio MCP adapter can map the four
+operations and typed errors to its protocol. The existing
 CLI/JSON/TUI behavior is unchanged. The API contains no process/container actions.

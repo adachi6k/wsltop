@@ -19,6 +19,9 @@ mod query;
 // Read-only API over retained snapshots; transport/refresh integration follows.
 #[allow(dead_code)]
 mod query_api;
+// Collection/cache orchestration; transport integration follows.
+#[allow(dead_code)]
+mod query_service;
 mod render;
 mod sampler;
 // Snapshot lifecycle foundation; the external Query API is a later slice of #24.
