@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-13
+
+### Added
+
+- Optional `wsltop mcp` read-only stdio server with system summary, resource listing, inspection and immediate-child tools, backed by the official Rust MCP SDK.
+- Retained snapshots with opaque IDs, capture metadata, freshness/expiration rules and observation-scoped resource IDs. Pinned queries remain available during a refresh; failed collection preserves retained observations.
+- MCP setup documentation and Linux/Windows protocol tests, including validation against extracted release executables.
+- Target-specific cargo-binstall metadata for existing Linux and Windows GitHub release archives.
+
+### Changed
+
+- Installation guidance prioritizes prebuilt binaries and cargo-binstall. README examples and the live demo reflect the compact TUI introduced in v0.5.0.
+
+### Fixed
+
+- Container process-detail failures do not invalidate valid Docker/WSLC aggregate CPU and memory observations in MCP summaries.
+- Resource lookup rejects ambiguous hierarchy parents and unknown Windows process generations; resource IDs are scoped to the original retained observation.
+
+Existing CLI/TUI controls and one-shot JSON remain compatible. MCP adds no process
+termination, container control, shell tools or network listener.
+
 ## [0.5.0] - 2026-09-12
 
 ### Added
@@ -126,7 +147,8 @@ All notable changes to this project will be documented in this file. The format 
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/adachi6k/wsltop/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/adachi6k/wsltop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/adachi6k/wsltop/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/adachi6k/wsltop/compare/v0.2.0...v0.3.0

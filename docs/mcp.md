@@ -3,14 +3,14 @@
 Tracked in [#43](https://github.com/adachi6k/wsltop/issues/43), within roadmap
 [#24](https://github.com/adachi6k/wsltop/issues/24).
 
-**Development builds only:** this feature is not included in the published v0.5.0
-binaries or crate. Build the current source using the README's build instructions.
+Requires wsltop v0.5.1 or later. Use a prebuilt binary or Cargo installation from
+the [README](../README.md#quick-start); v0.5.0 does not include MCP.
 
 Run `wsltop mcp` from your MCP client. The server uses local stdin/stdout, exposes
 four read-only tools, and has no shell/terminate/kill/container-control tools or
 network listener. Normal CLI/TUI and `--json` output remain separate.
 
-For a client running in WSL, point its server configuration at your built binary:
+For a client running in WSL, point its server configuration at your installed binary:
 
 ```json
 {
