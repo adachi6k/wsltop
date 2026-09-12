@@ -24,6 +24,10 @@ so the conservative contract does not preserve their IDs across observations.
 Docker/WSLC child processes currently lack start IDs and also use observation
 lifetimes. Synthetic `unattributed` rows are presentation values, not index entries.
 
+Windows `start_id == 0` is the collector's unavailable-start-time sentinel and is
+treated like a missing generation both when creating IDs and comparing processes.
+Linux/WSL start ticks of zero remain valid generation values.
+
 ## Caller responsibilities
 
 `IdentityScope` and `ObservationId` are nonempty caller-supplied epochs, not values

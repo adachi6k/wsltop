@@ -71,13 +71,20 @@ pub enum IdentityError {
     StaleResource,
 }
 
+fn known_start_id(row: &ResourceUsage) -> Option<u64> {
+    // Windows uses zero when StartTime cannot be read. Linux start ticks can
+    // legitimately be zero, so do not apply this sentinel to other environments.
+    row.start_id
+        .filter(|&id| row.environment != EnvironmentKind::Windows || id != 0)
+}
+
 impl ResourceIdentity {
     pub fn observed(
         scope: &IdentityScope,
         observation: &ObservationId,
         row: &ResourceUsage,
     ) -> Self {
-        let incarnation = match (row.kind, row.pid, row.start_id) {
+        let incarnation = match (row.kind, row.pid, known_start_id(row)) {
             (ResourceKind::Process | ResourceKind::Infra, Some(pid), Some(start_id)) => {
                 Incarnation::Process { pid, start_id }
             }
@@ -129,7 +136,7 @@ impl ResourceIdentity {
         {
             return Err(IdentityError::StaleResource);
         }
-        match row.start_id {
+        match known_start_id(row) {
             Some(current) if current == start_id => Ok(()),
             Some(_) => Err(IdentityError::StaleResource),
             None => Err(IdentityError::UnverifiableProcess),
@@ -284,6 +291,47 @@ mod tests {
             identity(&row).matches_process_observation(&scope("session/namespace-2"), &row),
             Err(IdentityError::StaleResource)
         );
+    }
+
+    #[test]
+    fn windows_zero_generation_is_unverifiable_while_wsl_zero_is_valid() {
+        let scope = scope("session/namespace-1");
+        for kind in [ResourceKind::Process, ResourceKind::Infra] {
+            let mut row = process();
+            row.kind = kind;
+            row.environment = EnvironmentKind::Windows;
+            row.source = None;
+            let known = identity(&row);
+            row.start_id = Some(0);
+            let unknown = identity(&row);
+            let later = ResourceIdentity::observed(&scope, &observation("sample-2"), &row);
+            assert_ne!(unknown.resource_id(), later.resource_id());
+            assert_eq!(
+                unknown.matches_process_observation(&scope, &row),
+                Err(IdentityError::UnverifiableProcess)
+            );
+            assert_eq!(
+                known.matches_process_observation(&scope, &row),
+                Err(IdentityError::UnverifiableProcess)
+            );
+            row.start_id = Some(124);
+            assert_eq!(
+                unknown.matches_process_observation(&scope, &row),
+                Err(IdentityError::UnverifiableProcess)
+            );
+            assert_eq!(
+                known.matches_process_observation(&scope, &row),
+                Err(IdentityError::StaleResource)
+            );
+
+            row.environment = EnvironmentKind::Wsl;
+            row.source = Some("Ubuntu".into());
+            row.start_id = Some(0);
+            let zero = identity(&row);
+            let later = ResourceIdentity::observed(&scope, &observation("sample-2"), &row);
+            assert_eq!(zero.resource_id(), later.resource_id());
+            assert_eq!(zero.matches_process_observation(&scope, &row), Ok(()));
+        }
     }
 
     #[test]
