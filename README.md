@@ -9,7 +9,7 @@
 The default TUI has a compact two-line host CPU/RAM summary, history graphs and
 colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity.
 Use `--header classic` for the traditional one-line header and `--color never`
-for monochrome output. See [v0.5.0 release notes](docs/release-v0.5.0.md).
+for monochrome output. See [v0.5.1 release notes](docs/release-v0.5.1.md).
 
 ![wsltop v0.5.0 showing CPU and RAM history, Windows and WSL workloads, and running WSLC and Docker containers](docs/assets/wsltop-demo.gif)
 
@@ -166,13 +166,13 @@ Run `.\target\release\wsltop.exe --interactive` on Windows or
 Each archive in the
 [latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest)
 has a `.sha256` sidecar. Download both files into the same directory. Names
-follow `wsltop-v<version>-<target>`; replace `v0.5.0` below with your downloaded
+follow `wsltop-v<version>-<target>`; replace `v0.5.1` below with your downloaded
 version.
 
 Windows PowerShell:
 
 ```powershell
-$archive = 'wsltop-v0.5.0-x86_64-pc-windows-msvc.zip'
+$archive = 'wsltop-v0.5.1-x86_64-pc-windows-msvc.zip'
 $expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
 ```
@@ -180,7 +180,7 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Check
 WSL:
 
 ```console
-sha256sum --check wsltop-v0.5.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check wsltop-v0.5.1-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 ## Usage
@@ -403,11 +403,11 @@ wsltop --once --json
 
 JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 
-## MCP (development builds)
+## MCP
 
-Current source builds support `wsltop mcp`, a read-only stdio server for system
-summary, resource listing, inspection, and child traversal. This is not yet in the
-published v0.5.0 release. See [MCP setup and snapshot semantics](docs/mcp.md).
+Starting with v0.5.1, `wsltop mcp` provides a read-only stdio server for system
+summary, resource listing, inspection, and child traversal.
+See [MCP setup and snapshot semantics](docs/mcp.md).
 
 ## Limitations
 
