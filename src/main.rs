@@ -18,6 +18,9 @@ mod multiwsl;
 mod query;
 mod render;
 mod sampler;
+// Snapshot lifecycle foundation; the external Query API is a later slice of #24.
+#[allow(dead_code)]
+mod snapshot_store;
 mod stream;
 mod summary;
 mod tui;
