@@ -4,19 +4,30 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
-### Changed
-
-- Summary separator length follows summary/table heading width instead of filling wide terminals, independently of long command rows and scrolling.
-
-- Summary totals now align both value starts and history columns; wide terminals add space between fixed-width environment blocks. Footer CPU scale is grouped with view, sort and interval instead of trailing the key hints.
-
-- TUI layout now uses a two-line summary, a neutral separator above the resource table, and a single status/key footer with bracketed view/sort/interval indicators. Removing the `obs` label gives CPU/RAM history three more columns: 23 slots on wide terminals and 15 on medium terminals. Narrow terminals prioritize totals and essential controls. Environment labels retain their colors, with WSL overlap explained in help.
+## [0.5.0] - 2026-09-12
 
 ### Added
 
-- Compact host CPU/RAM history graphs with a shared fixed clock, a 0–100% scale, held values between results, explicit failure markers, and fixed aligned columns. Windows refresh periods include query time.
-- Compact two-line TUI CPU/RAM summary with host physical memory and colorized Windows/WSL/WSLC/Docker observations, independent of display filters. Overlapping observations are explicitly labeled; `?` explains metrics, `--header classic` restores the one-line header, and `--color` controls TUI colors.
-- TUI header displays Windows host-wide CPU usage from system counters, independent of visible resource rows and CPU display scaling; unavailable readings display `N/A`.
+- Default compact two-line host CPU/RAM summary, including host-wide CPU counter metrics and physical RAM in use/total, independent of row filters and CPU display scale.
+- Aligned CPU/RAM history graphs with a fixed 0–100% scale, held values between results and explicit failure markers.
+- Colorized Windows/WSL/WSLC/Docker observations and environment labels; help explains overlapping CPU observations and different memory definitions.
+- `--header classic` for the traditional one-line header and `--color auto|always|never`, including NO_COLOR and TERM=dumb support.
+
+### Changed
+
+- TUI summary, resource table and single-line footer are organized into distinct areas. Footer groups view, sort, CPU scale and refresh interval alongside key hints.
+- Responsive summaries use 23 history columns on wide terminals and 15 on medium terminals; below 80 columns, totals and essential controls take priority. Values and environment columns stay aligned.
+- Summary and table separators share a restrained Dim style; separator width follows content rather than filling wide terminals. Wide summaries add spacing between environments.
+- Help and tree presentation retain top-like simplicity, consistent environment colors and existing container child grouping.
+- Windows refresh periods include query time without overlapping collection calls.
+
+### Fixed
+
+- Windows TUI restores the caller's exact console input/output modes on exit, including flags changed by event handling.
+- CPU and RAM from one Windows collection share a history timestamp, preventing slot drift when event processing crosses an interval boundary.
+- Help scroll bounds use actual word wrapping so the last lines remain reachable on narrow terminals.
+- Classic mode restores its original header fields; long tree commands do not stretch the summary separator, and standalone Docker headings receive their environment color.
+- Windows command timeout handling uses Job Objects and bounded output cleanup, closes a completion/timeout race, and covers Windows command-line quoting. Success-path tests tolerate slow CI process startup.
 
 ## [0.4.0] - 2026-09-06
 
@@ -115,7 +126,8 @@ All notable changes to this project will be documented in this file. The format 
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/adachi6k/wsltop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/adachi6k/wsltop/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/adachi6k/wsltop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/adachi6k/wsltop/compare/v0.1.0...v0.2.0

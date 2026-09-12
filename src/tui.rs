@@ -495,14 +495,62 @@ fn on_off(value: bool) -> &'static str {
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    #[cfg(windows)]
+    _console_modes: console_modes::Saved,
 }
 impl TerminalGuard {
     fn new() -> Result<Self, Box<dyn Error>> {
+        // Crossterm disables raw mode by setting default bits; its event reader
+        // also changes console input flags. Preserve the caller's exact modes.
+        #[cfg(windows)]
+        let console_modes = console_modes::Saved::capture()?;
         enable_raw_mode()?;
         execute!(stdout(), EnterAlternateScreen)?;
         Ok(Self {
             terminal: Terminal::new(CrosstermBackend::new(stdout()))?,
+            #[cfg(windows)]
+            _console_modes: console_modes,
         })
+    }
+}
+
+#[cfg(windows)]
+mod console_modes {
+    use std::{ffi::c_void, io};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(kind: u32) -> *mut c_void;
+        fn GetConsoleMode(handle: *mut c_void, mode: *mut u32) -> i32;
+        fn SetConsoleMode(handle: *mut c_void, mode: u32) -> i32;
+    }
+
+    pub(super) struct Saved([(*mut c_void, u32); 2]);
+
+    impl Saved {
+        pub(super) fn capture() -> io::Result<Self> {
+            let mut modes = [(std::ptr::null_mut(), 0); 2];
+            for (entry, kind) in modes.iter_mut().zip([-10_i32, -11_i32]) {
+                // Standard handles are borrowed and remain owned by the process.
+                let handle = unsafe { GetStdHandle(kind as u32) };
+                let mut mode = 0;
+                if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                *entry = (handle, mode);
+            }
+            Ok(Self(modes))
+        }
+    }
+
+    impl Drop for Saved {
+        fn drop(&mut self) {
+            // Dropped after TerminalGuard's screen/cursor cleanup, or if startup
+            // fails. No console handle is closed here.
+            for &(handle, mode) in &self.0 {
+                let _ = unsafe { SetConsoleMode(handle, mode) };
+            }
+        }
     }
 }
 impl Drop for TerminalGuard {
@@ -763,6 +811,34 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn release_display_options_do_not_change_flat_or_tree_json() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = layout_state();
+        let json = |state: &State| {
+            let snapshot = state.snapshot.as_ref().unwrap();
+            (
+                serde_json::to_value(&snapshot.pid_resources).unwrap(),
+                serde_json::to_value(&snapshot.tree).unwrap(),
+            )
+        };
+        let expected = json(&state);
+        for mode in [HeaderMode::Classic, HeaderMode::Compact] {
+            for colors in [false, true] {
+                state.colors = colors;
+                for width in [75, 90, 120, 200] {
+                    let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            draw_ui(frame, &mut state, mode, false, Duration::from_secs(3))
+                        })
+                        .unwrap();
+                    assert_eq!(json(&state), expected);
+                }
+            }
+        }
+    }
+
     #[test]
     fn help_scroll_reaches_last_wrapped_row_and_reclamps_after_resize() {
         use ratatui::{
