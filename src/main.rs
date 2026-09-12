@@ -4,6 +4,10 @@ mod command;
 mod docker;
 mod header;
 mod history;
+// Read-only identity foundation for the forthcoming Query API (#24).
+// It is intentionally not exposed through the compatibility CLI/JSON yet.
+#[allow(dead_code)]
+mod identity;
 #[cfg(unix)]
 mod linux;
 #[cfg_attr(windows, allow(dead_code))]
