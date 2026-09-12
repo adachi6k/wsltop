@@ -138,7 +138,7 @@ mod host_cpu_tests {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResourceUsage {
     pub environment: EnvironmentKind,
     #[serde(skip_serializing_if = "Option::is_none")]

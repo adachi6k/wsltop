@@ -222,8 +222,8 @@ pub struct QuerySource {
 }
 
 impl QuerySource {
-    /// Read-only identity lookup over the untruncated flat-view source. Tree
-    /// traversal and snapshot lifecycle belong to the later Query API (#24).
+    /// Read-only identity lookup over the untruncated flat-view source. The
+    /// Query API builds its combined flat/PID/tree catalog separately (#24).
     #[allow(dead_code)]
     pub fn resource_index(
         &self,

@@ -56,8 +56,9 @@ be exposed as persistent external handles.
 
 `QuerySource::resource_index` builds a borrowed, read-only index of its untruncated
 flat-view resources. A display limit cannot discard lookup candidates. An index
-does not merge flat, PID, and tree views: tree traversal and application-member
-inspection belong to the later Query API. IDs resolve only by exact lookup;
+does not merge flat, PID, and tree views: the [internal Query API](query-api.md)
+provides that combined catalog, tree traversal, and application-member inspection.
+IDs resolve only by exact lookup;
 arbitrary caller strings are never decoded into trusted target coordinates.
 Duplicate identities return `AmbiguousResource` instead of choosing a row.
 

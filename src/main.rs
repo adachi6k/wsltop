@@ -16,6 +16,9 @@ mod model;
 mod monitor;
 mod multiwsl;
 mod query;
+// Read-only API over retained snapshots; transport/refresh integration follows.
+#[allow(dead_code)]
+mod query_api;
 mod render;
 mod sampler;
 // Snapshot lifecycle foundation; the external Query API is a later slice of #24.
