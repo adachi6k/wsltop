@@ -11,7 +11,11 @@ colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity
 Use `--header classic` for the traditional one-line header and `--color never`
 for monochrome output. See [v0.5.0 release notes](docs/release-v0.5.0.md).
 
-![wsltop terminal UI showing flat and tree views](docs/assets/wsltop-demo.gif)
+![wsltop v0.5.0 showing CPU and RAM history, Windows and WSL workloads, and running WSLC and Docker containers](docs/assets/wsltop-demo.gif)
+
+Live v0.5.0 session with workloads in another WSL distribution and running WSLC
+and Docker containers, including their process details. The two demo containers
+are each limited to 0.25 CPU cores. [Capture details](docs/assets/README.md).
 
 ## Why wsltop?
 
