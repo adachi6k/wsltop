@@ -46,9 +46,11 @@ inferred from a displayed PID. The future snapshot service must:
 - Expire unavailable snapshots explicitly. A missing ID in an index means
   `UnknownResource`, not proof that the live resource has exited.
 
-Automatic epoch allocation/restart detection and snapshot retention are **not
-implemented in this slice**. Until that service exists, these types are an
-internal foundation; they must not be exposed as persistent external handles.
+The [snapshot store](snapshot-store.md) supplies observation IDs, explicit namespace
+rotation, and bounded retention. Unique service-session allocation and automatic
+namespace restart detection still belong to the future collector/service adapter.
+Until that adapter exists, these types remain an internal foundation and must not
+be exposed as persistent external handles.
 
 ## Query boundary and validation
 
