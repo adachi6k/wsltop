@@ -1,7 +1,8 @@
 //! Immutable retained observations for the forthcoming read-only Query API.
 //! Reads never collect, refresh, or silently substitute another snapshot.
 
-use crate::identity::{IdentityScope, ObservationId, ResourceIndex};
+use crate::identity::{IdentityScope, ObservationId, ResourceIdentity, ResourceIndex};
+use crate::model::ResourceUsage;
 use crate::monitor::MonitorSnapshot;
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -69,6 +70,10 @@ pub struct StoredSnapshot {
 }
 
 impl StoredSnapshot {
+    pub fn resource_identity(&self, row: &ResourceUsage) -> ResourceIdentity {
+        ResourceIdentity::observed(&self.scope, &self.observation, row)
+    }
+
     pub fn id(&self) -> &SnapshotId {
         &self.id
     }
