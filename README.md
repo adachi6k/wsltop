@@ -403,6 +403,12 @@ wsltop --once --json
 
 JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 
+## MCP (development builds)
+
+Current source builds support `wsltop mcp`, a read-only stdio server for system
+summary, resource listing, inspection, and child traversal. This is not yet in the
+published v0.5.0 release. See [MCP setup and snapshot semantics](docs/mcp.md).
+
 ## Limitations
 
 - WSL1 is unsupported and untested; use WSL2.

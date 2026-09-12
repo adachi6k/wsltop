@@ -24,6 +24,8 @@ pkg-fmt = "zip"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.4"
+rmcp = { version = "3.3", default-features = false, features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 # Use the same word wrapping for help scroll bounds and rendering.
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 crossterm = "0.29.0"
