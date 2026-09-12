@@ -60,6 +60,12 @@ inspects the retained data. It can be run with:
 cargo test --locked native_monitor_service_smoke -- --ignored
 ```
 
+The shared service separates collector and retained-store locks. Pinned reads
+build their response under the store lock without acquiring the collector lock;
+native collection holds no store lock. Validation and insertion happen after
+collection, under the store lock. The shared service has a fixed collector;
+reconfiguration requires a new service/session.
+
 The [MCP adapter](mcp.md) serializes collection-bearing requests, carries snapshot
 metadata/errors, and documents observation-scoped IDs. Automatic namespace
 continuity and any native action revalidation remain separate work.

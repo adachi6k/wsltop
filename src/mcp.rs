@@ -5,7 +5,7 @@ use crate::model::{EnvironmentKind, ResourceKind};
 use crate::monitor::{Monitor, MonitorConfig};
 use crate::query::{Sort, SortKey, SortOrder};
 use crate::query_api::{ListOptions, QueryError, ResourceView, SnapshotMetadata};
-use crate::query_service::{QueryService, ServiceError, SnapshotCollector};
+use crate::query_service::{QueryService, ServiceError, SharedQueryService, SnapshotCollector};
 use crate::snapshot_store::{SnapshotError, SnapshotRequest};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::error::Error;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 const TOOLS: [&str; 4] = [
@@ -96,15 +96,15 @@ fn collector_options(args: &[String]) -> Result<(MonitorConfig, Option<String>),
 }
 
 struct McpServer<C> {
-    service: Arc<Mutex<QueryService<C>>>,
+    service: Arc<SharedQueryService<C>>,
     gate: Arc<tokio::sync::Semaphore>,
     cpu_scope: &'static str,
 }
 
-impl<C> McpServer<C> {
+impl<C: SnapshotCollector> McpServer<C> {
     fn new(service: QueryService<C>, cpu_scope: &'static str) -> Self {
         Self {
-            service: Arc::new(Mutex::new(service)),
+            service: Arc::new(service.into_shared()),
             gate: Arc::new(tokio::sync::Semaphore::new(1)),
             cpu_scope,
         }
@@ -148,21 +148,23 @@ impl<C: SnapshotCollector + Send + 'static> ServerHandler for McpServer<C> {
         let name = request.name.into_owned();
         let service = self.service.clone();
         let cpu_scope = self.cpu_scope;
-        let permit = self
-            .gate
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| ErrorData::internal_error("service closed", None))?;
+        let permit = if args.snapshot_id.is_none() {
+            Some(
+                self.gate
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| ErrorData::internal_error("service closed", None))?,
+            )
+        } else {
+            None
+        };
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit; // Held even if the request is cancelled mid-collection.
-            let mut service = service
-                .lock()
-                .map_err(|_| ErrorData::internal_error("service lock poisoned", None))?;
-            Ok::<_, ErrorData>(execute(&mut service, &name, args, cpu_scope))
+            execute(&service, &name, args, cpu_scope)
         })
         .await
-        .map_err(|_| ErrorData::internal_error("collection worker failed", None))??;
+        .map_err(|_| ErrorData::internal_error("collection worker failed", None))?;
         Ok(result.into())
     }
 }
@@ -364,7 +366,7 @@ fn resource(view: ResourceView<'_>) -> Value {
 }
 
 fn execute<C: SnapshotCollector>(
-    service: &mut QueryService<C>,
+    service: &SharedQueryService<C>,
     name: &str,
     args: Arguments,
     cpu_scope: &str,
@@ -376,10 +378,7 @@ fn execute<C: SnapshotCollector>(
         .unwrap_or(SnapshotRequest::Latest {
             max_age: Duration::from_millis(args.max_age_ms.unwrap_or(DEFAULT_MAX_AGE_MS)),
         });
-    let view = match service.query(request) {
-        Ok(view) => view,
-        Err(error) => return tool_error(error),
-    };
+    service.query(request, |view| {
     let options = args
         .options()
         .expect("arguments validated before collection");
@@ -422,6 +421,7 @@ fn execute<C: SnapshotCollector>(
     let mut meta = meta;
     meta["cpu_scope"] = json!(cpu_scope);
     CallToolResult::structured(json!({"snapshot":meta,"data":data}))
+    }).unwrap_or_else(tool_error)
 }
 
 fn tool_error(error: ServiceError) -> CallToolResult {
@@ -441,7 +441,7 @@ fn tool_error(error: ServiceError) -> CallToolResult {
         },
         ServiceError::Query(QueryError::InvalidHierarchy) => "invalid_hierarchy",
         ServiceError::Collection(_) => "collection_failed",
-        ServiceError::Entropy(_) => "service_error",
+        ServiceError::Entropy(_) | ServiceError::LockPoisoned => "service_error",
     };
     CallToolResult::structured_error(json!({"error":{"code":code,"message":format!("{error:?}")}}))
 }

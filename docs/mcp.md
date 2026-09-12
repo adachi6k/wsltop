@@ -105,6 +105,9 @@ stable `code`, such as `snapshot_unavailable`, `unknown_resource`,
 are diagnostic text, not a parsing contract. Collection/catalog failures preserve
 last-good snapshots but do not return them as a successful fresh result.
 
+Pinned snapshot reads bypass collection coordination and remain available while
+a refresh runs; retention still applies at read time. Container process-detail
+warnings do not invalidate successfully collected aggregate CPU/memory totals.
 Collection-bearing requests are serialized. Concurrent latest requests can reuse
 the first completed sample; forced-refresh requests each collect. Blocking native
 collection runs off the async runtime. Cancellation does not forcibly terminate

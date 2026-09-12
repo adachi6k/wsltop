@@ -204,13 +204,13 @@ impl Monitor {
                 && windows_after.is_some()
                 && collector_cpu_count == host_cpu_count,
             linux_complete && collector_cpu_count == host_cpu_count,
-            matches!(wslc_result.as_ref(), Some(Ok(usage)) if !usage.resources.is_empty() && usage.warnings.is_empty()),
-            matches!(docker_result.as_ref(), Some(Ok(usage)) if !usage.resources.is_empty() && usage.warnings.is_empty()),
+            matches!(wslc_result.as_ref(), Some(Ok((_, true)))),
+            matches!(docker_result.as_ref(), Some(Ok((_, true)))),
         ];
         let wslc_usage = match wslc_result {
             None => wslc::WslcUsage::default(),
             Some(result) => match result {
-                Ok(result) => {
+                Ok((result, _)) => {
                     warnings.extend(result.warnings.iter().cloned());
                     result
                 }
@@ -223,7 +223,7 @@ impl Monitor {
         let docker_usage = match docker_result {
             None => Vec::new(),
             Some(result) => match result {
-                Ok(result) => {
+                Ok((result, _)) => {
                     warnings.extend(result.warnings);
                     result.resources
                 }
