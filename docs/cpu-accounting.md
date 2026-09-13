@@ -36,6 +36,35 @@ Negative deltas are treated as process replacement/PID reuse and do not become n
 
 With `--wsl-only`, Windows process collection is skipped. WSL-native execution uses the WSL-visible logical CPU count as a fallback and warns that exact Windows-host normalization cannot be guaranteed. Windows-native execution obtains the Windows logical CPU count from the Windows process itself, but warns that Windows host-process attribution is disabled.
 
+## WSL category CPU
+
+The WSL header/MCP CPU observation uses the primary distribution's `/proc/stat`
+and `/proc/uptime`, collected once per sample. It covers the shared kernel across
+distributions, including short-lived/exited tasks and kernel work that a pair of
+process lists cannot account for. Additional distributions are not added again.
+This scope also applies with `--wsl-only`, although that option limits process
+enumeration to the primary distribution.
+
+```text
+busy_ticks = user + nice + system + irq + softirq
+WSL_CPU% = delta_busy_ticks / CLK_TCK / delta_uptime
+           / host_logical_cpu_count * 100
+```
+
+Idle, I/O wait and stolen time are excluded. Guest counters are not added because
+user/nice already include them ([Linux /proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html)).
+Boot identity, CPU topology, clock tick rate and individual counter deltas must
+remain consistent; invalid/missing samples display unavailable, with no fallback
+to a partial process sum. WSL RAM still sums observed process RSS. Process rows,
+attribution and one-shot JSON keep their existing accounting.
+
+This is a guest-kernel observation, not a partition of Windows host CPU. Different
+sampling windows and host/guest accounting can prevent exact agreement. Docker
+or WSLC workloads in the same kernel overlap; workloads in a separate kernel
+are outside this observation. Container category CPU still comes from container
+statistics, not child-process sums. A container that disappears between samples
+can itself be absent from those statistics.
+
 ## WSLC containers
 
 `wslc.exe stats --format json --no-trunc` reports `CPUPerc` using its own container convention. `wsltop` divides that percentage by the Windows logical CPU count to place it on the common host-wide scale.

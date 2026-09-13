@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Fixed
 
+- WSL category CPU uses a single shared-kernel observation instead of summing matched process rows, avoiding undercount during short-lived build-process churn. Process rows and one-shot JSON are unchanged.
 - Container process-detail failures do not invalidate valid Docker/WSLC aggregate CPU and memory observations in MCP summaries.
 - Resource lookup rejects ambiguous hierarchy parents and unknown Windows process generations; resource IDs are scoped to the original retained observation.
 

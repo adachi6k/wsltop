@@ -20,6 +20,14 @@ pub struct Usage {
 pub struct EnvironmentSummary(pub [Option<Usage>; 4]);
 
 impl EnvironmentSummary {
+    /// CPU covers the shared WSL kernel; RAM keeps the observed process RSS sum.
+    /// Never substitute a partial process sum when the system counter is absent.
+    pub fn set_wsl_cpu(&mut self, cpu: Option<f64>) {
+        self.0[1] = self.0[1].and_then(|mut usage| {
+            usage.cpu_percent = cpu?;
+            Some(usage)
+        });
+    }
     pub fn collect(rows: &[ResourceUsage], available: [bool; 4]) -> Self {
         Self(std::array::from_fn(|index| {
             available[index].then(|| {
@@ -50,6 +58,29 @@ impl EnvironmentSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_cpu_overrides_only_wsl_cpu_preserving_memory_and_container_totals() {
+        let mut summary = EnvironmentSummary(
+            [Some(Usage {
+                cpu_percent: 10.0,
+                memory_bytes: 4096,
+            }); 4],
+        );
+        summary.set_wsl_cpu(Some(85.0));
+        assert_eq!(
+            summary.0[1].unwrap(),
+            Usage {
+                cpu_percent: 85.0,
+                memory_bytes: 4096
+            }
+        );
+        for index in [0, 2, 3] {
+            assert_eq!(summary.0[index].unwrap().cpu_percent, 10.0);
+        }
+        summary.set_wsl_cpu(None);
+        assert!(summary.0[1].is_none());
+    }
 
     #[test]
     fn excludes_vm_hosts_applications_and_container_children_but_keeps_inclusive_wsl() {

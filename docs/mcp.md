@@ -98,6 +98,12 @@ unavailable. WSL-only native Linux sampling labels CPU scope `wsl_visible`; norm
 and Windows-native sampling use `windows_host`. Host, environment, and parent/child
 usage can overlap and must not be added together.
 
+WSL category CPU is the shared kernel total, sampled once through the primary
+distribution from `/proc/stat`, including short-lived tasks and kernel work.
+It can include other distributions even with `--wsl-only` and overlap container
+statistics. WSL RAM remains observed process RSS; process rows keep their existing
+sampling semantics. See [CPU accounting](cpu-accounting.md#wsl-category-cpu).
+
 Unknown tools and invalid arguments produce JSON-RPC invalid-params errors before
 collection. Operational failures use `isError: true` and an error object with a
 stable `code`, such as `snapshot_unavailable`, `unknown_resource`,

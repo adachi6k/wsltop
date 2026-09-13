@@ -5,6 +5,8 @@ with v0.5.0, and adds an optional read-only interface for MCP clients.
 
 ## Highlights
 
+- WSL category CPU now includes short-lived processes and kernel work through a
+  single shared-kernel sample. Per-process display and RAM accounting are retained.
 - `wsltop mcp` serves four tools over local stdio: `get_system_summary`,
   `list_resources`, `inspect_resource`, and `list_children`.
 - Every successful response includes snapshot metadata. Preserve `snapshot_id`

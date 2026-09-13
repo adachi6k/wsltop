@@ -42,7 +42,8 @@ fn list_distros(args: &[&str]) -> Result<Vec<String>, Box<dyn Error>> {
 
 pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn Error>> {
     let script = "clock_ticks=$(getconf CLK_TCK) || exit; page_size=$(getconf PAGESIZE) || exit; printf '%s %s\\n' \"$clock_ticks\" \"$page_size\" || exit; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\" 2>/dev/null || :; done";
-    let output = run_wsl_script(Some(distro), script)?;
+    let script = format!("{script}; printf '\\nWSLTOP_SYSTEM\\n'; grep '^cpu' /proc/stat; printf 'UPTIME '; cat /proc/uptime; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id");
+    let output = run_wsl_script(Some(distro), &script)?;
     if !output.status.success() {
         return Err(format!(
             "remote /proc collection for {distro} failed with {}: {}",
@@ -76,6 +77,7 @@ fn run_wsl_script(distro: Option<&str>, script: &str) -> Result<Output, Box<dyn 
 }
 
 fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn Error>> {
+    let (text, system) = text.split_once("\nWSLTOP_SYSTEM\n").unwrap_or((text, ""));
     let mut lines = text.lines();
     let header: Vec<_> = lines
         .next()
@@ -125,6 +127,10 @@ fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn 
         });
     }
     Ok(Snapshot {
+        system_cpu: system.split_once("UPTIME ").and_then(|(stat, rest)| {
+            let (uptime, boot) = rest.split_once("BOOT ")?;
+            crate::linux_cpu::Sample::parse(stat, uptime, boot, ticks)
+        }),
         captured_at: Instant::now(),
         processes,
     })
@@ -150,6 +156,26 @@ fn decode_wsl_text(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_system_counters_are_optional_and_separate_from_process_rows() {
+        let old = super::parse_snapshot(
+            None,
+            "100 4096\n\nWSLTOP_SYSTEM\ncpu 100 0 0 0 0 0 0\ncpu0 0\nUPTIME 10 0\nBOOT boot-a\n",
+        )
+        .unwrap();
+        let new = super::parse_snapshot(
+            None,
+            "100 4096\n\nWSLTOP_SYSTEM\ncpu 200 0 0 0 0 0 0\ncpu0 0\nUPTIME 11 0\nBOOT boot-a\n",
+        )
+        .unwrap();
+        assert!(new.processes.is_empty());
+        assert_eq!(crate::linux_cpu::usage(&old, &new, 2), Some(50.0));
+        let missing = super::parse_snapshot(None, "100 4096\n").unwrap();
+        assert!(missing.system_cpu.is_none());
+        let malformed =
+            super::parse_snapshot(None, "100 4096\n\nWSLTOP_SYSTEM\nUPTIME x\nBOOT b\n").unwrap();
+        assert!(malformed.system_cpu.is_none());
+    }
     use super::{decode_wsl_text, parse_snapshot, parse_snapshot_bytes};
     #[test]
     fn parses_remote_process_and_source() {

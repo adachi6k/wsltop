@@ -306,8 +306,10 @@ RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2
 These example values are **independent observations, not an additive breakdown**:
 
 - `Win` sums observed Windows processes, excluding WSL/WSLC VM host rows.
-- `WSL` sums observed processes in the primary and collected additional WSL distributions. It can include
-  Docker workloads also reported under `Docker`.
+- `WSL` CPU uses the shared WSL kernel's `/proc/stat` counters, sampled once through
+  the primary distribution. It includes short-lived processes and kernel work,
+  including other distributions even with `--wsl-only`. Container workloads in
+  that same kernel may also appear under `Docker` or `WSLC`.
 - `WSLC` and `Docker` sum container statistics, excluding child process detail rows.
 - Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
   statistics respectively. Shared pages and overlapping observations mean these

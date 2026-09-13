@@ -281,8 +281,9 @@ All columns shift left together; waiting slots hold the previous value.\n\
 Blank: before first sample. '!': failed/unavailable until recovery.\n\
 TERM=dumb uses ASCII levels. No host history in WSL-only.\n\
 Win: observed Windows processes, excluding WSL/WSLC VM hosts.\n\
-WSL: processes in the primary and collected additional distributions.\n\
-WSL observations may include workloads also shown under Docker.\n\
+WSL CPU: shared kernel total, including short-lived processes and kernel work.\n\
+Sampled once; includes other distros even with --wsl-only.\n\
+WSL CPU can overlap Docker/WSLC workloads in the same kernel.\n\
 WSLC / Docker: container totals, excluding their process detail rows.\n\
 RAM observations: Win working sets; WSL RSS; container CLI memory.\n\
 Shared pages and overlapping environments prevent adding these values.\n\

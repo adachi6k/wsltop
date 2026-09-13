@@ -149,6 +149,7 @@ pub fn snapshot() -> Result<WindowsSnapshot, Box<dyn Error>> {
 
     Ok(WindowsSnapshot {
         snapshot: Snapshot {
+            system_cpu: None,
             captured_at: Instant::now(),
             processes,
         },
