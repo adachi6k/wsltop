@@ -85,25 +85,60 @@ accepted in server mode. Once the server starts, stdout is exclusively MCP
 JSON-RPC; startup/diagnostic output belongs on stderr. Do not use a launch wrapper
 that prints banners to stdout. Closing stdin shuts it down.
 
-## Agent workflow
+<a id="agent-workflow"></a>
 
-User: “Why is my machine busy?”
+## Agent workflow example
+
+User:
+
+> My build is running slowly.
+> Use wsltop MCP to identify the likely bottleneck and explain which environment,
+> container, and process are responsible.
 
 Suggested tool flow (shown as tool calls, not shell commands):
 
-1. `get_system_summary()` — inspect host CPU/RAM and the environment observations;
+1. `get_system_summary(max_age_ms=0)` — collect fresh host CPU/RAM and environment observations;
    save the returned `snapshot.snapshot_id` as `S`.
 2. `list_resources(snapshot_id=S, sort_by="cpu", sort_order="desc", limit=5)` —
    find busy resources; save a returned `resource_id` as `R`.
 3. `inspect_resource(snapshot_id=S, resource_id=R)` — inspect that resource.
 4. `list_children(snapshot_id=S, resource_id=R)` — drill into its immediate
    application/container/attribution children, if any.
+5. If needed, `list_resources(snapshot_id=S, resource_kind="container", sort_by="cpu", sort_order="desc", limit=5)`
+   — check observed containers. Add `environment="docker"` or `environment="wslc"`
+   for a specific backend. To find the busiest Docker or WSLC container, compare
+   both filtered listings using `S`; inspect the winner's children with its
+   returned resource ID and the same `S`.
 
 Use `sort_by="memory"` for memory diagnosis; filter by `environment` or
 `resource_kind` when narrowing the investigation. Keep the returned `snapshot_id`
 throughout a drill-down: `resource_id` is observation-scoped and must travel with
 its snapshot ID. If that snapshot expires, start again and obtain new IDs.
 Host, environment and parent/child usage overlap; **do not add them together**.
+
+`S` and `R` above are placeholders for returned opaque IDs, not literal arguments
+or IDs derived from a PID or name. Do not send `max_age_ms` alongside `snapshot_id`.
+An empty child list is valid: it means no immediate children were observed.
+An empty container list is also valid and is not a tool error. Say that no
+containers were observed in this snapshot; a `null` environment total does not
+prove a backend is idle or absent. Check snapshot warnings and available coverage.
+
+In the actual Codex session summarized in the [README](../README.md#agent-example-a-slow-build),
+WSL had the largest environment CPU observation. Ubuntu's `gw_sh` used about
+one core, no children or containers were observed, and total host CPU was about
+25% across 16 logical CPUs with memory still available. If that process was the
+build, limited parallelism was a likely explanation. The observations did not
+establish its exact build command or disk I/O waits. This example illustrates
+reasoning from one sample, not a server-side build heuristic or guaranteed diagnosis.
+
+MCP CPU percentages use the collected host-wide scale; use `cores_used` to explain
+per-resource core consumption and check `cpu_scope` for WSL-only observations.
+Container totals already include their children, and WSL can include Docker work.
+Independent sampling can also make child and container numbers differ slightly.
+Avoid inferring a missing component's usage by subtracting overlapping totals.
+
+Use the [manual agent evaluation guide](mcp-agent-evaluation.md) to recheck tool
+selection and snapshot handling after changing descriptions or APIs.
 
 ## Tools and snapshots
 
