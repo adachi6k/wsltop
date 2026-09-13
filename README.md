@@ -11,7 +11,7 @@ AI agents can inspect the same workloads through the [read-only MCP server](#use
 The default TUI has a compact two-line host CPU/RAM summary, history graphs and
 colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity.
 Use `--header classic` for the traditional one-line header and `--color never`
-for monochrome output. See [v0.5.1 release notes](docs/release-v0.5.1.md).
+for monochrome output. See [release notes](https://github.com/adachi6k/wsltop/releases/latest).
 
 ![wsltop v0.5.0 showing CPU and RAM history, Windows and WSL workloads, and running WSLC and Docker containers](docs/assets/wsltop-demo.gif)
 
@@ -464,6 +464,7 @@ Once connected, ask your agent:
 
 ## Documentation
 
+- [Documentation index](docs/README.md)
 - [Architecture](docs/architecture.md)
 - [CPU accounting](docs/cpu-accounting.md)
 - [Validation and test plan](docs/test-plan.md)

@@ -1,8 +1,5 @@
 # Query service orchestration
 
-Tracked in [#41](https://github.com/adachi6k/wsltop/issues/41), within roadmap
-[#24](https://github.com/adachi6k/wsltop/issues/24).
-
 The internal `QueryService` connects the existing `Monitor` collector to the
 [snapshot store](snapshot-store.md) and [four read-only operations](query-api.md).
 It owns both collector and cache and returns a query view of one observation.
@@ -48,7 +45,7 @@ collection or an outstanding borrowed query view. The collector contract require
 its worker tasks to have finished before it returns. Existing `Monitor::sample`
 joins its workers. Background refresh and async request coalescing are not added.
 
-## Verification and next step
+## Verification and MCP integration
 
 Tests count collection calls to verify reuse/refresh/pinned-read behavior, preserve
 last-good state after collection/catalog failure, check observation/session ID

@@ -1,9 +1,7 @@
-# Resource identity foundation
+# Resource identity contract
 
-First implementation slice of [#24](https://github.com/adachi6k/wsltop/issues/24),
-tracked in [#35](https://github.com/adachi6k/wsltop/issues/35).
-This is an internal contract for the forthcoming read-only Query API, not a new
-CLI/JSON/MCP interface. Existing `ResourceUsage` serialization is unchanged.
+This internal identity contract supports the [read-only Query API](query-api.md)
+and [MCP adapter](mcp.md). Existing `ResourceUsage` serialization is unchanged.
 
 ## Identity and lifetime
 
@@ -34,7 +32,7 @@ Linux/WSL start ticks of zero remain valid generation values.
 ## Caller responsibilities
 
 `IdentityScope` and `ObservationId` are nonempty caller-supplied epochs, not values
-inferred from a displayed PID. The future snapshot service must:
+inferred from a displayed PID. The service owning the snapshot store must:
 
 - Allocate a unique scope for its service/host/collector configuration and rotate
   it when a relevant host, distro, or container PID namespace restarts. In
