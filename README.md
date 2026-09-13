@@ -425,7 +425,7 @@ execution tools, process kill/termination, container stop/control, or network li
 The four tools are `get_system_summary`, `list_resources`, `inspect_resource`,
 and `list_children`.
 
-For a client running in WSL/Linux, add this stdio server configuration (replace
+For a client running inside WSL2, add this stdio server configuration (replace
 `<user>` with your username). Run `command -v wsltop` to check the absolute path:
 
 ```json
