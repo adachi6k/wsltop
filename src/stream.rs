@@ -404,7 +404,7 @@ impl Aggregate {
                     && self.docker.warnings.is_empty(),
             ],
         );
-        summary.set_wsl_cpu(self.wsl_cpu_percent);
+        summary.set_wsl_cpu(normalized.then_some(self.wsl_cpu_percent).flatten());
         let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, config);
         snapshot.host_cpu_percent = self.host_cpu_percent;
         snapshot.host_memory = self.host_memory;
@@ -1467,6 +1467,50 @@ mod tests {
         assert_eq!(
             aggregate.snapshot(&options).environment_summary.0[1],
             Some(crate::summary::Usage::default())
+        );
+    }
+
+    #[test]
+    fn wsl_kernel_cpu_waits_for_authoritative_normalization() {
+        let mut options = config();
+        for changed in [false, true] {
+            let mut aggregate = Aggregate::new(&options);
+            let provisional = aggregate.host_cpu_count;
+            let mut primary = Normalized::new(provisional, Ok(vec![]));
+            primary.system_cpu = Some(85.0);
+            aggregate.apply(Event::Linux(primary));
+            assert!(aggregate.snapshot(&options).environment_summary.0[1].is_none());
+            let authoritative = if changed {
+                provisional + 1
+            } else {
+                provisional
+            };
+            aggregate.apply(Event::HostCpuCount(authoritative));
+            let usage = aggregate.snapshot(&options).environment_summary.0[1];
+            assert_eq!(
+                usage.and_then(|usage| usage.cpu_percent),
+                (!changed).then_some(85.0)
+            );
+            let mut fresh = Normalized::new(authoritative, Ok(vec![]));
+            fresh.system_cpu = Some(70.0);
+            aggregate.apply(Event::Linux(fresh));
+            assert_eq!(
+                aggregate.snapshot(&options).environment_summary.0[1]
+                    .unwrap()
+                    .cpu_percent,
+                Some(70.0)
+            );
+        }
+        options.wsl_only = true;
+        let mut aggregate = Aggregate::new(&options);
+        let mut primary = Normalized::new(aggregate.host_cpu_count, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        assert_eq!(
+            aggregate.snapshot(&options).environment_summary.0[1]
+                .unwrap()
+                .cpu_percent,
+            Some(85.0)
         );
     }
 
