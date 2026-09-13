@@ -32,7 +32,7 @@ Linux/WSL start ticks of zero remain valid generation values.
 ## Caller responsibilities
 
 `IdentityScope` and `ObservationId` are nonempty caller-supplied epochs, not values
-inferred from a displayed PID. The future snapshot service must:
+inferred from a displayed PID. The service owning the snapshot store must:
 
 - Allocate a unique scope for its service/host/collector configuration and rotate
   it when a relevant host, distro, or container PID namespace restarts. In
