@@ -41,8 +41,7 @@ fn list_distros(args: &[&str]) -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn Error>> {
-    let script = "clock_ticks=$(getconf CLK_TCK) || exit; page_size=$(getconf PAGESIZE) || exit; printf '%s %s\\n' \"$clock_ticks\" \"$page_size\" || exit; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\" 2>/dev/null || :; done";
-    let script = format!("{script}; printf '\\nWSLTOP_SYSTEM\\n'; grep '^cpu' /proc/stat; printf 'UPTIME '; cat /proc/uptime; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id");
+    let script = snapshot_script(source.is_none());
     let output = run_wsl_script(Some(distro), &script)?;
     if !output.status.success() {
         return Err(format!(
@@ -53,6 +52,15 @@ pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn 
         .into());
     }
     parse_snapshot_bytes(source, &output.stdout)
+}
+
+fn snapshot_script(primary: bool) -> String {
+    let script = "clock_ticks=$(getconf CLK_TCK) || exit; page_size=$(getconf PAGESIZE) || exit; printf '%s %s\\n' \"$clock_ticks\" \"$page_size\" || exit; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\" 2>/dev/null || :; done";
+    if primary {
+        format!("{script}; printf '\\nWSLTOP_SYSTEM\\n'; grep '^cpu' /proc/stat 2>/dev/null || :; printf 'UPTIME '; cat /proc/uptime 2>/dev/null || :; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id 2>/dev/null || :")
+    } else {
+        script.into()
+    }
 }
 
 fn run_wsl_script(distro: Option<&str>, script: &str) -> Result<Output, Box<dyn Error>> {
@@ -156,6 +164,36 @@ fn decode_wsl_text(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_counters_are_requested_only_for_primary_distribution() {
+        assert!(super::snapshot_script(true).contains("WSLTOP_SYSTEM"));
+        assert!(!super::snapshot_script(false).contains("WSLTOP_SYSTEM"));
+        assert!(!super::snapshot_script(false).contains("/proc/uptime"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_optional_system_files_preserve_process_collection() {
+        for path in [
+            "/proc/stat",
+            "/proc/uptime",
+            "/proc/sys/kernel/random/boot_id",
+        ] {
+            let script =
+                super::snapshot_script(true).replace(path, "/wsltop-nonexistent-system-counter");
+            let output = std::process::Command::new("sh")
+                .args(["-c", &script])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "optional {path} must not fail collection"
+            );
+            let snapshot = super::parse_snapshot_bytes(None, &output.stdout).unwrap();
+            assert!(!snapshot.processes.is_empty());
+            assert!(snapshot.system_cpu.is_none());
+        }
+    }
     #[test]
     fn remote_system_counters_are_optional_and_separate_from_process_rows() {
         let old = super::parse_snapshot(

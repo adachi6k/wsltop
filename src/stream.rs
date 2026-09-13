@@ -332,7 +332,11 @@ impl Aggregate {
             );
         }
         if config.wsl_only {
-            warnings.push("--wsl-only uses the WSL-visible logical CPU count".to_string());
+            warnings.push(if cfg!(windows) {
+                "--wsl-only uses the Windows host logical CPU count; host-process collection is disabled"
+            } else {
+                "--wsl-only uses the WSL-visible logical CPU count"
+            }.to_string());
         }
 
         let mut linux = self.linux.clone();
@@ -490,8 +494,25 @@ pub fn run(
             return;
         }
     };
-    let host_cpu_count = Arc::new(AtomicU32::new(fallback_cpu_count()));
+    #[cfg(windows)]
+    let initial_count =
+        match select_initial_cpu_count(initial.wsl_only, fallback_cpu_count(), || {
+            windows::host_logical_cpu_count().map_err(|error| error.to_string())
+        }) {
+            Ok(count) => count,
+            Err(error) => {
+                let _ = output.send(Err(format!("Windows host CPU count unavailable: {error}")));
+                return;
+            }
+        };
+    #[cfg(not(windows))]
+    let initial_count = fallback_cpu_count();
+    let host_cpu_count = Arc::new(AtomicU32::new(initial_count));
     let (sender, receiver) = mpsc::channel();
+    #[cfg(windows)]
+    if initial.wsl_only {
+        let _ = sender.send(Event::HostCpuCount(initial_count));
+    }
     let _ = sender.send(Event::CollectorWarnings(collector_plan.warnings));
     spawn_primary_processes(
         collector_plan.primary,
@@ -562,9 +583,10 @@ fn spawn_primary_processes(
     interval: Duration,
 ) {
     thread::spawn(move || {
-        let mut primary_before: Option<crate::model::Snapshot> = None;
+        let mut primary_before: Option<(crate::model::Snapshot, Option<u32>)> = None;
         let mut delay = Duration::ZERO;
         while wait(&stop, delay) {
+            let capture_count = cpus.load(Ordering::Relaxed);
             match collector.snapshot() {
                 Ok(after) => {
                     let had_baseline = primary_before.is_some();
@@ -572,15 +594,17 @@ fn spawn_primary_processes(
                         0 => fallback_cpu_count(),
                         count => count,
                     };
-                    if let Some(old) = &primary_before {
+                    let stable_count = (capture_count == count).then_some(count);
+                    if let Some((old, old_count)) = &primary_before {
                         let rows = sampler::calculate_usage(old, &after, count);
                         let mut update = Normalized::new(count, Ok(rows));
-                        update.system_cpu = crate::linux_cpu::usage(old, &after, count);
+                        update.system_cpu =
+                            stable_kernel_usage(old, &after, *old_count, stable_count);
                         if sender.send(Event::Linux(update)).is_err() {
                             break;
                         }
                     }
-                    primary_before = Some(after);
+                    primary_before = Some((after, stable_count));
                     delay = if had_baseline {
                         interval
                     } else {
@@ -919,8 +943,72 @@ fn fallback_cpu_count() -> u32 {
     thread::available_parallelism().map_or(1, |count| count.get() as u32)
 }
 
+#[cfg(any(windows, test))]
+fn select_initial_cpu_count(
+    wsl_only: bool,
+    visible: u32,
+    host: impl FnOnce() -> Result<u32, String>,
+) -> Result<u32, String> {
+    let count = if wsl_only { host()? } else { visible };
+    if count == 0 {
+        Err("zero logical CPU count".into())
+    } else {
+        Ok(count)
+    }
+}
+
+fn stable_kernel_usage(
+    before: &crate::model::Snapshot,
+    after: &crate::model::Snapshot,
+    before_count: Option<u32>,
+    after_count: Option<u32>,
+) -> Option<f64> {
+    let count = after_count?;
+    (before_count == Some(count))
+        .then(|| crate::linux_cpu::usage(before, after, count))
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_wsl_only_requires_host_count_without_affinity_fallback() {
+        assert_eq!(
+            super::select_initial_cpu_count(true, 2, || Ok(16)).unwrap(),
+            16
+        );
+        assert!(super::select_initial_cpu_count(true, 2, || Err("unavailable".into())).is_err());
+        assert!(super::select_initial_cpu_count(true, 2, || Ok(0)).is_err());
+        assert_eq!(
+            super::select_initial_cpu_count(false, 2, || panic!(
+                "normal mode discovers asynchronously"
+            ))
+            .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn system_cpu_requires_stable_host_count_across_both_captures() {
+        let mut before = empty_snapshot();
+        let mut after = empty_snapshot();
+        before.system_cpu =
+            crate::linux_cpu::Sample::parse("cpu 100 0 0 0 0 0 0\ncpu0 0", "10", "boot", 100.0);
+        after.system_cpu =
+            crate::linux_cpu::Sample::parse("cpu 200 0 0 0 0 0 0\ncpu0 0", "11", "boot", 100.0);
+        assert_eq!(
+            super::stable_kernel_usage(&before, &after, Some(16), Some(16)),
+            Some(6.25)
+        );
+        for (old, new) in [
+            (Some(8), Some(16)),
+            (None, Some(16)),
+            (Some(16), None),
+            (Some(0), Some(0)),
+        ] {
+            assert!(super::stable_kernel_usage(&before, &after, old, new).is_none());
+        }
+    }
     use super::{
         additional_process_cadence, calculate_additional_update, fallback_cpu_count,
         reuse_docker_processes, reuse_wslc_processes, wait, Aggregate, Event, ExtraWslUpdate,

@@ -288,7 +288,7 @@ WSLC / Docker: container totals, excluding their process detail rows.\n\
 RAM observations: Win working sets; WSL RSS; container CLI memory.\n\
 Shared pages and overlapping environments prevent adding these values.\n\
 N/A: disabled, warming up, unavailable or incomplete collection.\n\
-With --wsl-only, observed CPU uses WSL-visible CPUs = 100%.\n\
+--wsl-only: WSL-native uses visible CPUs; Windows-native uses host CPUs.\n\
 Filters, limits, sorting and row CPU scale do not change the summary.\n\n\
 ? close help | t tree/flat | c/m/n sort CPU/memory/name | r reverse\n\
 i infrastructure | h VM hosts | 0 zero rows | arrows/Pg scroll\n\

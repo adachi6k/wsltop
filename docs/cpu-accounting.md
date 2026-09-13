@@ -36,6 +36,11 @@ Negative deltas are treated as process replacement/PID reuse and do not become n
 
 With `--wsl-only`, Windows process collection is skipped. WSL-native execution uses the WSL-visible logical CPU count as a fallback and warns that exact Windows-host normalization cannot be guaranteed. Windows-native execution obtains the Windows logical CPU count from the Windows process itself, but warns that Windows host-process attribution is disabled.
 
+Windows-native streaming also queries the host count with process collection
+disabled. If that query fails, sampling reports an error rather than treating an
+affinity-limited visible count as authoritative. WSL system deltas require the
+same host count across both captures; a transition establishes a new baseline.
+
 ## WSL category CPU
 
 The WSL header/MCP CPU observation uses the primary distribution's `/proc/stat`
@@ -64,6 +69,14 @@ or WSLC workloads in the same kernel overlap; workloads in a separate kernel
 are outside this observation. Container category CPU still comes from container
 statistics, not child-process sums. A container that disappears between samples
 can itself be absent from those statistics.
+
+Even after avoiding container double counting, Windows process CPU plus Linux
+kernel CPU is not an additive physical-CPU breakdown. Host-core normalization
+does not convert guest CPU accounting into hypervisor-measured execution time.
+Microsoft recommends Hyper-V logical/virtual processor counters for that purpose
+([Hyper-V configuration guidance](https://learn.microsoft.com/en-us/windows-server/administration/performance-tuning/role/hyper-v-server/configuration)).
+See the [high-load investigation](validation/2026-09-13-cpu-overlap.md) for measured
+examples. wsltop does not scale category values to force their sum to the host total.
 
 ## WSLC containers
 
@@ -94,7 +107,11 @@ unattributed = max(container_CPU% - sum(process_CPU%), 0)
 over_attributed = max(sum(process_CPU%) - container_CPU%, 0)
 ```
 
-Docker is not charged to the current WSL host unless the Docker daemon is proven to share its host PID namespace. Docker Desktop normally uses a separate Linux VM, so its attribution group remains top-level when no valid host/VM mapping is known.
+Docker Desktop's WSL 2 backend shares the WSL kernel, so container CPU overlaps
+the WSL category total. Its Hyper-V backend uses a separate kernel. Kernel sharing
+does not establish shared PID namespaces or a verified host/VM attribution parent;
+Docker remains a top-level group when that mapping is unknown.
+See [Docker's backend documentation](https://docs.docker.com/desktop/features/wsl/).
 
 ## Host attribution
 
