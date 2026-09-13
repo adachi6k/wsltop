@@ -1,4 +1,4 @@
-# v0.5.1 — Read-only MCP and distribution polish
+# v0.5.1 — Read-only MCP and WSL CPU accounting
 
 wsltop v0.5.1 keeps the existing CLI/TUI experience and one-shot JSON compatible
 with v0.5.0, and adds an optional read-only interface for MCP clients.
@@ -7,6 +7,8 @@ with v0.5.0, and adds an optional read-only interface for MCP clients.
 
 - WSL category CPU now includes short-lived processes and kernel work through a
   single shared-kernel sample. Per-process display and RAM accounting are retained.
+  CPU and RAM availability are independent; missing data for one does not hide the
+  other. Category observations can overlap and are not an additive host breakdown.
 - `wsltop mcp` serves four tools over local stdio: `get_system_summary`,
   `list_resources`, `inspect_resource`, and `list_children`.
 - Every successful response includes snapshot metadata. Preserve `snapshot_id`

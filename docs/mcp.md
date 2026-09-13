@@ -10,20 +10,24 @@ Run `wsltop mcp` from your MCP client. The server uses local stdin/stdout, expos
 four read-only tools, and has no shell/terminate/kill/container-control tools or
 network listener. Normal CLI/TUI and `--json` output remain separate.
 
-For a client running in WSL, point its server configuration at your installed binary:
+For a client running in WSL, point its server configuration at your installed binary.
+For a default Cargo installation, replace `<user>` with your Linux username:
 
 ```json
 {
   "mcpServers": {
     "wsltop": {
-      "command": "/absolute/path/to/wsltop/target/release/wsltop",
+      "command": "/home/<user>/.cargo/bin/wsltop",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-For a Windows client, use the absolute path to the built `wsltop.exe` as `command`
+Use the absolute executable path returned by `command -v wsltop` if you installed
+elsewhere. For a source build, use the checkout's `target/release/wsltop` instead.
+
+For a Windows client, use the absolute path to the installed or extracted `wsltop.exe` as `command`
 with the same `args`. MCP client configuration formats vary; the example uses the
 common `mcpServers` form. The executable requires the same WSL/interoperability
 setup as regular wsltop. On Windows, normal primary-distro selection still applies

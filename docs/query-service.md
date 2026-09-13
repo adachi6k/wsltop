@@ -6,7 +6,7 @@ Tracked in [#41](https://github.com/adachi6k/wsltop/issues/41), within roadmap
 The internal `QueryService` connects the existing `Monitor` collector to the
 [snapshot store](snapshot-store.md) and [four read-only operations](query-api.md).
 It owns both collector and cache and returns a query view of one observation.
-The [stdio MCP adapter](mcp.md) exposes these operations in development builds.
+The [stdio MCP adapter](mcp.md) exposes these operations in v0.5.1 and later.
 There is no background sampler.
 
 ## Request policy

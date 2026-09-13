@@ -62,7 +62,7 @@ list/inspect/children/summary operations on the retained source. The
 [Query service](query-service.md) supplies session epochs, collection timing,
 synchronous refresh, and explicit collector replacement. It uses observation-scoped
 identities until automatic namespace continuity is available. The MCP adapter
-exposes the snapshot contract and four read-only tools in development builds.
+exposes the snapshot contract and four read-only tools in v0.5.1 and later.
 Retaining an observation
 does not make it suitable for destructive actions: live native revalidation is
 still required.
