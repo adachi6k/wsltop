@@ -60,7 +60,9 @@ Idle, I/O wait and stolen time are excluded. Guest counters are not added becaus
 user/nice already include them ([Linux /proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html)).
 Boot identity, CPU topology, clock tick rate and individual counter deltas must
 remain consistent; invalid/missing samples display unavailable, with no fallback
-to a partial process sum. WSL RAM still sums observed process RSS. Process rows,
+to a partial process sum. WSL RAM still sums observed process RSS. CPU and RAM
+availability are independent: either valid metric remains visible when the other
+source is missing or incomplete. Process rows,
 attribution and one-shot JSON keep their existing accounting.
 
 This is a guest-kernel observation, not a partition of Windows host CPU. Different

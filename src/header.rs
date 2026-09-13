@@ -178,12 +178,12 @@ pub fn compact(
     let mut ram_chips = Vec::new();
     for (index, label) in labels.iter().enumerate() {
         let usage = snapshot.and_then(|snapshot| snapshot.environment_summary.0[index]);
-        let cpu_value =
-            usage.map_or_else(|| "N/A".into(), |usage| observation_cpu(usage.cpu_percent));
-        let ram_value = usage.map_or_else(
-            || "N/A".into(),
-            |usage| observation_memory(usage.memory_bytes),
-        );
+        let cpu_value = usage
+            .and_then(|usage| usage.cpu_percent)
+            .map_or_else(|| "N/A".into(), observation_cpu);
+        let ram_value = usage
+            .and_then(|usage| usage.memory_bytes)
+            .map_or_else(|| "N/A".into(), observation_memory);
         let style = environment_style(crate::summary::ENVIRONMENTS[index], colors);
         cpu_chips.push(Span::styled(format!("{label} {cpu_value:>6}"), style));
         ram_chips.push(Span::styled(format!("{label} {ram_value:>6}"), style));
@@ -438,8 +438,8 @@ mod tests {
         let mut snapshot = MonitorSnapshot::from_collected(vec![], tree, vec![], &config);
         snapshot.environment_summary = EnvironmentSummary(
             [Some(Usage {
-                cpu_percent: 12.5,
-                memory_bytes: 1073741824,
+                cpu_percent: Some(12.5),
+                memory_bytes: Some(1073741824),
             }); 4],
         );
         for (cpu, available, ram) in [(0.0, 34359738368, "0.0/32.0G"), (100.0, 0, "32.0/32.0G")] {
@@ -517,6 +517,27 @@ mod tests {
             assert!(!guest[0].spans[0].content.contains(expected));
         }
 
+        for (cpu, memory, cpu_label, ram_label) in [
+            (None, Some(1073741824), "WSL    N/A", "WSL  1.00G"),
+            (Some(12.5), None, "WSL  12.5%", "WSL    N/A"),
+        ] {
+            snapshot.environment_summary.0[1] = Some(Usage {
+                cpu_percent: cpu,
+                memory_bytes: memory,
+            });
+            let lines = compact(
+                Some(&snapshot),
+                120,
+                2,
+                false,
+                false,
+                Duration::from_secs(3),
+                Instant::now(),
+            );
+            assert!(lines[0].to_string().contains(cpu_label));
+            assert!(lines[1].to_string().contains(ram_label));
+        }
+
         // Missing values, changes in digit count and larger memory units must not
         // move the history or any environment column in either row.
         let positions = |line: &Line<'_>| {
@@ -543,8 +564,8 @@ mod tests {
                 });
                 snapshot.environment_summary = EnvironmentSummary(
                     [Some(Usage {
-                        cpu_percent: cpu,
-                        memory_bytes: bytes,
+                        cpu_percent: Some(cpu),
+                        memory_bytes: Some(bytes),
                     }); 4],
                 );
                 let lines = compact(

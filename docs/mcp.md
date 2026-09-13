@@ -93,8 +93,11 @@ Summary data includes host logical CPU count, host CPU percentage, host memory
 (total/available/used bytes), and independent environment observations. Unavailable
 values are `null`, not guessed zeros. Legacy optional collectors cannot distinguish
 every successful-empty result from an unavailable backend, so empty Docker/WSLC
-summaries conservatively remain `null`. Incomplete environment samples also remain
-unavailable. WSL-only native Linux sampling labels CPU scope `wsl_visible`; normal
+summaries conservatively remain `null`. WSL `cpu_percent` and `memory_bytes` are
+independently nullable: missing kernel counters do not hide valid RSS, and an
+incomplete process collection does not hide valid kernel CPU. The entire WSL
+observation is `null` only when both metrics are unavailable.
+WSL-only native Linux sampling labels CPU scope `wsl_visible`; normal
 and Windows-native sampling use `windows_host`. Host, environment, and parent/child
 usage can overlap and must not be added together.
 

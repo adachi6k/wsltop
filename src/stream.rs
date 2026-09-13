@@ -1436,7 +1436,7 @@ mod tests {
             Ok(DockerUsage::default()),
         )));
         let mut snapshot = aggregate.snapshot(&options);
-        let expected = 80.0;
+        let expected = Some(80.0);
         assert_eq!(
             snapshot.environment_summary.0[1].unwrap().cpu_percent,
             expected
@@ -1471,6 +1471,37 @@ mod tests {
     }
 
     #[test]
+    fn wsl_cpu_and_memory_recover_independently() {
+        let options = config();
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostCpuCount(16));
+        let mut primary = Normalized::new(16, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        aggregate.apply(Event::ExtraWsl(Normalized::new(16, Err("offline".into()))));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, Some(85.0));
+        assert_eq!(usage.memory_bytes, None);
+
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Ok(ExtraWslUpdate::default()),
+        )));
+        let process = row(EnvironmentKind::Wsl, ResourceKind::Process, "compiler");
+        aggregate.apply(Event::Linux(Normalized::new(16, Ok(vec![process.clone()]))));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, None);
+        assert_eq!(usage.memory_bytes, Some(process.memory_bytes));
+
+        let mut recovered = Normalized::new(16, Ok(vec![process.clone()]));
+        recovered.system_cpu = Some(0.0);
+        aggregate.apply(Event::Linux(recovered));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, Some(0.0));
+        assert_eq!(usage.memory_bytes, Some(process.memory_bytes));
+    }
+
+    #[test]
     fn additional_distros_do_not_add_kernel_cpu_and_old_normalization_is_rejected() {
         let options = config();
         let mut aggregate = Aggregate::new(&options);
@@ -1493,8 +1524,8 @@ mod tests {
         extra.system_cpu = Some(85.0); // Even a second kernel sample must not be added.
         aggregate.apply(Event::ExtraWsl(extra));
         let summary = aggregate.snapshot(&options).environment_summary;
-        assert_eq!(summary.0[1].unwrap().cpu_percent, 85.0);
-        assert_eq!(summary.0[1].unwrap().memory_bytes, other.memory_bytes);
+        assert_eq!(summary.0[1].unwrap().cpu_percent, Some(85.0));
+        assert_eq!(summary.0[1].unwrap().memory_bytes, Some(other.memory_bytes));
         assert_eq!(aggregate.extra_wsl["other"][0].cpu_percent, 60.0);
         aggregate.apply(Event::HostCpuCount(32));
         let mut stale = Normalized::new(16, Ok(vec![]));
