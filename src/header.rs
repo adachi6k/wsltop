@@ -178,12 +178,12 @@ pub fn compact(
     let mut ram_chips = Vec::new();
     for (index, label) in labels.iter().enumerate() {
         let usage = snapshot.and_then(|snapshot| snapshot.environment_summary.0[index]);
-        let cpu_value =
-            usage.map_or_else(|| "N/A".into(), |usage| observation_cpu(usage.cpu_percent));
-        let ram_value = usage.map_or_else(
-            || "N/A".into(),
-            |usage| observation_memory(usage.memory_bytes),
-        );
+        let cpu_value = usage
+            .and_then(|usage| usage.cpu_percent)
+            .map_or_else(|| "N/A".into(), observation_cpu);
+        let ram_value = usage
+            .and_then(|usage| usage.memory_bytes)
+            .map_or_else(|| "N/A".into(), observation_memory);
         let style = environment_style(crate::summary::ENVIRONMENTS[index], colors);
         cpu_chips.push(Span::styled(format!("{label} {cpu_value:>6}"), style));
         ram_chips.push(Span::styled(format!("{label} {ram_value:>6}"), style));
@@ -281,13 +281,14 @@ All columns shift left together; waiting slots hold the previous value.\n\
 Blank: before first sample. '!': failed/unavailable until recovery.\n\
 TERM=dumb uses ASCII levels. No host history in WSL-only.\n\
 Win: observed Windows processes, excluding WSL/WSLC VM hosts.\n\
-WSL: processes in the primary and collected additional distributions.\n\
-WSL observations may include workloads also shown under Docker.\n\
+WSL CPU: shared kernel total, including short-lived processes and kernel work.\n\
+Sampled once; includes other distros even with --wsl-only.\n\
+WSL CPU can overlap Docker/WSLC workloads in the same kernel.\n\
 WSLC / Docker: container totals, excluding their process detail rows.\n\
 RAM observations: Win working sets; WSL RSS; container CLI memory.\n\
 Shared pages and overlapping environments prevent adding these values.\n\
 N/A: disabled, warming up, unavailable or incomplete collection.\n\
-With --wsl-only, observed CPU uses WSL-visible CPUs = 100%.\n\
+--wsl-only: WSL-native uses visible CPUs; Windows-native uses host CPUs.\n\
 Filters, limits, sorting and row CPU scale do not change the summary.\n\n\
 ? close help | t tree/flat | c/m/n sort CPU/memory/name | r reverse\n\
 i infrastructure | h VM hosts | 0 zero rows | arrows/Pg scroll\n\
@@ -437,8 +438,8 @@ mod tests {
         let mut snapshot = MonitorSnapshot::from_collected(vec![], tree, vec![], &config);
         snapshot.environment_summary = EnvironmentSummary(
             [Some(Usage {
-                cpu_percent: 12.5,
-                memory_bytes: 1073741824,
+                cpu_percent: Some(12.5),
+                memory_bytes: Some(1073741824),
             }); 4],
         );
         for (cpu, available, ram) in [(0.0, 34359738368, "0.0/32.0G"), (100.0, 0, "32.0/32.0G")] {
@@ -516,6 +517,27 @@ mod tests {
             assert!(!guest[0].spans[0].content.contains(expected));
         }
 
+        for (cpu, memory, cpu_label, ram_label) in [
+            (None, Some(1073741824), "WSL    N/A", "WSL  1.00G"),
+            (Some(12.5), None, "WSL  12.5%", "WSL    N/A"),
+        ] {
+            snapshot.environment_summary.0[1] = Some(Usage {
+                cpu_percent: cpu,
+                memory_bytes: memory,
+            });
+            let lines = compact(
+                Some(&snapshot),
+                120,
+                2,
+                false,
+                false,
+                Duration::from_secs(3),
+                Instant::now(),
+            );
+            assert!(lines[0].to_string().contains(cpu_label));
+            assert!(lines[1].to_string().contains(ram_label));
+        }
+
         // Missing values, changes in digit count and larger memory units must not
         // move the history or any environment column in either row.
         let positions = |line: &Line<'_>| {
@@ -542,8 +564,8 @@ mod tests {
                 });
                 snapshot.environment_summary = EnvironmentSummary(
                     [Some(Usage {
-                        cpu_percent: cpu,
-                        memory_bytes: bytes,
+                        cpu_percent: Some(cpu),
+                        memory_bytes: Some(bytes),
                     }); 4],
                 );
                 let lines = compact(

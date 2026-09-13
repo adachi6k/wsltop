@@ -37,12 +37,17 @@ enum Event {
 
 struct Normalized<T> {
     cpu_count: u32,
+    system_cpu: Option<f64>,
     value: T,
 }
 
 impl<T> Normalized<T> {
     fn new(cpu_count: u32, value: T) -> Self {
-        Self { cpu_count, value }
+        Self {
+            cpu_count,
+            value,
+            system_cpu: None,
+        }
     }
 }
 
@@ -72,6 +77,7 @@ impl Event {
 
 #[derive(Default)]
 struct Aggregate {
+    wsl_cpu_percent: Option<f64>,
     host_cpu_percent: Option<f64>,
     host_memory: Option<crate::model::HostMemory>,
     host_history: crate::history::HostHistory,
@@ -137,6 +143,7 @@ impl Aggregate {
         let name = event.name();
         if let Event::HostCpuCount(count) = &event {
             if self.host_cpu_count != *count {
+                self.wsl_cpu_percent = None;
                 self.linux.clear();
                 self.extra_wsl.clear();
                 self.wslc = WslcUsage::default();
@@ -215,7 +222,13 @@ impl Aggregate {
             Event::HostCpuCount(_) => unreachable!(),
             Event::HostMemory(..) => unreachable!(),
             Event::CollectorWarnings(_) => unreachable!(),
-            Event::Linux(value) => value.value.map(|rows| self.linux = rows),
+            Event::Linux(value) => {
+                self.wsl_cpu_percent = None;
+                value.value.map(|rows| {
+                    self.linux = rows;
+                    self.wsl_cpu_percent = value.system_cpu;
+                })
+            }
             Event::Windows(captured_at, value) => {
                 self.host_cpu_percent = None;
                 self.host_history.cpu.record(
@@ -319,7 +332,11 @@ impl Aggregate {
             );
         }
         if config.wsl_only {
-            warnings.push("--wsl-only uses the WSL-visible logical CPU count".to_string());
+            warnings.push(if cfg!(windows) {
+                "--wsl-only uses the Windows host logical CPU count; host-process collection is disabled"
+            } else {
+                "--wsl-only uses the WSL-visible logical CPU count"
+            }.to_string());
         }
 
         let mut linux = self.linux.clone();
@@ -367,7 +384,7 @@ impl Aggregate {
         );
         let ready = |name| !self.pending.contains(name) && !self.errors.contains_key(name);
         let normalized = self.host_cpu_authoritative;
-        let summary = crate::summary::EnvironmentSummary::collect(
+        let mut summary = crate::summary::EnvironmentSummary::collect(
             &resources,
             [
                 !config.wsl_only && ready("Windows"),
@@ -387,6 +404,7 @@ impl Aggregate {
                     && self.docker.warnings.is_empty(),
             ],
         );
+        summary.set_wsl_cpu(normalized.then_some(self.wsl_cpu_percent).flatten());
         let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, config);
         snapshot.host_cpu_percent = self.host_cpu_percent;
         snapshot.host_memory = self.host_memory;
@@ -476,8 +494,25 @@ pub fn run(
             return;
         }
     };
-    let host_cpu_count = Arc::new(AtomicU32::new(fallback_cpu_count()));
+    #[cfg(windows)]
+    let initial_count =
+        match select_initial_cpu_count(initial.wsl_only, fallback_cpu_count(), || {
+            windows::host_logical_cpu_count().map_err(|error| error.to_string())
+        }) {
+            Ok(count) => count,
+            Err(error) => {
+                let _ = output.send(Err(format!("Windows host CPU count unavailable: {error}")));
+                return;
+            }
+        };
+    #[cfg(not(windows))]
+    let initial_count = fallback_cpu_count();
+    let host_cpu_count = Arc::new(AtomicU32::new(initial_count));
     let (sender, receiver) = mpsc::channel();
+    #[cfg(windows)]
+    if initial.wsl_only {
+        let _ = sender.send(Event::HostCpuCount(initial_count));
+    }
     let _ = sender.send(Event::CollectorWarnings(collector_plan.warnings));
     spawn_primary_processes(
         collector_plan.primary,
@@ -548,9 +583,10 @@ fn spawn_primary_processes(
     interval: Duration,
 ) {
     thread::spawn(move || {
-        let mut primary_before: Option<crate::model::Snapshot> = None;
+        let mut primary_before: Option<(crate::model::Snapshot, Option<u32>)> = None;
         let mut delay = Duration::ZERO;
         while wait(&stop, delay) {
+            let capture_count = cpus.load(Ordering::Relaxed);
             match collector.snapshot() {
                 Ok(after) => {
                     let had_baseline = primary_before.is_some();
@@ -558,16 +594,17 @@ fn spawn_primary_processes(
                         0 => fallback_cpu_count(),
                         count => count,
                     };
-                    if let Some(old) = &primary_before {
+                    let stable_count = (capture_count == count).then_some(count);
+                    if let Some((old, old_count)) = &primary_before {
                         let rows = sampler::calculate_usage(old, &after, count);
-                        if sender
-                            .send(Event::Linux(Normalized::new(count, Ok(rows))))
-                            .is_err()
-                        {
+                        let mut update = Normalized::new(count, Ok(rows));
+                        update.system_cpu =
+                            stable_kernel_usage(old, &after, *old_count, stable_count);
+                        if sender.send(Event::Linux(update)).is_err() {
                             break;
                         }
                     }
-                    primary_before = Some(after);
+                    primary_before = Some((after, stable_count));
                     delay = if had_baseline {
                         interval
                     } else {
@@ -906,8 +943,72 @@ fn fallback_cpu_count() -> u32 {
     thread::available_parallelism().map_or(1, |count| count.get() as u32)
 }
 
+#[cfg(any(windows, test))]
+fn select_initial_cpu_count(
+    wsl_only: bool,
+    visible: u32,
+    host: impl FnOnce() -> Result<u32, String>,
+) -> Result<u32, String> {
+    let count = if wsl_only { host()? } else { visible };
+    if count == 0 {
+        Err("zero logical CPU count".into())
+    } else {
+        Ok(count)
+    }
+}
+
+fn stable_kernel_usage(
+    before: &crate::model::Snapshot,
+    after: &crate::model::Snapshot,
+    before_count: Option<u32>,
+    after_count: Option<u32>,
+) -> Option<f64> {
+    let count = after_count?;
+    (before_count == Some(count))
+        .then(|| crate::linux_cpu::usage(before, after, count))
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_wsl_only_requires_host_count_without_affinity_fallback() {
+        assert_eq!(
+            super::select_initial_cpu_count(true, 2, || Ok(16)).unwrap(),
+            16
+        );
+        assert!(super::select_initial_cpu_count(true, 2, || Err("unavailable".into())).is_err());
+        assert!(super::select_initial_cpu_count(true, 2, || Ok(0)).is_err());
+        assert_eq!(
+            super::select_initial_cpu_count(false, 2, || panic!(
+                "normal mode discovers asynchronously"
+            ))
+            .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn system_cpu_requires_stable_host_count_across_both_captures() {
+        let mut before = empty_snapshot();
+        let mut after = empty_snapshot();
+        before.system_cpu =
+            crate::linux_cpu::Sample::parse("cpu 100 0 0 0 0 0 0\ncpu0 0", "10", "boot", 100.0);
+        after.system_cpu =
+            crate::linux_cpu::Sample::parse("cpu 200 0 0 0 0 0 0\ncpu0 0", "11", "boot", 100.0);
+        assert_eq!(
+            super::stable_kernel_usage(&before, &after, Some(16), Some(16)),
+            Some(6.25)
+        );
+        for (old, new) in [
+            (Some(8), Some(16)),
+            (None, Some(16)),
+            (Some(16), None),
+            (Some(0), Some(0)),
+        ] {
+            assert!(super::stable_kernel_usage(&before, &after, old, new).is_none());
+        }
+    }
     use super::{
         additional_process_cadence, calculate_additional_update, fallback_cpu_count,
         reuse_docker_processes, reuse_wslc_processes, wait, Aggregate, Event, ExtraWslUpdate,
@@ -963,6 +1064,7 @@ mod tests {
 
     fn empty_snapshot() -> crate::model::Snapshot {
         crate::model::Snapshot {
+            system_cpu: None,
             captured_at: Instant::now(),
             processes: Vec::new(),
         }
@@ -1322,10 +1424,9 @@ mod tests {
         aggregate.apply(Event::HostCpuCount(16));
         let first = row(EnvironmentKind::Wsl, ResourceKind::Process, "first");
         let infra = row(EnvironmentKind::Wsl, ResourceKind::Infra, "infra");
-        aggregate.apply(Event::Linux(Normalized::new(
-            16,
-            Ok(vec![first.clone(), infra.clone()]),
-        )));
+        let mut primary = Normalized::new(16, Ok(vec![first.clone(), infra.clone()]));
+        primary.system_cpu = Some(80.0);
+        aggregate.apply(Event::Linux(primary));
         aggregate.apply(Event::ExtraWsl(Normalized::new(
             16,
             Ok(ExtraWslUpdate::default()),
@@ -1335,7 +1436,7 @@ mod tests {
             Ok(DockerUsage::default()),
         )));
         let mut snapshot = aggregate.snapshot(&options);
-        let expected = first.cpu_percent + infra.cpu_percent;
+        let expected = Some(80.0);
         assert_eq!(
             snapshot.environment_summary.0[1].unwrap().cpu_percent,
             expected
@@ -1360,11 +1461,122 @@ mod tests {
         let snapshot = aggregate.snapshot(&options);
         assert!(snapshot.environment_summary.0[1].is_none());
         assert!(snapshot.environment_summary.0[3].is_none());
-        aggregate.apply(Event::Linux(Normalized::new(16, Ok(vec![]))));
+        let mut empty = Normalized::new(16, Ok(vec![]));
+        empty.system_cpu = Some(0.0);
+        aggregate.apply(Event::Linux(empty));
         assert_eq!(
             aggregate.snapshot(&options).environment_summary.0[1],
             Some(crate::summary::Usage::default())
         );
+    }
+
+    #[test]
+    fn wsl_kernel_cpu_waits_for_authoritative_normalization() {
+        let mut options = config();
+        for changed in [false, true] {
+            let mut aggregate = Aggregate::new(&options);
+            let provisional = aggregate.host_cpu_count;
+            let mut primary = Normalized::new(provisional, Ok(vec![]));
+            primary.system_cpu = Some(85.0);
+            aggregate.apply(Event::Linux(primary));
+            assert!(aggregate.snapshot(&options).environment_summary.0[1].is_none());
+            let authoritative = if changed {
+                provisional + 1
+            } else {
+                provisional
+            };
+            aggregate.apply(Event::HostCpuCount(authoritative));
+            let usage = aggregate.snapshot(&options).environment_summary.0[1];
+            assert_eq!(
+                usage.and_then(|usage| usage.cpu_percent),
+                (!changed).then_some(85.0)
+            );
+            let mut fresh = Normalized::new(authoritative, Ok(vec![]));
+            fresh.system_cpu = Some(70.0);
+            aggregate.apply(Event::Linux(fresh));
+            assert_eq!(
+                aggregate.snapshot(&options).environment_summary.0[1]
+                    .unwrap()
+                    .cpu_percent,
+                Some(70.0)
+            );
+        }
+        options.wsl_only = true;
+        let mut aggregate = Aggregate::new(&options);
+        let mut primary = Normalized::new(aggregate.host_cpu_count, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        assert_eq!(
+            aggregate.snapshot(&options).environment_summary.0[1]
+                .unwrap()
+                .cpu_percent,
+            Some(85.0)
+        );
+    }
+
+    #[test]
+    fn wsl_cpu_and_memory_recover_independently() {
+        let options = config();
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostCpuCount(16));
+        let mut primary = Normalized::new(16, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        aggregate.apply(Event::ExtraWsl(Normalized::new(16, Err("offline".into()))));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, Some(85.0));
+        assert_eq!(usage.memory_bytes, None);
+
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Ok(ExtraWslUpdate::default()),
+        )));
+        let process = row(EnvironmentKind::Wsl, ResourceKind::Process, "compiler");
+        aggregate.apply(Event::Linux(Normalized::new(16, Ok(vec![process.clone()]))));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, None);
+        assert_eq!(usage.memory_bytes, Some(process.memory_bytes));
+
+        let mut recovered = Normalized::new(16, Ok(vec![process.clone()]));
+        recovered.system_cpu = Some(0.0);
+        aggregate.apply(Event::Linux(recovered));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, Some(0.0));
+        assert_eq!(usage.memory_bytes, Some(process.memory_bytes));
+    }
+
+    #[test]
+    fn additional_distros_do_not_add_kernel_cpu_and_old_normalization_is_rejected() {
+        let options = config();
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostCpuCount(16));
+        let mut primary = Normalized::new(16, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        let mut other = row(EnvironmentKind::Wsl, ResourceKind::Process, "compiler");
+        other.source = Some("other".into());
+        other.cpu_percent = 60.0;
+        let mut extra = Normalized::new(
+            16,
+            Ok(ExtraWslUpdate {
+                rows: vec![other.clone()],
+                running_sources: ["other".into()].into(),
+                successful_sources: ["other".into()].into(),
+                failures: BTreeMap::new(),
+            }),
+        );
+        extra.system_cpu = Some(85.0); // Even a second kernel sample must not be added.
+        aggregate.apply(Event::ExtraWsl(extra));
+        let summary = aggregate.snapshot(&options).environment_summary;
+        assert_eq!(summary.0[1].unwrap().cpu_percent, Some(85.0));
+        assert_eq!(summary.0[1].unwrap().memory_bytes, Some(other.memory_bytes));
+        assert_eq!(aggregate.extra_wsl["other"][0].cpu_percent, 60.0);
+        aggregate.apply(Event::HostCpuCount(32));
+        let mut stale = Normalized::new(16, Ok(vec![]));
+        stale.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(stale));
+        assert!(aggregate.wsl_cpu_percent.is_none());
+        assert!(aggregate.snapshot(&options).environment_summary.0[1].is_none());
     }
 
     #[test]

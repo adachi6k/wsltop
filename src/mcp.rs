@@ -501,6 +501,53 @@ mod tests {
     }
 
     #[test]
+    fn summary_serializes_cpu_and_memory_availability_independently() {
+        struct Collector(Option<crate::monitor::MonitorSnapshot>);
+        impl SnapshotCollector for Collector {
+            fn collect(&mut self) -> Result<crate::monitor::MonitorSnapshot, String> {
+                self.0.take().ok_or_else(|| "already collected".into())
+            }
+        }
+        for (cpu, memory) in [
+            (None, Some(4096)),
+            (Some(85.0), None),
+            (Some(0.0), Some(0)),
+            (None, None),
+        ] {
+            let (config, _) = collector_options(&[]).unwrap();
+            let tree = crate::attribution::build_tree_with_docker(16, &[], &[], &[], &[]);
+            let mut snapshot =
+                crate::monitor::MonitorSnapshot::from_collected(vec![], tree, vec![], &config);
+            snapshot.environment_summary.0[1] = memory.map(|bytes| crate::summary::Usage {
+                cpu_percent: Some(10.0),
+                memory_bytes: Some(bytes),
+            });
+            snapshot.environment_summary.set_wsl_cpu(cpu);
+            let service = crate::query_service::QueryService::new(
+                Collector(Some(snapshot)),
+                std::num::NonZeroUsize::new(1).unwrap(),
+                Duration::from_secs(60),
+            )
+            .unwrap()
+            .into_shared();
+            let result = execute(
+                &service,
+                "get_system_summary",
+                Arguments::parse("get_system_summary", Map::new()).unwrap(),
+                "windows_host",
+            );
+            assert_ne!(result.is_error, Some(true));
+            let content = result.structured_content.unwrap();
+            let wsl = &content["data"]["environments"]["wsl"];
+            if cpu.is_none() && memory.is_none() {
+                assert!(wsl.is_null());
+            } else {
+                assert_eq!(wsl, &json!({"cpu_percent": cpu, "memory_bytes": memory}));
+            }
+        }
+    }
+
+    #[test]
     fn operational_errors_use_structured_tool_results() {
         for (error, code) in [
             (

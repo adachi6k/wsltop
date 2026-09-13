@@ -284,6 +284,17 @@ impl Monitor {
             summary_available,
         );
         snapshot.host_memory = windows_after.as_ref().and_then(|sample| sample.host_memory);
+        snapshot.environment_summary.set_wsl_cpu(
+            (collector_cpu_count == host_cpu_count)
+                .then(|| {
+                    crate::linux_cpu::usage(
+                        &linux_before.primary,
+                        &linux_after.primary,
+                        host_cpu_count,
+                    )
+                })
+                .flatten(),
+        );
         snapshot.host_cpu_percent = windows_after
             .and_then(|sample| sample.host_cpu)
             .zip(windows_before.and_then(|sample| sample.host_cpu))

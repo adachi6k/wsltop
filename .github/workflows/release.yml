@@ -102,6 +102,12 @@ jobs:
           if ($version.Trim() -ne "wsltop $($env:RELEASE_TAG.Substring(1))") { throw 'Packaged version mismatch' }
           $files = @(Get-ChildItem "extracted/$name" -File | Select-Object -ExpandProperty Name | Sort-Object)
           if (($files -join ',') -ne 'LICENSE,README.md,wsltop.exe') { throw 'Unexpected archive contents' }
+      - name: Verify packaged Windows MCP transport
+        run: |
+          $name = "wsltop-$env:RELEASE_TAG-x86_64-pc-windows-msvc"
+          $env:WSLTOP_MCP_TEST_EXE = (Resolve-Path "extracted/$name/wsltop.exe").Path
+          cargo test --locked --test mcp_stdio
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged MCP transport check failed' }
       - name: Verify packaged Windows console restoration
         run: |
           $name = "wsltop-$env:RELEASE_TAG-x86_64-pc-windows-msvc"
@@ -123,6 +129,8 @@ jobs:
       RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v8
         with:
           pattern: wsltop-*
@@ -146,6 +154,10 @@ jobs:
           "./$directory/wsltop" --version
           test "$("./$directory/wsltop" --version)" = "wsltop ${RELEASE_TAG#v}"
           test "$(find "$directory" -type f -printf '%f\n' | sort | paste -sd ',')" = 'LICENSE,README.md,wsltop'
+      - name: Verify packaged Linux MCP transport
+        run: |
+          export WSLTOP_MCP_TEST_EXE="$GITHUB_WORKSPACE/dist/wsltop-${RELEASE_TAG}-x86_64-unknown-linux-gnu/wsltop"
+          cargo test --locked --test mcp_stdio
   publish:
     name: Publish release assets
     needs: verify

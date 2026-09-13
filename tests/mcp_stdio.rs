@@ -5,6 +5,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+fn executable() -> std::ffi::OsString {
+    std::env::var_os("WSLTOP_MCP_TEST_EXE").unwrap_or_else(|| env!("CARGO_BIN_EXE_wsltop").into())
+}
+
 struct Client {
     child: Child,
     lines: Receiver<String>,
@@ -13,7 +17,7 @@ struct Client {
 
 impl Client {
     fn new(extra: &[&str]) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_wsltop"))
+        let mut child = Command::new(executable())
             .arg("mcp")
             .args(extra)
             .stdin(Stdio::piped())
@@ -38,6 +42,10 @@ impl Client {
         let init = client.request("initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"wsltop-tests","version":"1"}}));
         assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
         assert_eq!(init["result"]["serverInfo"]["name"], "wsltop");
+        assert_eq!(
+            init["result"]["serverInfo"]["version"],
+            env!("CARGO_PKG_VERSION")
+        );
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
         client
     }
@@ -141,15 +149,12 @@ fn mcp_startup_rejects_display_flags_without_protocol_output() {
         &["mcp", "--interval-ms", "0"],
         &["mcp", "--interval-ms", "60001"],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_wsltop"))
-            .args(args)
-            .output()
-            .unwrap();
+        let output = Command::new(executable()).args(args).output().unwrap();
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(!output.stderr.is_empty());
     }
-    let help = Command::new(env!("CARGO_BIN_EXE_wsltop"))
+    let help = Command::new(executable())
         .args(["mcp", "--help"])
         .output()
         .unwrap();

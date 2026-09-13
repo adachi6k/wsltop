@@ -3,27 +3,31 @@
 Tracked in [#43](https://github.com/adachi6k/wsltop/issues/43), within roadmap
 [#24](https://github.com/adachi6k/wsltop/issues/24).
 
-**Development builds only:** this feature is not included in the published v0.5.0
-binaries or crate. Build the current source using the README's build instructions.
+Requires wsltop v0.5.1 or later. Use a prebuilt binary or Cargo installation from
+the [README](../README.md#quick-start); v0.5.0 does not include MCP.
 
 Run `wsltop mcp` from your MCP client. The server uses local stdin/stdout, exposes
 four read-only tools, and has no shell/terminate/kill/container-control tools or
 network listener. Normal CLI/TUI and `--json` output remain separate.
 
-For a client running in WSL, point its server configuration at your built binary:
+For a client running in WSL, point its server configuration at your installed binary.
+For a default Cargo installation, replace `<user>` with your Linux username:
 
 ```json
 {
   "mcpServers": {
     "wsltop": {
-      "command": "/absolute/path/to/wsltop/target/release/wsltop",
+      "command": "/home/<user>/.cargo/bin/wsltop",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-For a Windows client, use the absolute path to the built `wsltop.exe` as `command`
+Use the absolute executable path returned by `command -v wsltop` if you installed
+elsewhere. For a source build, use the checkout's `target/release/wsltop` instead.
+
+For a Windows client, use the absolute path to the installed or extracted `wsltop.exe` as `command`
 with the same `args`. MCP client configuration formats vary; the example uses the
 common `mcpServers` form. The executable requires the same WSL/interoperability
 setup as regular wsltop. On Windows, normal primary-distro selection still applies
@@ -93,10 +97,19 @@ Summary data includes host logical CPU count, host CPU percentage, host memory
 (total/available/used bytes), and independent environment observations. Unavailable
 values are `null`, not guessed zeros. Legacy optional collectors cannot distinguish
 every successful-empty result from an unavailable backend, so empty Docker/WSLC
-summaries conservatively remain `null`. Incomplete environment samples also remain
-unavailable. WSL-only native Linux sampling labels CPU scope `wsl_visible`; normal
+summaries conservatively remain `null`. WSL `cpu_percent` and `memory_bytes` are
+independently nullable: missing kernel counters do not hide valid RSS, and an
+incomplete process collection does not hide valid kernel CPU. The entire WSL
+observation is `null` only when both metrics are unavailable.
+WSL-only native Linux sampling labels CPU scope `wsl_visible`; normal
 and Windows-native sampling use `windows_host`. Host, environment, and parent/child
 usage can overlap and must not be added together.
+
+WSL category CPU is the shared kernel total, sampled once through the primary
+distribution from `/proc/stat`, including short-lived tasks and kernel work.
+It can include other distributions even with `--wsl-only` and overlap container
+statistics. WSL RAM remains observed process RSS; process rows keep their existing
+sampling semantics. See [CPU accounting](cpu-accounting.md#wsl-category-cpu).
 
 Unknown tools and invalid arguments produce JSON-RPC invalid-params errors before
 collection. Operational failures use `isError: true` and an error object with a

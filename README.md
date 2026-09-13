@@ -9,7 +9,7 @@
 The default TUI has a compact two-line host CPU/RAM summary, history graphs and
 colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity.
 Use `--header classic` for the traditional one-line header and `--color never`
-for monochrome output. See [v0.5.0 release notes](docs/release-v0.5.0.md).
+for monochrome output. See [v0.5.1 release notes](docs/release-v0.5.1.md).
 
 ![wsltop v0.5.0 showing CPU and RAM history, Windows and WSL workloads, and running WSLC and Docker containers](docs/assets/wsltop-demo.gif)
 
@@ -166,13 +166,13 @@ Run `.\target\release\wsltop.exe --interactive` on Windows or
 Each archive in the
 [latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest)
 has a `.sha256` sidecar. Download both files into the same directory. Names
-follow `wsltop-v<version>-<target>`; replace `v0.5.0` below with your downloaded
+follow `wsltop-v<version>-<target>`; replace `v0.5.1` below with your downloaded
 version.
 
 Windows PowerShell:
 
 ```powershell
-$archive = 'wsltop-v0.5.0-x86_64-pc-windows-msvc.zip'
+$archive = 'wsltop-v0.5.1-x86_64-pc-windows-msvc.zip'
 $expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
 ```
@@ -180,7 +180,7 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Check
 WSL:
 
 ```console
-sha256sum --check wsltop-v0.5.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check wsltop-v0.5.1-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 ## Usage
@@ -235,7 +235,7 @@ memory values additive or enable parent-minus-child memory accounting.
 
 ## Interactive TUI
 
-Start the terminal UI with `wsltop --interactive` in WSL or `wsltop.exe --interactive` in Windows. It draws immediately and accepts partial collector updates instead of waiting for every source. The primary WSL collector reads local `/proc` in WSL or samples remotely through `wsl.exe` on Windows. After its first successful baseline it waits a fixed 150 ms warmup, then uses the configured interval. While Windows host discovery is pending, non-Windows collectors use the executing platform's visible CPU count and are marked provisional. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` keeps the executing platform's visible CPU count. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize primary sampling. Windows primary selection may still require synchronous default/fallback discovery.
+Start the terminal UI with `wsltop --interactive` in WSL or `wsltop.exe --interactive` in Windows. It draws immediately and accepts partial collector updates instead of waiting for every source. The primary WSL collector reads local `/proc` in WSL or samples remotely through `wsl.exe` on Windows. After its first successful baseline it waits a fixed 150 ms warmup, then uses the configured interval. While Windows host discovery is pending, non-Windows collectors use the executing platform's visible CPU count and are marked provisional; WSL category CPU remains unavailable until the host count is confirmed. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` uses WSL-visible logical CPUs in WSL-native execution and the Windows host logical CPU count in Windows-native execution. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize primary sampling. Windows primary selection may still require synchronous default/fallback discovery.
 
 Additional distro discovery runs in its own worker and discovers newly started distributions during the session. Its initial baseline remains `loading` until a CPU delta is available, no additional distro is running, or an error is reported. Transient failures retain last-good rows; confirmed stopped distributions lose their rows and baseline. Distribution-name matching ignores ASCII casing.
 
@@ -306,9 +306,13 @@ RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2
 These example values are **independent observations, not an additive breakdown**:
 
 - `Win` sums observed Windows processes, excluding WSL/WSLC VM host rows.
-- `WSL` sums observed processes in the primary and collected additional WSL distributions. It can include
-  Docker workloads also reported under `Docker`.
+- `WSL` CPU uses the shared WSL kernel's `/proc/stat` counters, sampled once through
+  the primary distribution. It includes short-lived processes and kernel work,
+  including other distributions even with `--wsl-only`. Container workloads in
+  that same kernel may also appear under `Docker` or `WSLC`.
 - `WSLC` and `Docker` sum container statistics, excluding child process detail rows.
+- Even without container overlap, Win process time and WSL guest-kernel time are
+  not an additive physical-CPU breakdown; see [CPU accounting](docs/cpu-accounting.md#wsl-category-cpu).
 - Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
   statistics respectively. Shared pages and overlapping observations mean these
   values must not be summed or subtracted from host physical RAM.
@@ -368,7 +372,13 @@ WSLC collection uses the current/default CLI session. A single available `vmmemw
 
 Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,time,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container. If the process backend does not support `time`, wsltop retries the older column set and leaves TIME+ unavailable instead of dropping the container detail.
 
-Docker Desktop containers run in Docker Desktop's own Linux VM, so they are shown under an independent top-level `Docker` group. They are not manufactured as children of the current WSL VM. The legacy current-WSL PID-matching path is used only if sharing of the host PID namespace has been positively established; the current Docker Desktop path does not make that claim. Text/TUI output includes Docker and WSLC process rows by default while preserving each container row; use `--hide-container-processes` to suppress them (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
+Docker Desktop's WSL 2 backend shares the WSL kernel, so its CPU is already included
+in the WSL category total. A separate Hyper-V backend does not share that kernel.
+Kernel sharing does not establish a shared PID namespace or a verified attribution
+parent: Docker stays a top-level group unless host/PID mapping is proven.
+See [Docker's WSL backend documentation](https://docs.docker.com/desktop/features/wsl/).
+
+Text/TUI output includes Docker and WSLC process rows by default while preserving each container row; use `--hide-container-processes` to suppress them (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
 
 A missing `wslc.exe`, missing Docker CLI, or recognized unavailable Docker daemon is treated as an expected absence: its rows are silently omitted and monitoring continues. Unexpected command, output, parse, or per-container attribution failures are reported through the common warning path. Use `--no-wslc` or `--no-docker` to disable a collector intentionally.
 
@@ -403,11 +413,11 @@ wsltop --once --json
 
 JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 
-## MCP (development builds)
+## MCP
 
-Current source builds support `wsltop mcp`, a read-only stdio server for system
-summary, resource listing, inspection, and child traversal. This is not yet in the
-published v0.5.0 release. See [MCP setup and snapshot semantics](docs/mcp.md).
+Starting with v0.5.1, `wsltop mcp` provides a read-only stdio server for system
+summary, resource listing, inspection, and child traversal.
+See [MCP setup and snapshot semantics](docs/mcp.md).
 
 ## Limitations
 

@@ -9,6 +9,7 @@ mod history;
 mod identity;
 #[cfg(unix)]
 mod linux;
+mod linux_cpu;
 #[cfg_attr(windows, allow(dead_code))]
 mod linux_proc;
 mod mcp;
