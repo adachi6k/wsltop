@@ -423,6 +423,7 @@ published v0.5.0 release. See [MCP setup and snapshot semantics](docs/mcp.md).
 
 ## Documentation
 
+- [WinGet registration and release automation](docs/winget.md) (community registration pending)
 - [Architecture](docs/architecture.md)
 - [CPU accounting](docs/cpu-accounting.md)
 - [Validation and test plan](docs/test-plan.md)

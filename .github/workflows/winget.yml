@@ -1,0 +1,144 @@
+name: WinGet
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable release tag (for example v0.4.0)
+        required: true
+        type: string
+      submit:
+        description: Submit to microsoft/winget-pkgs after validation
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - .github/workflows/winget.yml
+      - scripts/*winget*.py
+      - packaging/winget/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: winget-${{ github.event.workflow_run.head_branch || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s scripts -p 'test_winget.py'
+
+  manifest:
+    needs: test
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: windows-latest
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Select published release
+        id: select
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $tag = if ($env:EVENT_NAME -eq 'workflow_run') { $env:RUN_TAG } elseif ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_TAG } else { 'v0.4.0' }
+          if ($tag -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Expected stable tag' }
+          if ($env:EVENT_NAME -eq 'workflow_run') {
+            git fetch --depth=1 origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Tag fetch failed' }
+            $commit = git rev-parse 'FETCH_HEAD^{commit}'
+            if ($LASTEXITCODE -ne 0 -or $commit -ne $env:RUN_SHA) { throw 'Release run/tag commit mismatch' }
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+      - name: Generate from verified public ZIP
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.select.outputs.tag }}
+        run: |
+          python scripts/winget.py --tag $env:RELEASE_TAG --output generated
+          if ($LASTEXITCODE -ne 0) { throw 'Manifest generation failed' }
+      - name: Ensure WinGet is available
+        shell: pwsh
+        run: |
+          $installed = if (Get-Command winget -ErrorAction SilentlyContinue) { [version]((winget --version).TrimStart('v')) } else { [version]'0.0' }
+          if ($installed -lt [version]'1.10.0') {
+            Install-Module Microsoft.WinGet.Client -Repository PSGallery -Force -Scope CurrentUser
+            Repair-WinGetPackageManager -AllUsers -Force -Latest
+          }
+          winget --version
+          if ($LASTEXITCODE -ne 0) { throw 'WinGet unavailable' }
+      - name: Validate and test portable installation
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.select.outputs.tag }}
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $manifest = "generated/manifests/a/Adachi6k/wsltop/$version"
+          winget validate --manifest $manifest --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw 'Manifest validation failed' }
+          # Only changes the disposable runner's setting, never a user's system.
+          winget settings --enable LocalManifestFiles
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot enable local manifests' }
+          winget install --manifest $manifest --scope user --accept-source-agreements --accept-package-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { throw 'Portable install failed' }
+          try {
+            $exe = "$env:LOCALAPPDATA/Microsoft/WinGet/Links/wsltop.exe"
+            $actual = & $exe --version
+            if ($LASTEXITCODE -ne 0 -or $actual.Trim() -ne "wsltop $version") { throw 'Installed version mismatch' }
+            & $exe --help
+            if ($LASTEXITCODE -ne 0) { throw 'Installed help failed' }
+          } finally {
+            # The package is not in the public source yet; use its local manifest
+            # for identity matching rather than a source-resolved package ID.
+            winget uninstall --manifest $manifest --scope user --silent --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { throw 'Portable uninstall failed' }
+          }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: winget-${{ steps.select.outputs.tag }}
+          path: generated/manifests/
+          if-no-files-found: error
+
+  submit:
+    needs: manifest
+    if: github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.submit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: winget-${{ needs.manifest.outputs.tag }}
+          path: manifests
+      - name: Submit or retain validated artifacts
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_SUBMISSION_TOKEN }}
+          RELEASE_TAG: ${{ needs.manifest.outputs.tag }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'Validated manifest artifact is ready. Set WINGET_SUBMISSION_TOKEN to enable upstream PR submission.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 scripts/submit-winget.py --tag "$RELEASE_TAG" --manifest-dir "manifests/a/Adachi6k/wsltop/${RELEASE_TAG#v}"
