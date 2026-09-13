@@ -168,13 +168,13 @@ Run `.\target\release\wsltop.exe --interactive` on Windows or
 Each archive in the
 [latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest)
 has a `.sha256` sidecar. Download both files into the same directory. Names
-follow `wsltop-v<version>-<target>`; replace `v0.5.1` below with your downloaded
+follow `wsltop-v<version>-<target>`; replace `v0.5.2` below with your downloaded
 version.
 
 Windows PowerShell:
 
 ```powershell
-$archive = 'wsltop-v0.5.1-x86_64-pc-windows-msvc.zip'
+$archive = 'wsltop-v0.5.2-x86_64-pc-windows-msvc.zip'
 $expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
 ```
@@ -182,7 +182,7 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Check
 WSL:
 
 ```console
-sha256sum --check wsltop-v0.5.1-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check wsltop-v0.5.2-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 ## Usage
