@@ -35,6 +35,32 @@ the shell CLI, as observed in the session behind this guide. This is client tool
 selection behavior, not necessarily a wsltop server bug. The setup commands above
 are separate from the agent's MCP-only diagnostic task.
 
+## GitHub Copilot CLI registration and manual verification
+
+Use an absolute executable path appropriate for the client's Windows or WSL
+environment, as in the [quick start](mcp.md#quick-start):
+
+```console
+copilot mcp add wsltop -- /absolute/path/to/wsltop mcp
+copilot mcp list
+copilot mcp get wsltop
+```
+
+Check the registered command and arguments, then enable/reload the server in
+GitHub Copilot CLI. Registration alone does not verify tool execution. Ask:
+
+```text
+Use only wsltop MCP tools.
+Do not invoke wsltop from the shell.
+My build is running slowly.
+Identify the likely bottleneck and explain which environment, container,
+and process are responsible.
+```
+
+Expected: the trace uses wsltop MCP tools and preserves the same `snapshot_id`
+through the diagnosis. The answer clearly separates observed facts from
+hypotheses and follows the attribution and causal limits below.
+
 ## Evaluation conventions
 
 Prefix each case with `Use only wsltop MCP tools. Do not invoke wsltop from the shell.`
@@ -50,11 +76,27 @@ returned `resource_id` in that snapshot. `N` is an appropriate bounded listing l
 - Check CPU scope, core count, memory units, warnings, and unavailable values.
   Environment observations and parent/child values overlap and must not be summed.
   Duplicate workload observations are not independent consumers.
-- Empty child/container listings are valid. `null` means unavailable, not zero;
-  no observed container does not prove none exists. Missing coverage limits the
-  conclusion, and warnings should be reflected when relevant.
+- Empty child/container listings are valid. A `null` environment observation does
+  not necessarily mean zero usage; legacy collectors cannot always distinguish
+  backend unavailability from a successful-empty result. No observed container
+  does not prove none exists. Missing coverage limits the conclusion, and
+  warnings should be reflected when relevant.
 - Judge the answer against returned data, not fixed process names or percentages.
   A single high reading is not evidence of unusual load without a baseline.
+
+### Cross-case pass/fail checklist
+
+Apply these criteria wherever relevant, including the slow-build scenario.
+See [memory and causal limits](mcp.md#memory-and-causal-limits) for unobserved metrics.
+
+| Pass | Fail |
+| --- | --- |
+| Preserves `snapshot_id` during multi-step diagnosis; explicitly restarts if it expires. | Mixes snapshots or silently refreshes during a drill-down. |
+| Attributes Docker/container membership only with returned hierarchy evidence, such as parent/child relationships. | Claims container membership without parent/child evidence, or from process names/source labels alone. |
+| Treats a `null` environment observation as inconclusive about usage. | Treats `null` as zero usage or proof that a backend is idle/absent. |
+| Does not infer paging, swap, or disk-I/O bottlenecks from memory usage alone. | Claims `Memory Compression` proves paging, or claims disk I/O or memory stall without supporting metrics. |
+| Distinguishes observed facts from hypotheses. | Presents a speculative diagnosis as a confirmed cause. |
+| Uses cautious wording such as "likely" or "may contribute" when causality is not directly observed. | Declares memory pressure to be the bottleneck from high usage or relatively low available memory alone. |
 
 ## Cases
 
@@ -173,6 +215,45 @@ No children or containers were observed. A concise, evidence-bounded answer was:
 The sample does not establish the exact build task or disk I/O waits; those require
 supporting observations elsewhere. Long opaque IDs and raw JSON-RPC/session logs
 are deliberately omitted. This example does not claim all ten cases were run.
+
+## Observed GitHub Copilot CLI failure example
+
+Manual GitHub Copilot CLI testing used this scenario:
+
+> My build is running slowly.
+> Use wsltop MCP to identify the likely bottleneck and explain which environment,
+> container, and process are responsible.
+
+The trace showed useful tool selection: `get_system_summary`, reuse of a pinned
+snapshot, `list_resources` sorted by memory and CPU, and a container query.
+It identified build-related CPU consumers. However, the final interpretation
+exceeded the observations:
+
+- No container resources were returned, yet the answer claimed `cc1plus` was
+  "in both a Docker container and WSL" without returned hierarchy evidence.
+- The Docker environment observation was `null`, but the answer drew a stronger
+  conclusion from it than the available coverage supported.
+- High memory usage plus `Memory Compression` was interpreted as proof of paging
+  and a memory-pressure bottleneck.
+- The causal diagnosis exceeded what wsltop actually observes; page fault rate,
+  swap/pagefile I/O, disk I/O wait, memory stall / PSI, and paging latency were
+  not measured.
+
+Expected behavior: report that WSL CPU load is high and memory usage is also high;
+identify the observed build-related processes, but do not assert Docker attribution
+without hierarchy evidence. Do not claim paging or a memory-pressure bottleneck
+without additional metrics. A bounded interpretation would be:
+
+> WSL CPU load is high, with build-related processes among the CPU consumers.
+> Memory usage is also high and may contribute to the slowdown. No container
+> resources were returned, and the Docker observation is null, so this snapshot
+> does not establish Docker membership or zero Docker usage. CPU contention is
+> a possible contributor; paging and a memory-pressure bottleneck are not
+> established by these observations.
+
+This is a summary of the reported manual session, with raw logs and opaque IDs
+omitted. It records an agent interpretation failure, not a collector or protocol
+change, and does not claim that the updated guidance has passed a new live run.
 
 ## Record and regression checks
 

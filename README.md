@@ -470,8 +470,9 @@ observations. The result, summarized for readability:
 > is not saturated.
 
 Parent/child and environment values may overlap and **must not be summed**.
-This is a likely diagnosis, not proof: wsltop cannot establish unobserved disk I/O
-waits or the exact build task without supporting observations elsewhere.
+This is a likely diagnosis: agents should not infer paging, disk-I/O stalls,
+memory-pressure causality, container membership, or the exact build task without
+supporting observations; see the [observation limits](docs/mcp.md#memory-and-causal-limits).
 See the [agent workflow](docs/mcp.md#agent-workflow-example) and
 [manual agent evaluation guide](docs/mcp-agent-evaluation.md).
 

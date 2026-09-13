@@ -121,7 +121,12 @@ or IDs derived from a PID or name. Do not send `max_age_ms` alongside `snapshot_
 An empty child list is valid: it means no immediate children were observed.
 An empty container list is also valid and is not a tool error. Say that no
 containers were observed in this snapshot; a `null` environment total does not
-prove a backend is idle or absent. Check snapshot warnings and available coverage.
+necessarily mean zero usage or prove a backend is idle or absent. An empty
+container list cannot always distinguish an unavailable backend from a successful
+collection with no containers. Check snapshot warnings and available coverage.
+Do not infer container membership unless the returned hierarchy supports it,
+such as explicit `parent_ids` or a container's returned children. Process names
+and source labels alone do not establish that a process runs inside Docker.
 
 In the actual Codex session summarized in the [README](../README.md#agent-example-a-slow-build),
 WSL had the largest environment CPU observation. Ubuntu's `gw_sh` used about
@@ -139,6 +144,22 @@ Avoid inferring a missing component's usage by subtracting overlapping totals.
 
 Use the [manual agent evaluation guide](mcp-agent-evaluation.md) to recheck tool
 selection and snapshot handling after changing descriptions or APIs.
+
+### Memory and causal limits
+
+High memory usage may indicate pressure, but wsltop does not by itself establish
+paging, swapping, disk-I/O stalls, or memory-pressure causality. It does not
+directly observe page fault rate, swap/pagefile I/O, disk I/O wait, memory stall /
+PSI, or paging latency.
+
+High memory usage alone does not establish a memory bottleneck. The presence of
+the `Memory Compression` process does not prove paging or a paging bottleneck;
+relatively low available memory does not prove swapping is occurring, and memory
+usage does not establish disk I/O wait. Separate observed facts from hypotheses:
+say "memory usage is high and may contribute," rather than "memory pressure is
+the bottleneck" without additional supporting metrics. Use "likely" or "may
+contribute" for hypotheses supported by observations, and identify what remains
+unmeasured.
 
 ## Tools and snapshots
 
