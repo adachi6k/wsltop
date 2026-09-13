@@ -9,7 +9,7 @@ published versions and downloads.
 | Record | Coverage |
 | --- | --- |
 | [2026-09-05 Windows-native](2026-09-05-windows-native.md) | Archive and TUI smoke tests |
-| [2026-09-06 v0.4.0](2026-09-06-v0.4.0.md) | Release acceptance and post-release checks |
+| [2026-09-06 v0.4.0](2026-09-06-v0.4.0.md) | Release preparation results and pending publication checklist |
 | [2026-09-12 compact header](2026-09-12-compact-header.md) | Rendering, history, colors and terminal restoration |
 | [2026-09-12 summary memory](2026-09-12-summary-memory.md) | Windows RAM collector on a real host |
 | [2026-09-12 v0.5.0](2026-09-12-v0.5.0.md) | Compatibility and release gates |
