@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-14
+
+### Changed
+
+- Improved MCP onboarding for AI agents with practical Codex and GitHub Copilot CLI setup and usage examples.
+- Documented multi-step diagnosis using system summary, resource listing, inspection, and hierarchy drill-down, preserving the same snapshot and observation-scoped resource IDs.
+- Added an agent evaluation checklist and reusable manual test scenarios for MCP tool selection, arguments, and reasoning.
+- Clarified that null environment observations do not necessarily mean zero usage and that container membership requires evidence from the returned hierarchy.
+- Clarified that high memory usage alone does not prove paging, swapping, disk-I/O stalls, or memory-pressure causality.
+- Improved MCP tool descriptions and guidance for snapshot reuse and safer interpretation.
+
+This is a documentation and guidance-focused patch release. There are no MCP
+protocol breaking changes, no new write/action tools, and no CLI/TUI behavior
+changes intended. The MCP protocol, CLI/TUI behavior, and read-only safety model
+remain compatible with v0.5.1.
+
 ## [0.5.1] - 2026-09-13
 
 ### Added
@@ -148,7 +164,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/adachi6k/wsltop/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/adachi6k/wsltop/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/adachi6k/wsltop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/adachi6k/wsltop/compare/v0.3.0...v0.4.0
