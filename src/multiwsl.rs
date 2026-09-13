@@ -5,6 +5,10 @@ use std::process::Command;
 use std::process::{Output, Stdio};
 use std::time::Instant;
 
+// Longer than Linux TASK_COMM_LEN (16 bytes including the terminator), so a
+// task name containing newlines cannot impersonate the system-section boundary.
+const SYSTEM_MARKER: &str = "\nWSLTOP_SYSTEM_COUNTERS_BEGIN\n";
+
 pub fn running_distros() -> Result<Vec<String>, Box<dyn Error>> {
     list_distros(&["--list", "--running", "--quiet"])
 }
@@ -57,7 +61,7 @@ pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn 
 fn snapshot_script(primary: bool) -> String {
     let script = "clock_ticks=$(getconf CLK_TCK) || exit; page_size=$(getconf PAGESIZE) || exit; printf '%s %s\\n' \"$clock_ticks\" \"$page_size\" || exit; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\" 2>/dev/null || :; done";
     if primary {
-        format!("{script}; printf '\\nWSLTOP_SYSTEM\\n'; grep '^cpu' /proc/stat 2>/dev/null || :; printf 'UPTIME '; cat /proc/uptime 2>/dev/null || :; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id 2>/dev/null || :")
+        format!("{script}; printf '%s' '{SYSTEM_MARKER}'; grep '^cpu' /proc/stat 2>/dev/null || :; printf 'UPTIME '; cat /proc/uptime 2>/dev/null || :; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id 2>/dev/null || :")
     } else {
         script.into()
     }
@@ -85,7 +89,7 @@ fn run_wsl_script(distro: Option<&str>, script: &str) -> Result<Output, Box<dyn 
 }
 
 fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn Error>> {
-    let (text, system) = text.split_once("\nWSLTOP_SYSTEM\n").unwrap_or((text, ""));
+    let (text, system) = text.split_once(SYSTEM_MARKER).unwrap_or((text, ""));
     let mut lines = text.lines();
     let header: Vec<_> = lines
         .next()
@@ -166,8 +170,8 @@ fn decode_wsl_text(bytes: &[u8]) -> String {
 mod tests {
     #[test]
     fn shared_counters_are_requested_only_for_primary_distribution() {
-        assert!(super::snapshot_script(true).contains("WSLTOP_SYSTEM"));
-        assert!(!super::snapshot_script(false).contains("WSLTOP_SYSTEM"));
+        assert!(super::snapshot_script(true).contains(super::SYSTEM_MARKER));
+        assert!(!super::snapshot_script(false).contains(super::SYSTEM_MARKER));
         assert!(!super::snapshot_script(false).contains("/proc/uptime"));
     }
 
@@ -198,21 +202,58 @@ mod tests {
     fn remote_system_counters_are_optional_and_separate_from_process_rows() {
         let old = super::parse_snapshot(
             None,
-            "100 4096\n\nWSLTOP_SYSTEM\ncpu 100 0 0 0 0 0 0\ncpu0 0\nUPTIME 10 0\nBOOT boot-a\n",
+            &format!(
+                "100 4096\n{}cpu 100 0 0 0 0 0 0\ncpu0 0\nUPTIME 10 0\nBOOT boot-a\n",
+                super::SYSTEM_MARKER
+            ),
         )
         .unwrap();
         let new = super::parse_snapshot(
             None,
-            "100 4096\n\nWSLTOP_SYSTEM\ncpu 200 0 0 0 0 0 0\ncpu0 0\nUPTIME 11 0\nBOOT boot-a\n",
+            &format!(
+                "100 4096\n{}cpu 200 0 0 0 0 0 0\ncpu0 0\nUPTIME 11 0\nBOOT boot-a\n",
+                super::SYSTEM_MARKER
+            ),
         )
         .unwrap();
         assert!(new.processes.is_empty());
         assert_eq!(crate::linux_cpu::usage(&old, &new, 2), Some(50.0));
         let missing = super::parse_snapshot(None, "100 4096\n").unwrap();
         assert!(missing.system_cpu.is_none());
-        let malformed =
-            super::parse_snapshot(None, "100 4096\n\nWSLTOP_SYSTEM\nUPTIME x\nBOOT b\n").unwrap();
+        let malformed = super::parse_snapshot(
+            None,
+            &format!("100 4096\n{}UPTIME x\nBOOT b\n", super::SYSTEM_MARKER),
+        )
+        .unwrap();
         assert!(malformed.system_cpu.is_none());
+    }
+    #[test]
+    fn newline_task_name_cannot_truncate_later_rows_or_system_counters() {
+        assert!(super::SYSTEM_MARKER.trim().len() > 16);
+        let fields = "S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 777 0 3";
+        let processes = format!("100 4096\n41 (before) {fields}\n42 (\nWSLTOP_SYSTEM\n) {fields}\n43 (after) {fields}\n");
+        for primary in [false, true] {
+            let text = if primary {
+                format!(
+                    "{processes}{}cpu 100 0 0 0 0 0 0\ncpu0 0\nUPTIME 10 0\nBOOT boot-a\n",
+                    super::SYSTEM_MARKER
+                )
+            } else {
+                processes.clone()
+            };
+            let snapshot = parse_snapshot(None, &text).unwrap();
+            // The line-oriented process parser skips the multiline record, but
+            // it must retain subsequent records and the real system section.
+            assert_eq!(
+                snapshot
+                    .processes
+                    .iter()
+                    .map(|row| row.key.pid)
+                    .collect::<Vec<_>>(),
+                vec![41, 43]
+            );
+            assert_eq!(snapshot.system_cpu.is_some(), primary);
+        }
     }
     use super::{decode_wsl_text, parse_snapshot, parse_snapshot_bytes};
     #[test]
