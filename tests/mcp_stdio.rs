@@ -105,7 +105,22 @@ fn stdio_initialization_discovery_errors_and_eof() {
     let tools = client.request("tools/list", json!({}));
     let tools = tools["result"]["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 4);
+    let mut names: Vec<_> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "get_system_summary",
+            "inspect_resource",
+            "list_children",
+            "list_resources"
+        ]
+    );
     for tool in tools {
+        assert!(!tool["description"].as_str().unwrap().trim().is_empty());
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
         assert_eq!(tool["annotations"]["destructiveHint"], false);
         assert_eq!(tool["inputSchema"]["additionalProperties"], false);

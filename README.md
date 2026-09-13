@@ -6,6 +6,8 @@
 
 `wsltop` provides a one-shot CLI and interactive terminal UI on both Windows and WSL. A graphical UI is outside the current scope.
 
+AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
+
 The default TUI has a compact two-line host CPU/RAM summary, history graphs and
 colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity.
 Use `--header classic` for the traditional one-line header and `--color never`
@@ -413,11 +415,40 @@ wsltop --once --json
 
 JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 
-## MCP
+<a id="mcp"></a>
 
-Starting with v0.5.1, `wsltop mcp` provides a read-only stdio server for system
-summary, resource listing, inspection, and child traversal.
-See [MCP setup and snapshot semantics](docs/mcp.md).
+## Use wsltop from AI agents
+
+With v0.5.1 or later, your MCP client can launch `wsltop mcp` as a local stdio
+server. It is **read-only and observability-only**: no shell or arbitrary command
+execution tools, process kill/termination, container stop/control, or network listener.
+The four tools are `get_system_summary`, `list_resources`, `inspect_resource`,
+and `list_children`.
+
+For a client running in WSL/Linux, add this stdio server configuration (replace
+`<user>` with your username). Run `command -v wsltop` to check the absolute path:
+
+```json
+{
+  "mcpServers": {
+    "wsltop": {
+      "command": "/home/<user>/.cargo/bin/wsltop",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+For a Windows client, use the absolute path to `wsltop.exe` as `command`, with
+the same `["mcp"]` args. Configuration formats vary by client; see
+[MCP quick start and snapshot semantics](docs/mcp.md#quick-start).
+
+Once connected, ask your agent:
+
+- “What is using the most CPU on my machine?”
+- “Which Windows, WSL, Docker, or WSLC workload uses the most memory?”
+- “Inspect the busiest resource and explain its immediate children.”
+- “Compare current Windows, WSL, Docker, and WSLC usage.”
 
 ## Limitations
 

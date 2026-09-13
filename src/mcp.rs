@@ -346,10 +346,10 @@ fn tool(name: &'static str) -> Tool {
     };
     let schema = json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
     let description = match name {
-        "get_system_summary" => "Get numeric system observations and snapshot metadata. Environment totals may overlap.",
-        "list_resources" => "List unique observed resources with filters and shared sorting. Pass snapshot_id to preserve observation consistency.",
-        "inspect_resource" => "Inspect one opaque resource ID in its original retained snapshot.",
-        _ => "List immediate observed attribution/application children within a retained snapshot. Child usage is included in parents.",
+        "get_system_summary" => "Start CPU or memory diagnosis here: get Windows host and WSL, Docker, and WSLC observations plus snapshot metadata. Usage can overlap; do not sum it.",
+        "list_resources" => "Find processes, applications, containers, or infrastructure using CPU or memory with sort_by, filters, and limit. Reuse snapshot_id when following up on a summary; returned resource IDs belong to that observation.",
+        "inspect_resource" => "Inspect details of a resource found by list_resources or list_children. Pass its returned resource_id together with the same snapshot_id.",
+        _ => "Drill into a container, application, or attribution hierarchy's immediate children. Pass the parent's resource_id and the same snapshot_id; child usage overlaps parent usage.",
     };
     Tool::new(name, description, schema.as_object().unwrap().clone()).with_annotations(
         ToolAnnotations::from_raw(None, Some(true), Some(false), Some(false), Some(false)),

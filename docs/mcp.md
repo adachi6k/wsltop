@@ -6,9 +6,21 @@ Tracked in [#43](https://github.com/adachi6k/wsltop/issues/43), within roadmap
 Requires wsltop v0.5.1 or later. Use a prebuilt binary or Cargo installation from
 the [README](../README.md#quick-start); v0.5.0 does not include MCP.
 
-Run `wsltop mcp` from your MCP client. The server uses local stdin/stdout, exposes
-four read-only tools, and has no shell/terminate/kill/container-control tools or
-network listener. Normal CLI/TUI and `--json` output remain separate.
+Run `wsltop mcp` from your AI agent's MCP client. This is a **read-only,
+observability-only** local stdio server: it exposes no process termination/kill,
+shell or arbitrary command execution tools, container stop/control, or network
+listener. Normal CLI/TUI and `--json` output remain separate.
+
+## Quick start
+
+Install wsltop v0.5.1 or later using the [README quick start](../README.md#quick-start).
+Configure your client to launch the executable with `["mcp"]` arguments and stdio
+transport; the client starts the server, so no separate background service is needed.
+Use an **absolute executable path**, not `~` or an unexpanded environment variable.
+The examples use the common `mcpServers` form; adapt the surrounding configuration
+to your client's documented stdio-server format.
+
+### Client running in WSL/Linux
 
 For a client running in WSL, point its server configuration at your installed binary.
 For a default Cargo installation, replace `<user>` with your Linux username:
@@ -24,20 +36,72 @@ For a default Cargo installation, replace `<user>` with your Linux username:
 }
 ```
 
-Use the absolute executable path returned by `command -v wsltop` if you installed
-elsewhere. For a source build, use the checkout's `target/release/wsltop` instead.
+Check the installed executable's absolute path with `command -v wsltop` and use
+that path if your Cargo install location differs.
 
-For a Windows client, use the absolute path to the installed or extracted `wsltop.exe` as `command`
-with the same `args`. MCP client configuration formats vary; the example uses the
-common `mcpServers` form. The executable requires the same WSL/interoperability
+### Client running on Windows
+
+Use the absolute path to the installed or extracted `wsltop.exe`. JSON requires
+escaped backslashes; replace this example path with your actual location:
+
+```json
+{
+  "mcpServers": {
+    "wsltop": {
+      "command": "C:\\Tools\\wsltop\\wsltop.exe",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Source build
+
+Run `cargo build --release --locked` from the checkout. For a WSL client, replace
+the command in the configuration above with your checkout's absolute build path:
+
+```json
+{
+  "command": "/home/<user>/src/wsltop/target/release/wsltop",
+  "args": ["mcp"]
+}
+```
+
+For a Windows source build, use the absolute path to `target\release\wsltop.exe`.
+
+Enable or reload the server in your client and check that it discovers the four
+tools below. Start by asking “Why is my machine busy?”
+
+The executable requires the same WSL/interoperability
 setup as regular wsltop. On Windows, normal primary-distro selection still applies
 and may start that distro. Collection uses the local process's existing access.
 
 Startup options are restricted to `--interval-ms N` (100–60000; default 3000),
 `--wsl-only`, `--no-docker`, `--no-wslc`, and Windows-native `--distro NAME`.
 `wsltop mcp --help` prints standalone help and exits. Display/JSON flags are not
-accepted in server mode. Startup errors go to stderr; stdout is only MCP JSON-RPC
-once the server starts. Closing stdin shuts it down.
+accepted in server mode. Once the server starts, stdout is exclusively MCP
+JSON-RPC; startup/diagnostic output belongs on stderr. Do not use a launch wrapper
+that prints banners to stdout. Closing stdin shuts it down.
+
+## Agent workflow
+
+User: “Why is my machine busy?”
+
+Suggested tool flow (shown as tool calls, not shell commands):
+
+1. `get_system_summary()` — inspect host CPU/RAM and the environment observations;
+   save the returned `snapshot.snapshot_id` as `S`.
+2. `list_resources(snapshot_id=S, sort_by="cpu", sort_order="desc", limit=5)` —
+   find busy resources; save a returned `resource_id` as `R`.
+3. `inspect_resource(snapshot_id=S, resource_id=R)` — inspect that resource.
+4. `list_children(snapshot_id=S, resource_id=R)` — drill into its immediate
+   application/container/attribution children, if any.
+
+Use `sort_by="memory"` for memory diagnosis; filter by `environment` or
+`resource_kind` when narrowing the investigation. Keep the returned `snapshot_id`
+throughout a drill-down: `resource_id` is observation-scoped and must travel with
+its snapshot ID. If that snapshot expires, start again and obtain new IDs.
+Host, environment and parent/child usage overlap; **do not add them together**.
 
 ## Tools and snapshots
 
