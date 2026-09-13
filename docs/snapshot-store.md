@@ -1,9 +1,8 @@
-# Snapshot retention foundation
+# Snapshot retention contract
 
-Second internal slice of [#24](https://github.com/adachi6k/wsltop/issues/24), tracked
-in [#37](https://github.com/adachi6k/wsltop/issues/37), using
-the [resource identity contract](resource-identity.md). There is no new CLI or
-MCP entry point yet. Existing collection, TUI, and compatibility JSON are unchanged.
+The snapshot store uses the [resource identity contract](resource-identity.md)
+and supplies retained observations to the [Query service](query-service.md) and
+[MCP adapter](mcp.md). Existing collection, TUI, and compatibility JSON are unchanged.
 
 ## Read contract
 
@@ -54,7 +53,7 @@ sequence numbers do not reset. The owner must discard any in-flight collection
 from the previous namespace and serialize rotation/collection/insertion; this
 store does not supervise collector tasks or detect host/distro/container restarts.
 
-## Integration still required
+## Integration
 
 This module is used by the [MCP adapter](mcp.md) through the Query service.
 The [internal Query API](query-api.md) supplies

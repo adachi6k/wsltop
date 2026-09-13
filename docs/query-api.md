@@ -1,7 +1,6 @@
 # Internal read-only Query API
 
-Next slice of [#24](https://github.com/adachi6k/wsltop/issues/24), tracked in
-[#39](https://github.com/adachi6k/wsltop/issues/39), built on the
+The internal Query API is built on the
 [snapshot store](snapshot-store.md) and [resource identities](resource-identity.md).
 `QueryView::open(store, request)` selects one retained immutable snapshot. Its
 four operations return the selected snapshot ID, capture timestamp, actual sample
@@ -53,7 +52,7 @@ observations remain missing. No uncollected resource limits or saturation values
 are fabricated. Parent/child and cross-environment observations can overlap and
 must not be summed into a host total.
 
-## Remaining integration
+## Integration
 
 The [MCP adapter](mcp.md) calls this module through the Query service. The service owns
 synchronous collection/refresh, allocates session epochs, and coordinates explicit
