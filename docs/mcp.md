@@ -93,10 +93,19 @@ Summary data includes host logical CPU count, host CPU percentage, host memory
 (total/available/used bytes), and independent environment observations. Unavailable
 values are `null`, not guessed zeros. Legacy optional collectors cannot distinguish
 every successful-empty result from an unavailable backend, so empty Docker/WSLC
-summaries conservatively remain `null`. Incomplete environment samples also remain
-unavailable. WSL-only native Linux sampling labels CPU scope `wsl_visible`; normal
+summaries conservatively remain `null`. WSL `cpu_percent` and `memory_bytes` are
+independently nullable: missing kernel counters do not hide valid RSS, and an
+incomplete process collection does not hide valid kernel CPU. The entire WSL
+observation is `null` only when both metrics are unavailable.
+WSL-only native Linux sampling labels CPU scope `wsl_visible`; normal
 and Windows-native sampling use `windows_host`. Host, environment, and parent/child
 usage can overlap and must not be added together.
+
+WSL category CPU is the shared kernel total, sampled once through the primary
+distribution from `/proc/stat`, including short-lived tasks and kernel work.
+It can include other distributions even with `--wsl-only` and overlap container
+statistics. WSL RAM remains observed process RSS; process rows keep their existing
+sampling semantics. See [CPU accounting](cpu-accounting.md#wsl-category-cpu).
 
 Unknown tools and invalid arguments produce JSON-RPC invalid-params errors before
 collection. Operational failures use `isError: true` and an error object with a

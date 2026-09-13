@@ -72,6 +72,7 @@ pub struct ProcessSample {
 
 #[derive(Debug, Clone)]
 pub struct Snapshot {
+    pub system_cpu: Option<crate::linux_cpu::Sample>,
     pub captured_at: Instant,
     pub processes: Vec<ProcessSample>,
 }

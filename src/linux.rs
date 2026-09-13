@@ -33,6 +33,14 @@ pub fn snapshot() -> io::Result<Snapshot> {
     }
 
     Ok(Snapshot {
+        system_cpu: fs::read_to_string("/proc/stat").ok().and_then(|stat| {
+            crate::linux_cpu::Sample::parse(
+                &stat,
+                &fs::read_to_string("/proc/uptime").ok()?,
+                &fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?,
+                clock_ticks,
+            )
+        }),
         captured_at: Instant::now(),
         processes,
     })

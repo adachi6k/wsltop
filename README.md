@@ -306,9 +306,13 @@ RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2
 These example values are **independent observations, not an additive breakdown**:
 
 - `Win` sums observed Windows processes, excluding WSL/WSLC VM host rows.
-- `WSL` sums observed processes in the primary and collected additional WSL distributions. It can include
-  Docker workloads also reported under `Docker`.
+- `WSL` CPU uses the shared WSL kernel's `/proc/stat` counters, sampled once through
+  the primary distribution. It includes short-lived processes and kernel work,
+  including other distributions even with `--wsl-only`. Container workloads in
+  that same kernel may also appear under `Docker` or `WSLC`.
 - `WSLC` and `Docker` sum container statistics, excluding child process detail rows.
+- Even without container overlap, Win process time and WSL guest-kernel time are
+  not an additive physical-CPU breakdown; see [CPU accounting](docs/cpu-accounting.md#wsl-category-cpu).
 - Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
   statistics respectively. Shared pages and overlapping observations mean these
   values must not be summed or subtracted from host physical RAM.
@@ -368,7 +372,13 @@ WSLC collection uses the current/default CLI session. A single available `vmmemw
 
 Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,time,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container. If the process backend does not support `time`, wsltop retries the older column set and leaves TIME+ unavailable instead of dropping the container detail.
 
-Docker Desktop containers run in Docker Desktop's own Linux VM, so they are shown under an independent top-level `Docker` group. They are not manufactured as children of the current WSL VM. The legacy current-WSL PID-matching path is used only if sharing of the host PID namespace has been positively established; the current Docker Desktop path does not make that claim. Text/TUI output includes Docker and WSLC process rows by default while preserving each container row; use `--hide-container-processes` to suppress them (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
+Docker Desktop's WSL 2 backend shares the WSL kernel, so its CPU is already included
+in the WSL category total. A separate Hyper-V backend does not share that kernel.
+Kernel sharing does not establish a shared PID namespace or a verified attribution
+parent: Docker stays a top-level group unless host/PID mapping is proven.
+See [Docker's WSL backend documentation](https://docs.docker.com/desktop/features/wsl/).
+
+Text/TUI output includes Docker and WSLC process rows by default while preserving each container row; use `--hide-container-processes` to suppress them (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
 
 A missing `wslc.exe`, missing Docker CLI, or recognized unavailable Docker daemon is treated as an expected absence: its rows are silently omitted and monitoring continues. Unexpected command, output, parse, or per-container attribution failures are reported through the common warning path. Use `--no-wslc` or `--no-docker` to disable a collector intentionally.
 
