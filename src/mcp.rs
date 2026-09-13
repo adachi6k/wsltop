@@ -346,8 +346,8 @@ fn tool(name: &'static str) -> Tool {
     };
     let schema = json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
     let description = match name {
-        "get_system_summary" => "Start CPU or memory diagnosis here: get Windows host and WSL, Docker, and WSLC observations plus snapshot metadata. Usage can overlap; do not sum it.",
-        "list_resources" => "Find processes, applications, containers, or infrastructure using CPU or memory with sort_by, filters, and limit. Reuse snapshot_id when following up on a summary; returned resource IDs belong to that observation.",
+        "get_system_summary" => "Start CPU or memory diagnosis here: get observed host and environment CPU/memory state plus snapshot metadata. Usage can overlap; do not sum it. Null does not imply zero usage. Do not infer paging, disk I/O, or memory-pressure causality from memory usage alone.",
+        "list_resources" => "Find processes, applications, containers, or infrastructure by CPU/memory, filters, and limit. Reuse snapshot_id for follow-ups; resource IDs belong to that observation. Use returned hierarchy for attribution; do not infer container membership from process names or source labels alone.",
         "inspect_resource" => "Inspect details of a resource found by list_resources or list_children. Pass its returned resource_id together with the same snapshot_id.",
         _ => "Drill into a container, application, or attribution hierarchy's immediate children. Pass the parent's resource_id and the same snapshot_id; child usage overlaps parent usage.",
     };

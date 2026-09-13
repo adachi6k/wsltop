@@ -450,6 +450,32 @@ Once connected, ask your agent:
 - “Inspect the busiest resource and explain its immediate children.”
 - “Compare current Windows, WSL, Docker, and WSLC usage.”
 
+### Agent example: a slow build
+
+An actual Codex session used this prompt:
+
+> My build is running slowly.
+> Use wsltop MCP to identify the likely bottleneck and explain which environment,
+> container, and process are responsible.
+
+The agent called `get_system_summary`, `list_resources`, `inspect_resource`, and
+`list_children`, plus a container-filtered listing, keeping the **same snapshot
+while drilling down**. wsltop MCP distinguishes Windows, WSL, Docker, and WSLC
+observations. The result, summarized for readability:
+
+> The current load is mainly from WSL. The busiest process, `gw_sh` in Ubuntu,
+> is using about one CPU core. No Docker or WSLC container is observed as
+> responsible in this snapshot. Overall host CPU usage is moderate, so if this
+> process is the build, limited parallelism is a likely bottleneck; host CPU
+> is not saturated.
+
+Parent/child and environment values may overlap and **must not be summed**.
+This is a likely diagnosis: agents should not infer paging, disk-I/O stalls,
+memory-pressure causality, container membership, or the exact build task without
+supporting observations; see the [observation limits](docs/mcp.md#memory-and-causal-limits).
+See the [agent workflow](docs/mcp.md#agent-workflow-example) and
+[manual agent evaluation guide](docs/mcp-agent-evaluation.md).
+
 ## Limitations
 
 - WSL1 is unsupported and untested; use WSL2.
