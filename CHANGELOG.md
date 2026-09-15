@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-16
+
 ### Fixed
 
 - Windows process CPU collection uses raw performance counters instead of treating denied `Get-Process.CPU` access as zero. Provider timestamps avoid measurement distortion from PowerShell execution time, while process identities remain compatible with application grouping.
@@ -186,7 +188,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/adachi6k/wsltop/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/adachi6k/wsltop/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/adachi6k/wsltop/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/adachi6k/wsltop/compare/v0.4.0...v0.5.0
