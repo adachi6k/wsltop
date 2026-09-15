@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows process CPU collection uses raw performance counters instead of treating denied `Get-Process.CPU` access as zero. Provider timestamps avoid measurement distortion from PowerShell execution time, while process identities remain compatible with application grouping.
+- Win CPU in the compact header includes Windows system work, interrupts and short-lived tasks through root-partition counters. On Hyper-V hosts, total CPU uses physical execution counters collected with root/guest counters in one query; invalid or unavailable samples show `N/A`.
+- Verified Docker/WSLC CPU is separated from WSL to avoid double counting. Kernel boot and leaf cgroup v2 identities establish the supported shared scope; cumulative counters are interpolated over a common measurement window. Exact cgroup aliases exposed by both backends count once under Docker.
+- WSL, additional-distribution, WSLC and Docker refresh scheduling accounts for collection duration, reducing drift between observations.
+
+### Added
+
+- `WSL*` and explanatory warnings when container CPU overlap cannot be resolved. Inclusive observations are retained on missing, stale, reset, foreign-kernel or unsupported samples; negative residuals are not clamped.
+- MCP system summaries expose nullable `cpu_breakdown` and boolean `cpu_overlap_unresolved` fields.
+
+### Changed
+
+- The compact header preserves the two-line Win / WSL / WSLC / Docker layout. Verified guest summary CPU uses common-window estimates; RAM and individual resource rows retain their existing accounting. Host and guest totals can still differ.
+- CPU overlap detection runs bounded, read-only shell probes in existing containers through `docker exec` / `wslc.exe exec`, independently of process-detail visibility. Probes require shell utilities and dedicated leaf cgroup v2 scopes; unsupported images/configurations or more than 16 containers per backend retain `WSL*`. No containers are started or modified, and no privileges are elevated.
+- One-shot collection samples container counters twice and brackets them with kernel observations, which can increase collection time beyond the requested interval.
+
+See the [CPU accounting documentation](docs/cpu-accounting.md#container-overlap)
+and [real-host validation](docs/validation/2026-09-16-exclusive-guest-cpu.md)
+for supported configurations, measured results and remaining limitations.
+
 ## [0.5.2] - 2026-09-14
 
 ### Changed
