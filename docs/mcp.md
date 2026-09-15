@@ -163,6 +163,14 @@ unmeasured.
 
 ## Tools and snapshots
 
+`get_system_summary` exposes an additive host `cpu_breakdown` (`total`,
+`windows`, `virtual_machines`, `other`). With Hyper-V, these are physical/root/
+guest performance counters, including short-lived work and system processing.
+`virtual_machines` covers all guest partitions, not just WSL. Missing or
+inconsistent partition samples return null. The `environments` values retain
+their independent process/guest/container scopes and must not be added to this
+breakdown. See [CPU accounting](cpu-accounting.md).
+
 | Tool | Arguments |
 | --- | --- |
 | `get_system_summary` | Optional `snapshot_id` or `max_age_ms` |

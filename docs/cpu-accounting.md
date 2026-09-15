@@ -28,7 +28,56 @@ CPU% = delta_cpu_seconds / elapsed_seconds
        / host_logical_cpu_count * 100
 ```
 
-Windows cumulative time comes from `Get-Process .CPU`. In WSL-native execution, current-distribution cumulative time is read directly from `/proc/<pid>/stat`, while additional distributions provide equivalent values through `wsl.exe -d` collection. In Windows-native execution, both the selected primary distribution and additional distributions are sampled remotely through `wsl.exe`.
+Windows cumulative time comes from `Win32_PerfRawData_PerfProc_Process.PercentProcessorTime`
+(100ns ticks). `Get-Process.CPU` can be access-denied for System, Defender, and
+other users' services; those failures are no longer converted to zero. Missing
+required counters fail collection. Windows process rates use the provider's
+`Timestamp_Sys100NS` delta, independent of PowerShell completion latency.
+Process creation time is retained in PID identity and truncated to the same
+microsecond precision as `Win32_Process.CreationDate` application metadata.
+
+In WSL-native execution, current-distribution cumulative time is read directly from `/proc/<pid>/stat`, while additional distributions provide equivalent values through `wsl.exe -d` collection. In Windows-native execution, both the selected primary distribution and additional distributions are sampled remotely through `wsl.exe`.
+
+Process rows still require a matching identity in both samples. They are useful
+attribution observations, not the source of the header's host CPU partitions.
+
+## Additive host CPU header
+
+The compact CPU header shows **Win + VM + Other = total**:
+
+- **Win**: Hyper-V root partition execution, including Windows system work,
+  interrupts and processes that exit between observations.
+- **VM**: execution in all Hyper-V guest partitions, including WSL, WSLC,
+  Docker virtual machines and unrelated VMs. This is not a per-distro reading.
+- **Other**: physical execution not assigned to the root/guest measurements,
+  including hypervisor work.
+
+All three counter sets are read with one PDH query, using language-neutral
+[English counter paths](https://learn.microsoft.com/en-us/windows/win32/api/pdh/nf-pdh-pdhaddenglishcounterw).
+Physical, root and guest instance deltas use each
+counter's precision-timer base and are normalized by the host logical CPU
+count. Guest vCPU count is not used as the denominator. Instance changes,
+counter resets, missing instances, and root/guest totals exceeding physical
+usage invalidate the sample; values are not rescaled to force agreement.
+The calculation uses the raw counter's first/second values and checks its
+[PDH status](https://learn.microsoft.com/en-us/windows/win32/api/pdh/ns-pdh-pdh_raw_counter).
+
+On hosts without a hypervisor, GetSystemTimes (or the system-wide counter on
+multi-group hosts) supplies the total, all assigned to Win. When host partition
+counters cannot be collected, the header shows N/A, and the collector can recover
+on subsequent valid samples. Host-only totals are not silently substituted for
+physical Hyper-V CPU. `--wsl-only` disables the host CPU breakdown.
+
+The displayed one-decimal partitions use largest-remainder rounding so the
+displayed numbers add to the displayed total. Stored raw percentages are never
+scaled. Filters, process limits and core-style row display do not affect these
+whole-host percentages. RAM remains a collection of independent observations.
+
+MCP `get_system_summary` includes `cpu_breakdown` with `total`, `windows`,
+`virtual_machines`, and `other`; it is null when unavailable. The existing
+`environments` CPU values remain independent process/guest/container observations.
+
+See the [measured investigation and fix](validation/2026-09-15-cpu-accounting-fix.md).
 
 The same cumulative value is exposed as `TIME+` in text/TUI output. It is CPU time consumed, not elapsed wall-clock age, and is formatted as unbounded minutes plus seconds and hundredths (`MM:SS.hh`). Windows application TIME+ sums the currently observed member processes, so it may decrease when a member exits. JSON exposes the underlying value as optional `cpu_time_seconds`.
 
@@ -43,7 +92,7 @@ same host count across both captures; a transition establishes a new baseline.
 
 ## WSL category CPU
 
-The WSL header/MCP CPU observation uses the primary distribution's `/proc/stat`
+The independent WSL MCP CPU observation uses the primary distribution's `/proc/stat`
 and `/proc/uptime`, collected once per sample. It covers the shared kernel across
 distributions, including short-lived/exited tasks and kernel work that a pair of
 process lists cannot account for. Additional distributions are not added again.

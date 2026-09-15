@@ -8,7 +8,7 @@ window, and collection warnings alongside their data.
 
 | Operation | Data |
 | --- | --- |
-| `get_system_summary` | Host CPU percentage, logical CPU count, physical memory information, independent environment observations |
+| `get_system_summary` | Host CPU percentage and additive Win/VM/Other breakdown, logical CPU count, physical memory information, independent environment observations |
 | `list_resources` | Unique observed resources, sorted/filtered/limited |
 | `inspect_resource(resource_id)` | One resource's numeric observations, command information, opaque ID, and observed parent IDs |
 | `list_children(resource_id)` | Immediate observed children, with the same sorting/filtering options as listing |

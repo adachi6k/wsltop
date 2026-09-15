@@ -29,6 +29,7 @@ pub struct Monitor {
 
 pub struct MonitorSnapshot {
     pub host_cpu_percent: Option<f64>,
+    pub cpu_breakdown: Option<crate::cpu_accounting::Breakdown>,
     pub host_memory: Option<crate::model::HostMemory>,
     pub host_history: crate::history::HostHistory,
     pub environment_summary: crate::summary::EnvironmentSummary,
@@ -75,6 +76,7 @@ impl MonitorSnapshot {
         let query = config.query();
         Self {
             host_cpu_percent: None,
+            cpu_breakdown: None,
             host_memory: None,
             host_history: Default::default(),
             environment_summary: Default::default(),
@@ -187,8 +189,7 @@ impl Monitor {
                     before.host_logical_cpu_count, after.host_logical_cpu_count
                 ));
             }
-            windows_usage =
-                sampler::calculate_usage(&before.snapshot, &after.snapshot, host_cpu_count);
+            windows_usage = windows::calculate_usage(before, after);
         }
         if collector_cpu_count != host_cpu_count {
             warnings.push(format!(
@@ -295,10 +296,16 @@ impl Monitor {
                 })
                 .flatten(),
         );
-        snapshot.host_cpu_percent = windows_after
-            .and_then(|sample| sample.host_cpu)
-            .zip(windows_before.and_then(|sample| sample.host_cpu))
-            .and_then(|(after, before)| after.usage_since(before));
+        snapshot.cpu_breakdown = windows_after
+            .as_ref()
+            .zip(windows_before.as_ref())
+            .and_then(|(after, before)| windows::cpu_breakdown(before, after));
+        snapshot.host_cpu_percent = snapshot.cpu_breakdown.map(|cpu| cpu.total);
+        if !self.config.wsl_only && snapshot.cpu_breakdown.is_none() {
+            snapshot
+                .warnings
+                .push("Host CPU partition counters unavailable or inconsistent; CPU is N/A".into());
+        }
         Ok(snapshot)
     }
 }

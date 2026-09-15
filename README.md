@@ -9,7 +9,9 @@
 AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
 
 The default TUI has a compact two-line host CPU/RAM summary, history graphs and
-colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity.
+an additive CPU breakdown: **Win + VM + Other = total**. VM includes all guest
+partitions; RAM keeps the independent Windows/WSL/WSLC/Docker observations.
+Process and container CPU rows remain available below the header.
 Use `--header classic` for the traditional one-line header and `--color never`
 for monochrome output. See [release notes](https://github.com/adachi6k/wsltop/releases/latest).
 

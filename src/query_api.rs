@@ -32,6 +32,7 @@ pub struct QueryReply<'a, T> {
 pub struct SystemSummary<'a> {
     pub host_logical_cpu_count: u32,
     pub host_cpu_percent: Option<f64>,
+    pub cpu_breakdown: Option<crate::cpu_accounting::Breakdown>,
     pub host_memory: Option<HostMemory>,
     pub environments: &'a EnvironmentSummary,
 }
@@ -247,6 +248,7 @@ impl<'a> QueryView<'a> {
             data: SystemSummary {
                 host_logical_cpu_count: snapshot.host_logical_cpu_count,
                 host_cpu_percent: snapshot.host_cpu_percent,
+                cpu_breakdown: snapshot.cpu_breakdown,
                 host_memory: snapshot.host_memory,
                 environments: &snapshot.environment_summary,
             },
@@ -399,6 +401,7 @@ mod tests {
         };
         MonitorSnapshot {
             host_cpu_percent: Some(40.0),
+            cpu_breakdown: None,
             host_memory: Some(HostMemory {
                 total_bytes: 2000,
                 available_bytes: 1000,

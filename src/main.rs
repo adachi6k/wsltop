@@ -1,6 +1,7 @@
 mod attribution;
 mod collector;
 mod command;
+mod cpu_accounting;
 mod docker;
 mod header;
 mod history;

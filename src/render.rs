@@ -508,6 +508,7 @@ mod tests {
             host_history: Default::default(),
             environment_summary: Default::default(),
             host_cpu_percent: None,
+            cpu_breakdown: None,
             sort: Default::default(),
             query_source: None,
             host_logical_cpu_count: 16,

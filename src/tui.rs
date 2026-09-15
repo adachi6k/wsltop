@@ -402,6 +402,7 @@ impl State {
                 self.status = error;
                 if let Some(snapshot) = &mut self.snapshot {
                     snapshot.host_cpu_percent = None;
+                    snapshot.cpu_breakdown = None;
                     snapshot.host_memory = None;
                     let now = std::time::Instant::now();
                     snapshot.host_history.cpu.record(now, None);
