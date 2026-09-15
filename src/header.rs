@@ -122,6 +122,15 @@ fn observation_memory(bytes: u64) -> String {
     unreachable!("u64 bytes fit in six cells with E units")
 }
 
+fn observation_cpu(value: f64) -> String {
+    let text = format!("{value:.1}%");
+    if text.len() <= 6 {
+        text
+    } else {
+        format!("{value:.0e}%")
+    }
+}
+
 pub fn compact(
     snapshot: Option<&MonitorSnapshot>,
     width: u16,
@@ -167,60 +176,23 @@ pub fn compact(
     let labels = ["Win", "WSL", "WSLC", "Docker"];
     let mut cpu_chips = Vec::new();
     let mut ram_chips = Vec::new();
-    let partitions = snapshot
-        .and_then(|snapshot| snapshot.cpu_breakdown)
-        .map(|cpu| cpu.tenths());
-    for (index, label) in ["Win", "VM", "Other"].iter().enumerate() {
-        let value = partitions.map_or_else(
-            || "N/A".into(),
-            |p| format!("{:.1}%", f64::from(p[index + 1]) / 10.0),
-        );
-        let style = match index {
-            0 => environment_style(EnvironmentKind::Windows, colors),
-            1 => environment_style(EnvironmentKind::Wsl, colors),
-            _ => Style::default(),
-        };
-        let mut chip = if width >= 100 {
-            format!("{label} {value:>6}")
-        } else {
-            format!("{label}{value:>6}")
-        };
-        if index == 1 {
-            let details: Vec<_> = ["WSL", "WSLC", "Docker"]
-                .iter()
-                .enumerate()
-                .map(|(i, name)| {
-                    let value = snapshot
-                        .and_then(|s| s.environment_summary.0[i + 1])
-                        .and_then(|usage| usage.cpu_percent)
-                        .map_or_else(
-                            || "N/A".into(),
-                            |v| {
-                                let text = format!("{v:.1}%");
-                                if text.len() <= 6 {
-                                    text
-                                } else {
-                                    format!("{v:.0e}%")
-                                }
-                            },
-                        );
-                    if width >= 100 {
-                        format!("{name} {value:>6}")
-                    } else {
-                        format!("{name}{value:>6}")
-                    }
-                })
-                .collect();
-            chip.push_str(&format!("({})*", details.join(",")));
-        }
-        cpu_chips.push(Span::styled(chip, style));
-    }
     for (index, label) in labels.iter().enumerate() {
         let usage = snapshot.and_then(|snapshot| snapshot.environment_summary.0[index]);
+        // Root execution includes interrupts and tasks that exit between process
+        // snapshots. Keep the API's process observations and RAM sums unchanged.
+        let cpu = if index == 0 {
+            snapshot
+                .and_then(|snapshot| snapshot.cpu_breakdown)
+                .map(|cpu| cpu.windows)
+        } else {
+            usage.and_then(|usage| usage.cpu_percent)
+        };
+        let cpu_value = cpu.map_or_else(|| "N/A".into(), observation_cpu);
         let ram_value = usage
             .and_then(|usage| usage.memory_bytes)
             .map_or_else(|| "N/A".into(), observation_memory);
         let style = environment_style(crate::summary::ENVIRONMENTS[index], colors);
+        cpu_chips.push(Span::styled(format!("{label} {cpu_value:>6}"), style));
         ram_chips.push(Span::styled(format!("{label} {ram_value:>6}"), style));
     }
     let mut cpu_total = cpu_total;
@@ -235,17 +207,6 @@ pub fn compact(
         cpu_total.push_str(&history.cpu.sparkline(columns, now, ascii));
         ram_total.push(' ');
         ram_total.push_str(&history.memory.sparkline(columns, now, ascii));
-    }
-    // Preserve both totals and all guest readings on one CPU line. Shorten the
-    // CPU history before sacrificing values; RAM retains its existing history.
-    let gap = if width >= 120 { 3 } else { 1 };
-    let chip_width: usize = cpu_chips.iter().map(|c| c.content.len()).sum::<usize>() + 3 + 2 * gap;
-    let available = usize::from(width).saturating_sub(chip_width);
-    if cpu_total.chars().count() > available {
-        cpu_total = cpu_total.chars().take(available.max(10)).collect();
-        if available < 14 {
-            cpu_total = format!("CPU {cpu:<6}");
-        }
     }
     vec![
         fit(cpu_total, &cpu_chips, width, colors),
@@ -316,15 +277,8 @@ pub fn resource_line(line: &str, colors: bool) -> Line<'static> {
     Line::raw(line.to_owned())
 }
 
-pub const HELP: &str = "CPU: Win + VM + Other = total (including display rounding).\n\n\
-Host CPU: physical execution measured by Hyper-V when present; whole host = 100%.\n\
-Win: root partition, including system work and short-lived processes.\n\
-VM: ALL guest partitions, including WSL, WSLC, Docker VMs and other VMs.\n\
-Other: physical execution not assigned to root/guest counters, including hypervisor work.\n\
-Without a hypervisor, all host CPU is Win. Invalid/missing partition samples show N/A.\n\
-Process/container CPU rows remain independent observations, not additive partitions.\n\
-VM parentheses show individual WSL, WSLC and Docker CPU readings.\n\
-The * marks overlapping guest/container observations; their sum is not VM CPU.\n\
+pub const HELP: &str = "Summary: independent observations, NOT an additive host breakdown.\n\n\
+Host CPU: physical execution (Hyper-V when present); whole host = 100%.\n\
 Host RAM: physical total minus available; G/M/K use powers of 1024.\n\
 History: left is older, right is now; fixed 0-100% scale for CPU and RAM.\n\
 Each column spans the configured refresh interval, also shown in the footer.\n\
@@ -333,7 +287,15 @@ At the default 3s interval these cover 69s and 45s respectively.\n\
 All columns shift left together; waiting slots hold the previous value.\n\
 Blank: before first sample. '!': failed/unavailable until recovery.\n\
 TERM=dumb uses ASCII levels. No host history in WSL-only.\n\
-RAM observations: Win process working sets (excluding VM hosts); WSL RSS; container CLI memory.\n\
+Win CPU: Windows root execution, including interrupts and short-lived tasks.\n\
+Without a hypervisor, Win CPU equals host CPU; unavailable counters show N/A.\n\
+WSL CPU: shared kernel total, including short-lived processes and kernel work.\n\
+Sampled once; includes other distros even with --wsl-only.\n\
+WSL CPU can overlap Docker/WSLC workloads in the same kernel.\n\
+WSLC / Docker: container totals, excluding their process detail rows.\n\
+CPU sums can differ: sampling windows, guest accounting, overlap and other VMs.\n\
+Hypervisor work is not assigned to Win; values are never scaled to fit the total.\n\
+RAM observations: Win working sets; WSL RSS; container CLI memory.\n\
 Shared pages and overlapping environments prevent adding these values.\n\
 N/A: disabled, warming up, unavailable or incomplete collection.\n\
 --wsl-only: WSL-native uses visible CPUs; Windows-native uses host CPUs.\n\
@@ -347,7 +309,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn two_rows_keep_all_guest_cpu_values_inside_vm_parentheses() {
+    fn four_environment_columns_use_root_cpu_without_forcing_a_total() {
         let mut snapshot = crate::snapshot_store::tests::snapshot(60.0);
         snapshot.cpu_breakdown = Some(crate::cpu_accounting::Breakdown {
             total: 60.0,
@@ -355,10 +317,10 @@ mod tests {
             virtual_machines: 40.0,
             other: 1.0,
         });
-        for (index, cpu) in [(1, 70.0), (2, 15.0), (3, 20.0)] {
+        for (index, cpu) in [2.0, 70.0, 15.0, 20.0].into_iter().enumerate() {
             snapshot.environment_summary.0[index] = Some(crate::summary::Usage {
                 cpu_percent: Some(cpu),
-                memory_bytes: None,
+                memory_bytes: Some(0),
             });
         }
         for width in [80, 100, 120, 150] {
@@ -372,12 +334,26 @@ mod tests {
                 Instant::now(),
             );
             assert_eq!(lines.len(), 2);
-            for value in ["70.0%", "15.0%", "20.0%", "40.0%", "Other", ")*"] {
-                assert!(lines[0].to_string().contains(value), "{}", lines[0]);
+            let cpu = lines[0].to_string();
+            for value in ["Win  19.0%", "WSL  70.0%", "WSLC  15.0%", "Docker  20.0%"] {
+                assert!(cpu.contains(value), "{cpu}");
             }
-            assert!(lines[1].to_string().starts_with("RAM"));
+            assert!(!cpu.contains("VM"));
+            assert!(!cpu.contains("Other"));
             assert!(lines.iter().all(|line| line.width() <= width as usize));
         }
+        snapshot.cpu_breakdown = None;
+        let lines = compact(
+            Some(&snapshot),
+            120,
+            2,
+            false,
+            false,
+            Duration::from_secs(3),
+            Instant::now(),
+        );
+        assert!(lines[0].to_string().contains("Win    N/A"));
+        assert!(lines[1].to_string().contains("Win     0B"));
     }
 
     #[test]
@@ -410,7 +386,7 @@ mod tests {
             Duration::from_secs(3),
             Instant::now(),
         );
-        assert!(lines[0].to_string().contains("Other   N/A"));
+        assert!(lines[0].to_string().contains("Docker    N/A"));
         assert!(lines[1].to_string().starts_with("RAM N/A       "));
         assert!(!compact(
             None,
@@ -440,21 +416,13 @@ mod tests {
             } else {
                 14
             };
-            for (index, line) in lines.iter().enumerate() {
-                if index == 0 {
-                    assert!(line.spans[0].width() <= total_and_graph);
-                } else {
-                    assert_eq!(line.spans[0].width(), total_and_graph);
-                }
+            for line in &lines {
+                assert_eq!(line.spans[0].width(), total_and_graph);
                 assert!(line.width() <= usize::from(width));
                 assert!(!line.to_string().contains("Host"));
                 assert!(!line.to_string().contains("WSL*"));
                 assert!(!line.to_string().contains("obs"));
-                assert_eq!(
-                    line.to_string()
-                        .contains(if index == 0 { "Other" } else { "Docker" }),
-                    width >= 80
-                );
+                assert_eq!(line.to_string().contains("Docker"), width >= 80);
             }
         }
     }
@@ -508,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_host_partitions_and_independent_memory_without_rescaling() {
+    fn renders_host_endpoints_and_observations_without_rescaling_or_stacking() {
         use crate::model::HostMemory;
         use crate::summary::{EnvironmentSummary, Usage};
         let config = crate::monitor::MonitorConfig {
@@ -534,12 +502,6 @@ mod tests {
         );
         for (cpu, available, ram) in [(0.0, 34359738368, "0.0/32.0G"), (100.0, 0, "32.0/32.0G")] {
             snapshot.host_cpu_percent = Some(cpu);
-            snapshot.cpu_breakdown = Some(crate::cpu_accounting::Breakdown {
-                total: cpu,
-                windows: cpu * 0.5,
-                virtual_machines: cpu * 0.4,
-                other: cpu * 0.1,
-            });
             snapshot.host_memory = Some(HostMemory {
                 total_bytes: 34359738368,
                 available_bytes: available,
@@ -558,10 +520,7 @@ mod tests {
             );
             assert!(lines.iter().all(|line| line.width() <= 80));
             assert!(lines[0].to_string().contains(&format!("{cpu:.1}%")));
-            assert!(lines[0]
-                .to_string()
-                .contains(&format!("VM{:>6}", format!("{:.1}%", cpu * 0.4))));
-            assert!(lines[0].to_string().contains("WSL 12.5%"));
+            assert!(lines[0].to_string().contains("WSL  12.5%"));
             assert!(lines[1].to_string().contains(ram));
             assert!(lines[1].to_string().contains("Docker  1.00G"));
             let ascii = std::env::var_os("TERM").is_some_and(|term| term == "dumb");
@@ -576,9 +535,7 @@ mod tests {
             } else {
                 '█'
             };
-            if lines[0].spans[0].width() > 14 {
-                assert!(lines[0].spans[0].content.contains(expected));
-            }
+            assert!(lines[0].spans[0].content.contains(expected));
             assert!(lines[1].spans[0].content.contains(expected));
             for width in [40, 60, 70, 75, 80, 120] {
                 let narrow = compact(
@@ -618,9 +575,9 @@ mod tests {
             assert!(!guest[0].spans[0].content.contains(expected));
         }
 
-        for (cpu, memory, ram_label) in [
-            (None, Some(1073741824), "WSL  1.00G"),
-            (Some(12.5), None, "WSL    N/A"),
+        for (cpu, memory, cpu_label, ram_label) in [
+            (None, Some(1073741824), "WSL    N/A", "WSL  1.00G"),
+            (Some(12.5), None, "WSL  12.5%", "WSL    N/A"),
         ] {
             snapshot.environment_summary.0[1] = Some(Usage {
                 cpu_percent: cpu,
@@ -635,28 +592,22 @@ mod tests {
                 Duration::from_secs(3),
                 Instant::now(),
             );
-            assert!(lines[0].to_string().contains("VM  40.0%(WSL"));
+            assert!(lines[0].to_string().contains(cpu_label));
             assert!(lines[1].to_string().contains(ram_label));
         }
 
         // Missing values, changes in digit count and larger memory units must not
         // move the history or any environment column in either row.
-        let positions = |line: &Line<'_>, cpu: bool| {
+        let positions = |line: &Line<'_>| {
             let text = line.to_string();
-            let labels: &[&str] = if cpu {
-                &["|", "Win", "VM", "Other"]
-            } else {
-                &["|", "Win", "WSL", "WSLC", "Docker"]
-            };
-            labels
-                .iter()
+            ["|", "Win", "WSL", "WSLC", "Docker"]
                 .map(|label| text[..text.find(label).unwrap()].chars().count())
-                .collect::<Vec<_>>()
         };
         let now = Instant::now();
         for width in [80, 100, 119, 120, 160] {
             let empty = compact(None, width, 2, false, false, Duration::from_secs(3), now);
-            let expected = [positions(&empty[0], true), positions(&empty[1], false)];
+            let expected = positions(&empty[0]);
+            assert_eq!(positions(&empty[1]), expected);
             for (cpu, bytes) in [
                 (0.0_f64, 0),
                 (9.9, 1023),
@@ -684,8 +635,8 @@ mod tests {
                     Duration::from_secs(3),
                     now,
                 );
-                for (index, line) in lines.iter().enumerate() {
-                    assert_eq!(positions(line, index == 0), expected[index], "{}", line);
+                for line in &lines {
+                    assert_eq!(positions(line), expected, "{}", line);
                     assert!(line.width() <= usize::from(width));
                     // Labels and first value characters start at the same cells;
                     // padding belongs after the total, before the fixed history.
@@ -693,9 +644,7 @@ mod tests {
                     let gap = if width >= 120 { "   " } else { " " };
                     assert_eq!(line.spans[3].content, gap);
                     assert_eq!(line.spans[5].content, gap);
-                    if index == 1 {
-                        assert_eq!(line.spans[7].content, gap);
-                    }
+                    assert_eq!(line.spans[7].content, gap);
                 }
                 assert_eq!(lines[0].spans[0].width(), empty[0].spans[0].width());
                 assert_eq!(lines[1].spans[0].width(), empty[1].spans[0].width());

@@ -9,11 +9,9 @@
 AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
 
 The default TUI keeps a compact two-line CPU/RAM summary, history graphs and
-an additive CPU breakdown: **Win + VM + Other = total**.
-VM includes all guest
-partitions; RAM keeps the independent Windows/WSL/WSLC/Docker observations.
-Parentheses after VM display individual WSL, WSLC and Docker CPU percentages
-on the same CPU line. The `*` marks overlapping observations that do not sum to VM CPU.
+**Win / WSL / WSLC / Docker** columns. Win CPU includes Windows system work,
+interrupts and short-lived tasks. Environment CPU values can differ from the
+host total because of overlapping scopes, guest accounting and sampling windows.
 Process and container CPU rows remain available below the header.
 Use `--header classic` for the traditional one-line header and `--color never`
 for monochrome output. See [release notes](https://github.com/adachi6k/wsltop/releases/latest).
@@ -312,13 +310,16 @@ RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2
 
 These example values are **independent observations, not an additive breakdown**:
 
-- `Win` sums observed Windows processes, excluding WSL/WSLC VM host rows.
+- `Win` CPU measures Windows root partition execution, including interrupts and
+  short-lived tasks. It excludes guest execution and does not absorb the residual.
+  Without a hypervisor it equals total host CPU. Win RAM still sums observed
+  process working sets, excluding VM host rows.
 - `WSL` CPU uses the shared WSL kernel's `/proc/stat` counters, sampled once through
   the primary distribution. It includes short-lived processes and kernel work,
   including other distributions even with `--wsl-only`. Container workloads in
   that same kernel may also appear under `Docker` or `WSLC`.
 - `WSLC` and `Docker` sum container statistics, excluding child process detail rows.
-- Even without container overlap, Win process time and WSL guest-kernel time are
+- Even without container overlap, Win root time and WSL guest-kernel time are
   not an additive physical-CPU breakdown; see [CPU accounting](docs/cpu-accounting.md#wsl-category-cpu).
 - Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
   statistics respectively. Shared pages and overlapping observations mean these
@@ -340,7 +341,7 @@ do not change text or JSON output.
 
 ## CPU display and accounting
 
-The TUI header shows `CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Windows system counter deltas, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
+The TUI header shows `CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Hyper-V physical execution counters when a hypervisor is present, otherwise Windows system counters, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
 
 Text and TUI output default to the familiar Linux `top` convention where one fully busy logical CPU is 100%; multi-threaded workloads can exceed 100%. Use `--cpu-scale host` for the Task Manager-style whole-host display where all Windows host logical CPUs together equal 100%.
 

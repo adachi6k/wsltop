@@ -600,6 +600,7 @@ fn spawn_primary_processes(
         let mut primary_before: Option<(crate::model::Snapshot, Option<u32>)> = None;
         let mut delay = Duration::ZERO;
         while wait(&stop, delay) {
+            let started = std::time::Instant::now();
             let capture_count = cpus.load(Ordering::Relaxed);
             match collector.snapshot() {
                 Ok(after) => {
@@ -620,7 +621,7 @@ fn spawn_primary_processes(
                     }
                     primary_before = Some((after, stable_count));
                     delay = if had_baseline {
-                        interval
+                        remaining_sample_delay(interval, started.elapsed())
                     } else {
                         STARTUP_WARMUP
                     };
@@ -633,7 +634,7 @@ fn spawn_primary_processes(
                     {
                         break;
                     }
-                    delay = interval;
+                    delay = remaining_sample_delay(interval, started.elapsed());
                 }
             }
         }
@@ -652,6 +653,7 @@ fn spawn_additional_processes(
         let mut before = BTreeMap::<String, crate::model::Snapshot>::new();
         let mut delay = Duration::ZERO;
         while wait(&stop, delay) {
+            let started = std::time::Instant::now();
             let count = cpus.load(Ordering::Relaxed).max(1);
             match collector.snapshot() {
                 Ok(after) => {
@@ -672,7 +674,7 @@ fn spawn_additional_processes(
                     }
                 }
             }
-            delay = cadence;
+            delay = remaining_sample_delay(cadence, started.elapsed());
         }
     });
 }
@@ -796,7 +798,7 @@ fn sample_windows(
 
 fn remaining_sample_delay(interval: Duration, elapsed: Duration) -> Duration {
     // Start-to-start cadence. Slow calls run back-to-back, never overlapping or
-    // trying to catch up with concurrent Windows queries.
+    // trying to catch up with concurrent queries from the same collector.
     interval.saturating_sub(elapsed)
 }
 
@@ -832,6 +834,7 @@ fn spawn_wslc(
     thread::spawn(move || {
         let cadence = interval.max(SLOW_COLLECTOR_MIN_INTERVAL);
         while let Some(count) = ready_cpu_count(&stop, &cpus) {
+            let started = std::time::Instant::now();
             match wslc::aggregate_usage(count) {
                 Ok(usage) => {
                     if sender
@@ -859,7 +862,7 @@ fn spawn_wslc(
                     }
                 }
             }
-            if !wait(&stop, cadence) {
+            if !wait(&stop, remaining_sample_delay(cadence, started.elapsed())) {
                 break;
             }
         }
@@ -898,6 +901,7 @@ fn spawn_docker(
     thread::spawn(move || {
         let cadence = interval.max(SLOW_COLLECTOR_MIN_INTERVAL);
         while let Some(count) = ready_cpu_count(&stop, &cpus) {
+            let started = std::time::Instant::now();
             match docker::aggregate_usage(count) {
                 Ok(usage) => {
                     if sender
@@ -925,7 +929,7 @@ fn spawn_docker(
                     }
                 }
             }
-            if !wait(&stop, cadence) {
+            if !wait(&stop, remaining_sample_delay(cadence, started.elapsed())) {
                 break;
             }
         }
@@ -1384,7 +1388,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_cadence_accounts_for_fast_slow_and_overrunning_calls() {
+    fn collector_cadence_accounts_for_fast_slow_and_overrunning_calls() {
         let interval = Duration::from_secs(3);
         for (elapsed, remaining) in [(0, 3000), (800, 2200), (2999, 1), (3000, 0), (10000, 0)] {
             assert_eq!(

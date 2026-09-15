@@ -41,22 +41,22 @@ In WSL-native execution, current-distribution cumulative time is read directly f
 Process rows still require a matching identity in both samples. They are useful
 attribution observations, not the source of the header's host CPU partitions.
 
-## Additive host CPU header
+## Two-line environment header and host CPU accounting
 
-The compact CPU header shows **Win + VM + Other = total**:
+The compact header has two lines (CPU and RAM), each with **Win / WSL / WSLC /
+Docker** columns. Win CPU uses root execution rather than a process sum, avoiding
+missing short-lived tasks and interrupt work. WSL remains one shared-kernel
+observation; WSLC and Docker remain container aggregates, excluding child rows.
+These four values are not an additive partition. Values are not rescaled, and
+unavailable values show N/A. Both history graphs retain the original width.
 
-Parentheses after VM show WSL, WSLC and Docker CPU percentages on the same CPU
-line, preserving the two-line CPU/RAM summary. They are independent guest/container
-observations, not mutually exclusive parts of VM CPU; `*` identifies that overlap.
-Values are not rescaled, and unavailable values show N/A. On narrower terminals,
-CPU history is shortened before omitting numerical observations.
+The underlying host accounting, also available through MCP, retains:
 
 - **Win**: Hyper-V root partition execution, including Windows system work,
   interrupts and processes that exit between observations.
 - **VM**: execution in all Hyper-V guest partitions, including WSL, WSLC,
   Docker virtual machines and unrelated VMs. This is not a per-distro reading.
-  Parenthesized WSL/WSLC/Docker values are separate observations, not additive
-  partitions of the VM measurement.
+  WSL/WSLC/Docker values are separate observations, not additive partitions of VM.
 - **Other**: physical execution not assigned to the root/guest measurements,
   including hypervisor work.
 
@@ -76,14 +76,27 @@ counters cannot be collected, the header shows N/A, and the collector can recove
 on subsequent valid samples. Host-only totals are not silently substituted for
 physical Hyper-V CPU. `--wsl-only` disables the host CPU breakdown.
 
-The displayed one-decimal partitions use largest-remainder rounding so the
-displayed numbers add to the displayed total. Stored raw percentages are never
-scaled. Filters, process limits and core-style row display do not affect these
-whole-host percentages. RAM remains a collection of independent observations.
+Header values are rounded independently to one decimal. Stored raw percentages
+are never scaled. Filters, process limits and core-style row display do not affect
+these whole-host percentages. RAM remains independent observations.
 
 MCP `get_system_summary` includes `cpu_breakdown` with `total`, `windows`,
 `virtual_machines`, and `other`; it is null when unavailable. The existing
 `environments` CPU values remain independent process/guest/container observations.
+In particular, API `environments.windows` retains the process sum; the TUI Win CPU
+column uses `cpu_breakdown.windows` instead.
+
+Collectors use start-to-start scheduling, subtracting collection time from the
+refresh delay. The initial primary-WSL warmup remains 150 ms after its baseline;
+optional collectors retain their two-second minimum cadence. This prevents slow
+commands from adding their duration to every refresh interval, but does not align
+independent counter windows or change Docker/WSLC CLI averaging windows.
+
+No container CPU is blindly subtracted from WSL: current container statistics do
+not establish that the daemon/container shares the measured WSL kernel and sample
+window. Remote daemons and separate VMs make unconditional subtraction incorrect.
+Remaining differences include that possible overlap, guest/physical accounting,
+sampling skew, hypervisor work and other VMs. They are not assigned to Win.
 
 See the [measured investigation and fix](validation/2026-09-15-cpu-accounting-fix.md).
 

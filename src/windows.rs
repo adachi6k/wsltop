@@ -543,8 +543,7 @@ mod tests {
                 "rows":rows.len()})
             );
             if let Some(b) = breakdown {
-                let [total, win, vm, other] = b.tenths();
-                assert_eq!(total, win + vm + other);
+                assert!((b.total - b.windows - b.virtual_machines - b.other).abs() < 1e-9);
                 successful += 1;
             }
             before = after;

@@ -28,28 +28,6 @@ pub struct Breakdown {
     pub other: f64,
 }
 
-impl Breakdown {
-    /// Balance only display rounding. The stored measurements are never scaled.
-    pub fn tenths(self) -> [u32; 4] {
-        let values = [self.windows, self.virtual_machines, self.other];
-        let total = (self.total * 10.0).round() as u32;
-        let mut parts = values.map(|v| (v * 10.0).floor() as u32);
-        let mut order = [0, 1, 2];
-        order.sort_by(|&a, &b| {
-            (values[b] * 10.0)
-                .fract()
-                .total_cmp(&(values[a] * 10.0).fract())
-        });
-        for &i in order
-            .iter()
-            .take(total.saturating_sub(parts.iter().sum()) as usize)
-        {
-            parts[i] += 1;
-        }
-        [total, parts[0], parts[1], parts[2]]
-    }
-}
-
 impl Sample {
     pub fn usage_since(
         &self,
@@ -182,25 +160,19 @@ mod tests {
             .is_none());
     }
     #[test]
-    fn display_rounding_preserves_total_without_altering_measurements() {
-        let b = Breakdown {
-            total: 35.1,
-            windows: 5.44,
-            virtual_machines: 29.64,
-            other: 0.02,
-        };
-        let [total, win, vm, other] = b.tenths();
-        assert_eq!(total, 351);
-        assert_eq!(win + vm + other, total);
-        assert_eq!(b.windows, 5.44);
-    }
-
-    #[test]
     fn native_host_keeps_interrupts_and_exited_work_in_windows_total() {
         let b = Sample::Native
             .usage_since(&Sample::Native, 128, Some(35.1))
             .unwrap();
-        assert_eq!(b.tenths(), [351, 351, 0, 0]);
+        assert_eq!(
+            b,
+            Breakdown {
+                total: 35.1,
+                windows: 35.1,
+                virtual_machines: 0.0,
+                other: 0.0,
+            }
+        );
         assert!(Sample::Native
             .usage_since(&Sample::Native, 16, None)
             .is_none());
