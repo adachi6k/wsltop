@@ -8,13 +8,12 @@
 
 AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
 
-The default TUI has a compact three-line CPU/RAM summary, history graphs and
-an additive CPU breakdown: **Win + VM + Other = total**. At 100 columns or wider,
-VM is labeled `VM (WSL,WSLC,Docker)` to identify common guest environments.
+The default TUI keeps a compact two-line CPU/RAM summary, history graphs and
+an additive CPU breakdown: **Win + VM + Other = total**.
 VM includes all guest
 partitions; RAM keeps the independent Windows/WSL/WSLC/Docker observations.
-A `Guest CPU (overlap)` row displays the individual WSL, WSLC and Docker CPU
-percentages. These independent readings can overlap and do not sum to VM CPU.
+Parentheses after VM display individual WSL, WSLC and Docker CPU percentages
+on the same CPU line. The `*` marks overlapping observations that do not sum to VM CPU.
 Process and container CPU rows remain available below the header.
 Use `--header classic` for the traditional one-line header and `--color never`
 for monochrome output. See [release notes](https://github.com/adachi6k/wsltop/releases/latest).

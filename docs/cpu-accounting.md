@@ -45,18 +45,18 @@ attribution observations, not the source of the header's host CPU partitions.
 
 The compact CPU header shows **Win + VM + Other = total**:
 
-The next line, `Guest CPU (overlap)`, shows WSL, WSLC and Docker CPU percentages
-individually on the whole-host scale. They are independent guest/container
-observations, not mutually exclusive parts of VM CPU. Overlapping values are
-displayed as measured, without rescaling; unavailable values show N/A. This line
-is omitted only when the terminal is too short to reserve three summary rows.
+Parentheses after VM show WSL, WSLC and Docker CPU percentages on the same CPU
+line, preserving the two-line CPU/RAM summary. They are independent guest/container
+observations, not mutually exclusive parts of VM CPU; `*` identifies that overlap.
+Values are not rescaled, and unavailable values show N/A. On narrower terminals,
+CPU history is shortened before omitting numerical observations.
 
 - **Win**: Hyper-V root partition execution, including Windows system work,
   interrupts and processes that exit between observations.
 - **VM**: execution in all Hyper-V guest partitions, including WSL, WSLC,
   Docker virtual machines and unrelated VMs. This is not a per-distro reading.
-  At 100 columns or wider, the label is `VM (WSL,WSLC,Docker)`; narrower displays
-  use `VM`. The parenthesized names are examples, not separately summed values.
+  Parenthesized WSL/WSLC/Docker values are separate observations, not additive
+  partitions of the VM measurement.
 - **Other**: physical execution not assigned to the root/guest measurements,
   including hypervisor work.
 
