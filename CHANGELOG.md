@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file. The format 
 - Win CPU in the compact header includes Windows system work, interrupts and short-lived tasks through root-partition counters. On Hyper-V hosts, total CPU uses physical execution counters collected with root/guest counters in one query; invalid or unavailable samples show `N/A`.
 - Verified Docker/WSLC CPU is separated from WSL to avoid double counting. Kernel boot and leaf cgroup v2 identities establish the supported shared scope; cumulative counters are interpolated over a common measurement window. Exact cgroup aliases exposed by both backends count once under Docker.
 - WSL, additional-distribution, WSLC and Docker refresh scheduling accounts for collection duration, reducing drift between observations.
+- Windows-native WSL collectors run without inheriting the TUI console, preventing background `wsl.exe` startup/exit from changing console modes after the TUI restores them.
 
 ### Added
 
