@@ -390,6 +390,8 @@ fn execute<C: SnapshotCollector>(
             (
                 metadata(reply.snapshot),
                 json!({"host_logical_cpu_count":reply.data.host_logical_cpu_count,"host_cpu_percent":reply.data.host_cpu_percent,
+                    "cpu_breakdown":reply.data.cpu_breakdown,
+                    "cpu_overlap_unresolved":reply.data.cpu_overlap_unresolved,
                 "host_memory":reply.data.host_memory.map(|m| json!({"total_bytes":m.total_bytes,"available_bytes":m.available_bytes,"used_bytes":m.used_bytes()})),"environments":environments}),
             )
         }

@@ -1,4 +1,5 @@
-//! Independent observations, deliberately not an additive partition of host usage.
+//! Base observations, not an additive partition of host usage. Verified guest
+//! CPU overlap can subsequently be removed by guest_cpu::apply; RAM stays raw.
 use crate::attribution;
 use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage};
 

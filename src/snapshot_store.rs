@@ -315,7 +315,9 @@ pub(crate) mod tests {
             windows_applications: vec![],
         };
         MonitorSnapshot {
+            cpu_overlap_unresolved: false,
             host_cpu_percent: Some(cpu),
+            cpu_breakdown: None,
             host_memory: None,
             host_history: Default::default(),
             environment_summary: Default::default(),

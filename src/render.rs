@@ -504,10 +504,12 @@ mod tests {
 
     fn snapshot(row: ResourceUsage) -> MonitorSnapshot {
         MonitorSnapshot {
+            cpu_overlap_unresolved: false,
             host_memory: None,
             host_history: Default::default(),
             environment_summary: Default::default(),
             host_cpu_percent: None,
+            cpu_breakdown: None,
             sort: Default::default(),
             query_source: None,
             host_logical_cpu_count: 16,

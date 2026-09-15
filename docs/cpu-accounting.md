@@ -28,9 +28,123 @@ CPU% = delta_cpu_seconds / elapsed_seconds
        / host_logical_cpu_count * 100
 ```
 
-Windows cumulative time comes from `Get-Process .CPU`. In WSL-native execution, current-distribution cumulative time is read directly from `/proc/<pid>/stat`, while additional distributions provide equivalent values through `wsl.exe -d` collection. In Windows-native execution, both the selected primary distribution and additional distributions are sampled remotely through `wsl.exe`.
+Windows cumulative time comes from `Win32_PerfRawData_PerfProc_Process.PercentProcessorTime`
+(100ns ticks). `Get-Process.CPU` can be access-denied for System, Defender, and
+other users' services; those failures are no longer converted to zero. Missing
+required counters fail collection. Windows process rates use the provider's
+`Timestamp_Sys100NS` delta, independent of PowerShell completion latency.
+Process creation time is retained in PID identity and truncated to the same
+microsecond precision as `Win32_Process.CreationDate` application metadata.
 
-The same cumulative value is exposed as `TIME+` in text/TUI output. It is CPU time consumed, not elapsed wall-clock age, and is formatted as unbounded minutes plus seconds and hundredths (`MM:SS.hh`). Windows application TIME+ sums the currently observed member processes, so it may decrease when a member exits. JSON exposes the underlying value as optional `cpu_time_seconds`.
+In WSL-native execution, current-distribution cumulative time is read directly from `/proc/<pid>/stat`, while additional distributions provide equivalent values through `wsl.exe -d` collection. In Windows-native execution, both the selected primary distribution and additional distributions are sampled remotely through `wsl.exe`.
+
+Process rows still require a matching identity in both samples. They are useful
+attribution observations, not the source of the header's host CPU partitions.
+
+## Two-line environment header and host CPU accounting
+
+The compact header has two lines (CPU and RAM), each with **Win / WSL / WSLC /
+Docker** columns. Win CPU uses root execution rather than a process sum, avoiding
+missing short-lived tasks and interrupt work. WSL starts with one shared-kernel
+observation; verified container CPU is separated using common-window cgroup rates.
+WSLC and Docker exclude child process rows from their summary totals.
+These four values are not an additive partition. Values are not rescaled, and
+unavailable values show N/A. Both history graphs retain the original width.
+
+The underlying host accounting, also available through MCP, retains:
+
+- **Win**: Hyper-V root partition execution, including Windows system work,
+  interrupts and processes that exit between observations.
+- **VM**: execution in all Hyper-V guest partitions, including WSL, WSLC,
+  Docker virtual machines and unrelated VMs. This is not a per-distro reading.
+  WSL/WSLC/Docker values are separate observations, not additive partitions of VM.
+- **Other**: physical execution not assigned to the root/guest measurements,
+  including hypervisor work.
+
+All three counter sets are read with one PDH query, using language-neutral
+[English counter paths](https://learn.microsoft.com/en-us/windows/win32/api/pdh/nf-pdh-pdhaddenglishcounterw).
+Physical, root and guest instance deltas use each
+counter's precision-timer base and are normalized by the host logical CPU
+count. Guest vCPU count is not used as the denominator. Instance changes,
+counter resets, missing instances, and root/guest totals exceeding physical
+usage invalidate the sample; values are not rescaled to force agreement.
+The calculation uses the raw counter's first/second values and checks its
+[PDH status](https://learn.microsoft.com/en-us/windows/win32/api/pdh/ns-pdh-pdh_raw_counter).
+
+On hosts without a hypervisor, GetSystemTimes (or the system-wide counter on
+multi-group hosts) supplies the total, all assigned to Win. When host partition
+counters cannot be collected, the header shows N/A, and the collector can recover
+on subsequent valid samples. Host-only totals are not silently substituted for
+physical Hyper-V CPU. `--wsl-only` disables the host CPU breakdown.
+
+Header values are rounded independently to one decimal. Stored raw percentages
+are never scaled. Filters, process limits and core-style row display do not affect
+these whole-host percentages. RAM remains independent observations.
+
+MCP `get_system_summary` includes `cpu_breakdown` with `total`, `windows`,
+`virtual_machines`, and `other`; it is null when unavailable. The existing
+`environments` CPU values use the guest overlap handling described below.
+In particular, API `environments.windows` retains the process sum; the TUI Win CPU
+column uses `cpu_breakdown.windows` instead.
+
+Collectors use start-to-start scheduling, subtracting collection time from the
+refresh delay. The initial primary-WSL warmup remains 150 ms after its baseline;
+optional collectors retain their two-second minimum cadence. This prevents slow
+commands from adding their duration to every refresh interval, but does not align
+independent counter windows or change Docker/WSLC CLI averaging windows.
+
+Remaining differences include guest/physical accounting, sampling skew, hypervisor
+work and other VMs. They are not assigned to Win.
+
+## Container overlap
+
+For existing containers, a bounded read-only `docker exec` / `wslc.exe exec` shell
+probe reads the kernel boot ID, uptime, cgroup device/inode and
+[`cpu.stat` `usage_usec`](https://www.kernel.org/doc/html/v5.15/admin-guide/cgroup-v2.html).
+Boot identity must match the primary WSL observation. The probe supports only a
+leaf cgroup v2 namespace with its own CPU limit interface, never a host root or
+a parent cgroup containing descendant groups. No container is started, modified,
+paused, or given additional privileges. The shell uses `cat`, `stat`, and `awk`;
+images without these tools fall back. At most 16 containers per backend are
+probed, in batches of four with a two-second timeout each. Hidden process details
+do not disable these CPU probes. Probe execution itself contributes a small
+amount of measured container CPU.
+
+The primary kernel and each cgroup retain eight cumulative readings. The common
+window ends at the oldest latest reading and spans the refresh interval (at least
+two seconds). Counter values at both endpoints are **linearly interpolated from
+bracketing samples**, never extrapolated. Intervals longer than twice that window,
+stale readings, boot/topology changes, cgroup replacement, counter resets and
+missing probes prevent reconciliation. The probe's own read must finish within
+100 ms of kernel uptime; its midpoint timestamps the cgroup counter. Rates are
+therefore estimates over a shared window, not atomic simultaneous measurements.
+
+```text
+Docker = delta(verified Docker cgroup CPU) / common elapsed time / host CPUs
+WSLC   = delta(verified WSLC cgroup CPU) / common elapsed time / host CPUs
+WSL    = common-window kernel CPU - Docker - WSLC
+```
+
+Only enabled, successfully collected container backends participate. Exact
+cgroup aliases exposed through both backends count once, under Docker. RAM and
+resource/process rows keep their original values. This does not rescale any
+value to fit Windows physical CPU.
+
+If any active target cannot be reconciled, the entire guest summary keeps its
+inclusive kernel/CLI values. `WSL*` marks this state without adding a header row;
+snapshot warnings explain the failure and MCP exposes `cpu_overlap_unresolved`.
+Foreign kernels, cgroup v1, parent/non-isolated cgroups, missing permissions/tools,
+too many containers and negative residuals all take this path. Negative residuals
+are not clamped. With no observed containers there is nothing to subtract.
+
+One-shot sampling captures container counters twice and brackets them with kernel
+readings, including an intermediate kernel snapshot. This can take longer than
+the requested interval. Interactive collectors retain their own histories and
+warm up until a complete common window exists.
+
+See the [measured investigation and fix](validation/2026-09-15-cpu-accounting-fix.md).
+
+Windows process cumulative CPU is exposed as `TIME+` in text/TUI output. It is CPU time consumed, not elapsed wall-clock age, and is formatted as unbounded minutes plus seconds and hundredths (`MM:SS.hh`). Windows application TIME+ sums the currently observed member processes, so it may decrease when a member exits. JSON exposes the underlying value as optional `cpu_time_seconds`.
 
 Negative deltas are treated as process replacement/PID reuse and do not become negative usage. Process identity includes environment, PID, and source where available.
 
@@ -43,7 +157,7 @@ same host count across both captures; a transition establishes a new baseline.
 
 ## WSL category CPU
 
-The WSL header/MCP CPU observation uses the primary distribution's `/proc/stat`
+The base WSL CPU observation uses the primary distribution's `/proc/stat`
 and `/proc/uptime`, collected once per sample. It covers the shared kernel across
 distributions, including short-lived/exited tasks and kernel work that a pair of
 process lists cannot account for. Additional distributions are not added again.
@@ -55,6 +169,10 @@ busy_ticks = user + nice + system + irq + softirq
 WSL_CPU% = delta_busy_ticks / CLK_TCK / delta_uptime
            / host_logical_cpu_count * 100
 ```
+
+This is the inclusive base. The summary subtracts verified container CPU as
+described in [Container overlap](#container-overlap), or labels the inclusive
+fallback `WSL*` when reconciliation is unavailable.
 
 Idle, I/O wait and stolen time are excluded. Guest counters are not added because
 user/nice already include them ([Linux /proc documentation](https://www.kernel.org/doc/html/latest/filesystems/proc.html)).

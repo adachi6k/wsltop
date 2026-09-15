@@ -7,6 +7,10 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - .github/scripts/release-notes.py
+      - Cargo.toml
+      - Cargo.lock
+      - CHANGELOG.md
   workflow_dispatch:
 
 permissions:
@@ -31,6 +35,15 @@ jobs:
             test "$GITHUB_REF_NAME" = "$tag"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Prepare release notes from changelog
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python3 .github/scripts/release-notes.py "$RELEASE_TAG" > release-notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
 
   linux-x86_64:
     name: Linux x86_64
@@ -168,13 +181,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          name: release-notes
+          path: release-notes
+      - uses: actions/download-artifact@v8
+        with:
           pattern: wsltop-*
           merge-multiple: true
           path: dist
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          body_path: release-notes/release-notes.md
           fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz

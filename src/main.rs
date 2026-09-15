@@ -1,7 +1,9 @@
 mod attribution;
 mod collector;
 mod command;
+mod cpu_accounting;
 mod docker;
+mod guest_cpu;
 mod header;
 mod history;
 // Includes identity-comparison primitives reserved for future action backends.

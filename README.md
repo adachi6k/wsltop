@@ -8,8 +8,12 @@
 
 AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
 
-The default TUI has a compact two-line host CPU/RAM summary, history graphs and
-colorized Windows/WSL/WSLC/Docker observations while keeping top-like simplicity.
+The default TUI keeps a compact two-line CPU/RAM summary, history graphs and
+**Win / WSL / WSLC / Docker** columns. Win CPU includes Windows system work,
+interrupts and short-lived tasks. Verified container cgroup CPU is separated from
+WSL over a common sampling window. `WSL*` means overlap could not be resolved.
+Guest accounting and sampling differences can still cause a gap from host CPU.
+Process and container CPU rows remain available below the header.
 Use `--header classic` for the traditional one-line header and `--color never`
 for monochrome output. See [release notes](https://github.com/adachi6k/wsltop/releases/latest).
 
@@ -168,13 +172,13 @@ Run `.\target\release\wsltop.exe --interactive` on Windows or
 Each archive in the
 [latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest)
 has a `.sha256` sidecar. Download both files into the same directory. Names
-follow `wsltop-v<version>-<target>`; replace `v0.5.2` below with your downloaded
+follow `wsltop-v<version>-<target>`; replace `v0.5.3` below with your downloaded
 version.
 
 Windows PowerShell:
 
 ```powershell
-$archive = 'wsltop-v0.5.2-x86_64-pc-windows-msvc.zip'
+$archive = 'wsltop-v0.5.3-x86_64-pc-windows-msvc.zip'
 $expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
 ```
@@ -182,7 +186,7 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Check
 WSL:
 
 ```console
-sha256sum --check wsltop-v0.5.2-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check wsltop-v0.5.3-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 ## Usage
@@ -305,15 +309,21 @@ CPU 23.4%      ▄▃▂▂▂▂▄▃▂▂▂▂▄▃▂ | Win   5.0% WSL  1
 RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2.10G WSLC   300M Docker   800M
 ```
 
-These example values are **independent observations, not an additive breakdown**:
+These example values are **not an exact additive breakdown of host CPU**:
 
-- `Win` sums observed Windows processes, excluding WSL/WSLC VM host rows.
+- `Win` CPU measures Windows root partition execution, including interrupts and
+  short-lived tasks. It excludes guest execution and does not absorb the residual.
+  Without a hypervisor it equals total host CPU. Win RAM still sums observed
+  process working sets, excluding VM host rows.
 - `WSL` CPU uses the shared WSL kernel's `/proc/stat` counters, sampled once through
   the primary distribution. It includes short-lived processes and kernel work,
-  including other distributions even with `--wsl-only`. Container workloads in
-  that same kernel may also appear under `Docker` or `WSLC`.
-- `WSLC` and `Docker` sum container statistics, excluding child process detail rows.
-- Even without container overlap, Win process time and WSL guest-kernel time are
+  including other distributions even with `--wsl-only`. Verified Docker/WSLC
+  cgroup CPU is subtracted from this total and displayed in its own column.
+- `WSLC` and `Docker` use common-window cgroup rates when overlap is resolved;
+  otherwise they retain CLI container statistics. Child process rows are excluded.
+- `WSL*` marks inclusive fallback values: container membership, counter history
+  or collection could not be verified. The warning explains why.
+- Even without container overlap, Win root time and WSL guest-kernel time are
   not an additive physical-CPU breakdown; see [CPU accounting](docs/cpu-accounting.md#wsl-category-cpu).
 - Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
   statistics respectively. Shared pages and overlapping observations mean these
@@ -327,6 +337,17 @@ appear before the first CPU interval. With `--wsl-only`, host totals are unavail
 and CPU observations use the WSL CPU scale, as explained in help.
 Summary observations are independent of row filters, limits, sorting and `--cpu-scale`.
 
+Overlap detection runs a short read-only `sh` probe in existing containers using
+`docker exec` / `wslc.exe exec`. It reads kernel boot identity, uptime and leaf
+cgroup v2 `cpu.stat`; it does not start containers, install tools or elevate
+privileges. Up to 16 containers per backend are probed, four at a time, with a
+two-second timeout per probe. Missing shell/tools/permissions, non-leaf or cgroup
+v1 configurations, foreign kernels and excessive container counts retain `WSL*`.
+The probes are independent of process-detail visibility. Exact cgroup aliases
+exposed by both backends count once under Docker. Rates use interpolation within
+observed cumulative-counter intervals, so they remain estimates. See
+[CPU overlap accounting](docs/cpu-accounting.md#container-overlap).
+
 Use `--header classic` for the existing one-line header, or `--header compact`
 for the new default. `--color auto|always|never` controls TUI colors; `auto` honors
 nonempty `NO_COLOR` and disables colors with `TERM=dumb`, while `always` explicitly
@@ -335,7 +356,7 @@ do not change text or JSON output.
 
 ## CPU display and accounting
 
-The TUI header shows `CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Windows system counter deltas, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
+The TUI header shows `CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Hyper-V physical execution counters when a hypervisor is present, otherwise Windows system counters, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
 
 Text and TUI output default to the familiar Linux `top` convention where one fully busy logical CPU is 100%; multi-threaded workloads can exceed 100%. Use `--cpu-scale host` for the Task Manager-style whole-host display where all Windows host logical CPUs together equal 100%.
 

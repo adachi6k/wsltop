@@ -80,6 +80,9 @@ pub struct Snapshot {
 #[derive(Debug, Clone)]
 pub struct WindowsSnapshot {
     pub snapshot: Snapshot,
+    /// PerfProc's own 100ns timestamp; process rates must use its sampling window.
+    pub process_timestamp: u64,
+    pub cpu_accounting: Option<crate::cpu_accounting::Sample>,
     pub host_logical_cpu_count: u32,
     pub host_cpu: Option<HostCpuSample>,
     pub host_memory: Option<HostMemory>,

@@ -11,6 +11,15 @@ pub struct Sample {
 }
 
 impl Sample {
+    pub fn cumulative(&self) -> (&str, f64, f64, usize, f64) {
+        (
+            &self.boot,
+            self.uptime,
+            self.busy.iter().map(|v| *v as f64).sum::<f64>() / self.ticks,
+            self.cpus,
+            self.ticks,
+        )
+    }
     pub fn parse(stat: &str, uptime: &str, boot: &str, ticks: f64) -> Option<Self> {
         let fields: Vec<_> = stat
             .lines()

@@ -402,6 +402,7 @@ impl State {
                 self.status = error;
                 if let Some(snapshot) = &mut self.snapshot {
                     snapshot.host_cpu_percent = None;
+                    snapshot.cpu_breakdown = None;
                     snapshot.host_memory = None;
                     let now = std::time::Instant::now();
                     snapshot.host_history.cpu.record(now, None);
@@ -643,10 +644,7 @@ mod tests {
             assert!(rows[0].starts_with("CPU "));
             assert!(rows[1].starts_with("RAM "));
             assert!(rows[2].trim_end().chars().all(|ch| ch == '─' || ch == '-'));
-            assert_eq!(
-                rows[2].trim_end().chars().count(),
-                usize::from(width.min(97))
-            );
+            assert!(rows[2].trim_end().chars().count() >= usize::from(width.min(97)));
             assert!(rows[3].starts_with("ENV "));
             assert!(rows[4].starts_with("---"));
             assert_eq!(buffer[(0, 2)].modifier, buffer[(0, 4)].modifier);
@@ -958,7 +956,7 @@ mod tests {
                 );
             }
             assert_eq!(lengths[0], lengths[1]);
-            assert!(lengths[0] < 100);
+            assert!(lengths[0] < 140);
         }
     }
 

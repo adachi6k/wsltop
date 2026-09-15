@@ -8,7 +8,7 @@ window, and collection warnings alongside their data.
 
 | Operation | Data |
 | --- | --- |
-| `get_system_summary` | Host CPU percentage, logical CPU count, physical memory information, independent environment observations |
+| `get_system_summary` | Host CPU percentage and additive Win/VM/Other breakdown, logical CPU count, physical memory information, independent environment observations |
 | `list_resources` | Unique observed resources, sorted/filtered/limited |
 | `inspect_resource(resource_id)` | One resource's numeric observations, command information, opaque ID, and observed parent IDs |
 | `list_children(resource_id)` | Immediate observed children, with the same sorting/filtering options as listing |
@@ -51,6 +51,12 @@ no formatted strings replace numeric observations. Missing host/environment
 observations remain missing. No uncollected resource limits or saturation values
 are fabricated. Parent/child and cross-environment observations can overlap and
 must not be summed into a host total.
+
+System summaries expose `cpu_overlap_unresolved`. When false and containers are
+present, verified leaf-cgroup CPU is separated from WSL over a common interpolated
+window. When true, original inclusive observations remain and snapshot warnings
+explain the missing evidence. This affects summary CPU only; resource rows and
+RAM retain their existing accounting. See [CPU accounting](cpu-accounting.md#container-overlap).
 
 ## Integration
 
