@@ -49,6 +49,8 @@ The compact CPU header shows **Win + VM + Other = total**:
   interrupts and processes that exit between observations.
 - **VM**: execution in all Hyper-V guest partitions, including WSL, WSLC,
   Docker virtual machines and unrelated VMs. This is not a per-distro reading.
+  At 100 columns or wider, the label is `VM (WSL,WSLC,Docker)`; narrower displays
+  use `VM`. The parenthesized names are examples, not separately summed values.
 - **Other**: physical execution not assigned to the root/guest measurements,
   including hypervisor work.
 

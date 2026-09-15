@@ -170,7 +170,12 @@ pub fn compact(
     let partitions = snapshot
         .and_then(|snapshot| snapshot.cpu_breakdown)
         .map(|cpu| cpu.tenths());
-    for (index, label) in ["Win", "VM", "Other"].iter().enumerate() {
+    let vm_label = if width >= 100 {
+        "VM (WSL,WSLC,Docker)"
+    } else {
+        "VM"
+    };
+    for (index, label) in ["Win", vm_label, "Other"].iter().enumerate() {
         let value = partitions.map_or_else(
             || "N/A".into(),
             |p| format!("{:.1}%", f64::from(p[index + 1]) / 10.0),
@@ -549,7 +554,7 @@ mod tests {
                 Duration::from_secs(3),
                 Instant::now(),
             );
-            assert!(lines[0].to_string().contains("VM  40.0%"));
+            assert!(lines[0].to_string().contains("VM (WSL,WSLC,Docker)  40.0%"));
             assert!(lines[1].to_string().contains(ram_label));
         }
 
