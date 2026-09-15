@@ -504,6 +504,7 @@ mod tests {
 
     fn snapshot(row: ResourceUsage) -> MonitorSnapshot {
         MonitorSnapshot {
+            cpu_overlap_unresolved: false,
             host_memory: None,
             host_history: Default::default(),
             environment_summary: Default::default(),

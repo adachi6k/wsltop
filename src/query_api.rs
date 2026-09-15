@@ -30,6 +30,7 @@ pub struct QueryReply<'a, T> {
 }
 
 pub struct SystemSummary<'a> {
+    pub cpu_overlap_unresolved: bool,
     pub host_logical_cpu_count: u32,
     pub host_cpu_percent: Option<f64>,
     pub cpu_breakdown: Option<crate::cpu_accounting::Breakdown>,
@@ -246,6 +247,7 @@ impl<'a> QueryView<'a> {
         QueryReply {
             snapshot: self.metadata(),
             data: SystemSummary {
+                cpu_overlap_unresolved: snapshot.cpu_overlap_unresolved,
                 host_logical_cpu_count: snapshot.host_logical_cpu_count,
                 host_cpu_percent: snapshot.host_cpu_percent,
                 cpu_breakdown: snapshot.cpu_breakdown,
@@ -400,6 +402,7 @@ mod tests {
             }],
         };
         MonitorSnapshot {
+            cpu_overlap_unresolved: false,
             host_cpu_percent: Some(40.0),
             cpu_breakdown: None,
             host_memory: Some(HostMemory {

@@ -42,6 +42,7 @@ enum Event {
 struct Normalized<T> {
     cpu_count: u32,
     system_cpu: Option<f64>,
+    kernel_sample: Option<crate::linux_cpu::Sample>,
     value: T,
 }
 
@@ -51,6 +52,7 @@ impl<T> Normalized<T> {
             cpu_count,
             value,
             system_cpu: None,
+            kernel_sample: None,
         }
     }
 }
@@ -81,6 +83,7 @@ impl Event {
 
 #[derive(Default)]
 struct Aggregate {
+    guest_cpu: crate::guest_cpu::History,
     wsl_cpu_percent: Option<f64>,
     host_cpu_percent: Option<f64>,
     cpu_breakdown: Option<crate::cpu_accounting::Breakdown>,
@@ -151,6 +154,7 @@ impl Aggregate {
                 self.host_cpu_percent = None;
                 self.cpu_breakdown = None;
                 self.wsl_cpu_percent = None;
+                self.guest_cpu = Default::default();
                 self.linux.clear();
                 self.extra_wsl.clear();
                 self.wslc = WslcUsage::default();
@@ -231,6 +235,7 @@ impl Aggregate {
             Event::CollectorWarnings(_) => unreachable!(),
             Event::Linux(value) => {
                 self.wsl_cpu_percent = None;
+                self.guest_cpu.kernel(value.kernel_sample.as_ref());
                 value.value.map(|rows| {
                     self.linux = rows;
                     self.wsl_cpu_percent = value.system_cpu;
@@ -272,6 +277,7 @@ impl Aggregate {
                 self.extra_wsl_errors = update.failures;
             }),
             Event::WslcAggregate(value) => value.value.map(|mut usage| {
+                self.guest_cpu.containers(2, &usage.cpu_probes);
                 usage.process_resources = self
                     .wslc
                     .process_resources
@@ -292,6 +298,7 @@ impl Aggregate {
             }),
             Event::WslcDetails(_) => unreachable!(),
             Event::DockerAggregate(value) => value.value.map(|mut usage| {
+                self.guest_cpu.containers(3, &usage.cpu_probes);
                 for item in &mut usage.resources {
                     if let Some(old) = self
                         .docker
@@ -424,6 +431,27 @@ impl Aggregate {
         snapshot.host_memory = self.host_memory;
         snapshot.host_history = self.host_history.clone();
         snapshot.environment_summary = summary;
+        let mut targets = Vec::new();
+        if !config.wsl_only && !config.no_wslc {
+            targets.extend(self.wslc.resources.iter().map(|r| (2, r.id.as_str())));
+        }
+        if !config.no_docker {
+            targets.extend(
+                self.docker
+                    .resources
+                    .iter()
+                    .map(|r| (3, r.resource.id.as_str())),
+            );
+        }
+        let containers_ready = (config.no_docker || ready("Docker"))
+            && (config.wsl_only || config.no_wslc || ready("WSLC"));
+        crate::guest_cpu::apply(
+            &mut snapshot,
+            &self.guest_cpu,
+            &targets,
+            containers_ready && normalized,
+            config.interval,
+        );
         snapshot
     }
 }
@@ -615,6 +643,9 @@ fn spawn_primary_processes(
                         let mut update = Normalized::new(count, Ok(rows));
                         update.system_cpu =
                             stable_kernel_usage(old, &after, *old_count, stable_count);
+                        if update.system_cpu.is_some() {
+                            update.kernel_sample = after.system_cpu.clone();
+                        }
                         if sender.send(Event::Linux(update)).is_err() {
                             break;
                         }
@@ -1718,6 +1749,7 @@ mod tests {
         let cached_wslc = Normalized::new(
             8,
             WslcUsage {
+                cpu_probes: Vec::new(),
                 resources: vec![container.clone()],
                 process_resources: vec![ContainerProcessUsage {
                     resource: container.clone(),
@@ -1738,6 +1770,7 @@ mod tests {
         let cached_docker = Normalized::new(
             8,
             DockerUsage {
+                cpu_probes: Vec::new(),
                 resources: vec![ContainerProcessUsage {
                     resource: docker_container.clone(),
                     processes: vec![process],
@@ -1747,6 +1780,7 @@ mod tests {
             },
         );
         let mut fresh_docker = DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: docker_container,
                 processes: Vec::new(),
@@ -1767,6 +1801,7 @@ mod tests {
             "container",
         );
         let usage = || DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: Vec::new(),
@@ -1803,6 +1838,7 @@ mod tests {
         );
         let process = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: Vec::new(),
@@ -1811,6 +1847,7 @@ mod tests {
             warnings: Vec::new(),
         }))));
         aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: vec![process],
@@ -1819,6 +1856,7 @@ mod tests {
             warnings: Vec::new(),
         })));
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container,
                 processes: Vec::new(),
@@ -1839,6 +1877,7 @@ mod tests {
         );
         current.cpu_percent = 9.0;
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: current,
                 processes: Vec::new(),
@@ -1857,6 +1896,7 @@ mod tests {
         );
         let detail = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
         aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: stale,
                 processes: vec![detail],
@@ -1883,6 +1923,7 @@ mod tests {
         );
         current.cpu_percent = 9.0;
         aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
+            cpu_probes: Vec::new(),
             resources: vec![current],
             process_resources: Vec::new(),
             warnings: Vec::new(),
@@ -1899,6 +1940,7 @@ mod tests {
             "process",
         );
         aggregate.apply(Event::WslcDetails(normalized(WslcUsage {
+            cpu_probes: Vec::new(),
             resources: vec![stale.clone()],
             process_resources: vec![ContainerProcessUsage {
                 resource: stale,
@@ -1919,6 +1961,7 @@ mod tests {
         );
         newer.cpu_percent = 12.0;
         aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
+            cpu_probes: Vec::new(),
             resources: vec![newer],
             process_resources: Vec::new(),
             warnings: Vec::new(),

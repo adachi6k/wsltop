@@ -192,7 +192,17 @@ pub fn compact(
             .and_then(|usage| usage.memory_bytes)
             .map_or_else(|| "N/A".into(), observation_memory);
         let style = environment_style(crate::summary::ENVIRONMENTS[index], colors);
-        cpu_chips.push(Span::styled(format!("{label} {cpu_value:>6}"), style));
+        let label = if index == 1 && snapshot.is_some_and(|s| s.cpu_overlap_unresolved) {
+            "WSL*"
+        } else {
+            label
+        };
+        let separator = if label == "WSL*" { "" } else { " " };
+        cpu_chips.push(Span::styled(
+            format!("{label}{separator}{cpu_value:>6}"),
+            style,
+        ));
+        let label = labels[index];
         ram_chips.push(Span::styled(format!("{label} {ram_value:>6}"), style));
     }
     let mut cpu_total = cpu_total;
@@ -289,9 +299,13 @@ Blank: before first sample. '!': failed/unavailable until recovery.\n\
 TERM=dumb uses ASCII levels. No host history in WSL-only.\n\
 Win CPU: Windows root execution, including interrupts and short-lived tasks.\n\
 Without a hypervisor, Win CPU equals host CPU; unavailable counters show N/A.\n\
-WSL CPU: shared kernel total, including short-lived processes and kernel work.\n\
+WSL CPU: shared kernel minus verified Docker/WSLC cgroup CPU.\n\
+Common-window rates use interpolation of cumulative counters (estimates).\n\
 Sampled once; includes other distros even with --wsl-only.\n\
-WSL CPU can overlap Docker/WSLC workloads in the same kernel.\n\
+WSL*: overlap unresolved; inclusive CLI/kernel readings remain, see warnings.\n\
+Read-only container probes require sh, cgroup v2 and a dedicated leaf cgroup.\n\
+Kernel boot and cgroup identities must match; no extrapolation or negative clamp.\n\
+Exact WSLC/Docker aliases count once under Docker. RAM stays unchanged.\n\
 WSLC / Docker: container totals, excluding their process detail rows.\n\
 CPU sums can differ: sampling windows, guest accounting, overlap and other VMs.\n\
 Hypervisor work is not assigned to Win; values are never scaled to fit the total.\n\
@@ -307,6 +321,29 @@ i infrastructure | h VM hosts | 0 zero rows | arrows/Pg scroll\n\
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unresolved_marker_keeps_four_columns_on_both_rows() {
+        let mut snapshot = crate::snapshot_store::tests::snapshot(60.0);
+        snapshot.cpu_overlap_unresolved = true;
+        for width in [80, 100, 120] {
+            let lines = compact(
+                Some(&snapshot),
+                width,
+                2,
+                false,
+                false,
+                Duration::from_secs(3),
+                Instant::now(),
+            );
+            assert_eq!(lines.len(), 2);
+            assert!(lines[0].to_string().contains("WSL*"));
+            assert!(!lines[1].to_string().contains("WSL*"));
+            assert!(lines
+                .iter()
+                .all(|l| l.width() <= width as usize && l.to_string().contains("Docker")));
+        }
+    }
 
     #[test]
     fn four_environment_columns_use_root_cpu_without_forcing_a_total() {

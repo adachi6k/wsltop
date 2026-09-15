@@ -19,6 +19,7 @@ struct RawWslcStat {
 
 #[derive(Debug, Clone, Default)]
 pub struct WslcUsage {
+    pub cpu_probes: Vec<crate::guest_cpu::Probe>,
     pub resources: Vec<ResourceUsage>,
     pub process_resources: Vec<ContainerProcessUsage>,
     pub warnings: Vec<String>,
@@ -109,6 +110,10 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
     }
 
     Ok(WslcUsage {
+        cpu_probes: crate::guest_cpu::collect(
+            "wslc.exe",
+            &result.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ),
         resources: result,
         process_resources: Vec::new(),
         warnings,

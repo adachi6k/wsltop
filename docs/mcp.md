@@ -167,9 +167,11 @@ unmeasured.
 `windows`, `virtual_machines`, `other`). With Hyper-V, these are physical/root/
 guest performance counters, including short-lived work and system processing.
 `virtual_machines` covers all guest partitions, not just WSL. Missing or
-inconsistent partition samples return null. The `environments` values retain
-their independent process/guest/container scopes and must not be added to this
-breakdown. See [CPU accounting](cpu-accounting.md).
+inconsistent partition samples return null. `environments` must not be added to
+this breakdown. Verified container CPU is separated from WSL using common-window
+cgroup estimates. `cpu_overlap_unresolved` is true when inclusive fallback values
+remain; snapshot warnings explain why. Windows environment CPU remains the process
+sum, while TUI Win CPU uses `cpu_breakdown.windows`. See [CPU accounting](cpu-accounting.md).
 
 | Tool | Arguments |
 | --- | --- |
@@ -235,10 +237,11 @@ WSL-only native Linux sampling labels CPU scope `wsl_visible`; normal
 and Windows-native sampling use `windows_host`. Host, environment, and parent/child
 usage can overlap and must not be added together.
 
-WSL category CPU is the shared kernel total, sampled once through the primary
+WSL category CPU starts with the shared kernel total, sampled through the primary
 distribution from `/proc/stat`, including short-lived tasks and kernel work.
-It can include other distributions even with `--wsl-only` and overlap container
-statistics. WSL RAM remains observed process RSS; process rows keep their existing
+It includes other distributions even with `--wsl-only`. Verified container cgroup
+CPU is separated over a common interpolated window; otherwise inclusive values
+remain and `cpu_overlap_unresolved` is true. WSL RAM remains observed process RSS; process rows keep their existing
 sampling semantics. See [CPU accounting](cpu-accounting.md#wsl-category-cpu).
 
 Unknown tools and invalid arguments produce JSON-RPC invalid-params errors before

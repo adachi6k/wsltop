@@ -10,8 +10,9 @@ AI agents can inspect the same workloads through the [read-only MCP server](#use
 
 The default TUI keeps a compact two-line CPU/RAM summary, history graphs and
 **Win / WSL / WSLC / Docker** columns. Win CPU includes Windows system work,
-interrupts and short-lived tasks. Environment CPU values can differ from the
-host total because of overlapping scopes, guest accounting and sampling windows.
+interrupts and short-lived tasks. Verified container cgroup CPU is separated from
+WSL over a common sampling window. `WSL*` means overlap could not be resolved.
+Guest accounting and sampling differences can still cause a gap from host CPU.
 Process and container CPU rows remain available below the header.
 Use `--header classic` for the traditional one-line header and `--color never`
 for monochrome output. See [release notes](https://github.com/adachi6k/wsltop/releases/latest).
@@ -308,7 +309,7 @@ CPU 23.4%      ▄▃▂▂▂▂▄▃▂▂▂▂▄▃▂ | Win   5.0% WSL  1
 RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2.10G WSLC   300M Docker   800M
 ```
 
-These example values are **independent observations, not an additive breakdown**:
+These example values are **not an exact additive breakdown of host CPU**:
 
 - `Win` CPU measures Windows root partition execution, including interrupts and
   short-lived tasks. It excludes guest execution and does not absorb the residual.
@@ -316,9 +317,12 @@ These example values are **independent observations, not an additive breakdown**
   process working sets, excluding VM host rows.
 - `WSL` CPU uses the shared WSL kernel's `/proc/stat` counters, sampled once through
   the primary distribution. It includes short-lived processes and kernel work,
-  including other distributions even with `--wsl-only`. Container workloads in
-  that same kernel may also appear under `Docker` or `WSLC`.
-- `WSLC` and `Docker` sum container statistics, excluding child process detail rows.
+  including other distributions even with `--wsl-only`. Verified Docker/WSLC
+  cgroup CPU is subtracted from this total and displayed in its own column.
+- `WSLC` and `Docker` use common-window cgroup rates when overlap is resolved;
+  otherwise they retain CLI container statistics. Child process rows are excluded.
+- `WSL*` marks inclusive fallback values: container membership, counter history
+  or collection could not be verified. The warning explains why.
 - Even without container overlap, Win root time and WSL guest-kernel time are
   not an additive physical-CPU breakdown; see [CPU accounting](docs/cpu-accounting.md#wsl-category-cpu).
 - Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
@@ -332,6 +336,17 @@ collectors display `N/A`; a successful empty collection displays zero. Host RAM 
 appear before the first CPU interval. With `--wsl-only`, host totals are unavailable
 and CPU observations use the WSL CPU scale, as explained in help.
 Summary observations are independent of row filters, limits, sorting and `--cpu-scale`.
+
+Overlap detection runs a short read-only `sh` probe in existing containers using
+`docker exec` / `wslc.exe exec`. It reads kernel boot identity, uptime and leaf
+cgroup v2 `cpu.stat`; it does not start containers, install tools or elevate
+privileges. Up to 16 containers per backend are probed, four at a time, with a
+two-second timeout per probe. Missing shell/tools/permissions, non-leaf or cgroup
+v1 configurations, foreign kernels and excessive container counts retain `WSL*`.
+The probes are independent of process-detail visibility. Exact cgroup aliases
+exposed by both backends count once under Docker. Rates use interpolation within
+observed cumulative-counter intervals, so they remain estimates. See
+[CPU overlap accounting](docs/cpu-accounting.md#container-overlap).
 
 Use `--header classic` for the existing one-line header, or `--header compact`
 for the new default. `--color auto|always|never` controls TUI colors; `auto` honors

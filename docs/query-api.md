@@ -52,6 +52,12 @@ observations remain missing. No uncollected resource limits or saturation values
 are fabricated. Parent/child and cross-environment observations can overlap and
 must not be summed into a host total.
 
+System summaries expose `cpu_overlap_unresolved`. When false and containers are
+present, verified leaf-cgroup CPU is separated from WSL over a common interpolated
+window. When true, original inclusive observations remain and snapshot warnings
+explain the missing evidence. This affects summary CPU only; resource rows and
+RAM retain their existing accounting. See [CPU accounting](cpu-accounting.md#container-overlap).
+
 ## Integration
 
 The [MCP adapter](mcp.md) calls this module through the Query service. The service owns
