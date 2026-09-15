@@ -141,7 +141,7 @@ pub fn compact(
     let cpu_total = format!("CPU {cpu:<10}");
     let ram_total = format!("RAM {ram:<10}");
     if width < 80 {
-        return vec![
+        let mut lines = vec![
             fit(
                 if width < 14 {
                     format!("CPU {}", cpu.trim())
@@ -163,6 +163,10 @@ pub fn compact(
                 colors,
             ),
         ];
+        if height >= 3 {
+            lines.insert(1, guest_cpu(snapshot, width, colors));
+        }
+        return lines;
     }
     let labels = ["Win", "WSL", "WSLC", "Docker"];
     let mut cpu_chips = Vec::new();
@@ -208,10 +212,33 @@ pub fn compact(
         ram_total.push(' ');
         ram_total.push_str(&history.memory.sparkline(columns, now, ascii));
     }
-    vec![
+    let mut lines = vec![
         fit(cpu_total, &cpu_chips, width, colors),
         fit(ram_total, &ram_chips, width, colors),
-    ]
+    ];
+    if height >= 3 {
+        lines.insert(1, guest_cpu(snapshot, width, colors));
+    }
+    lines
+}
+
+fn guest_cpu(snapshot: Option<&MonitorSnapshot>, width: u16, colors: bool) -> Line<'static> {
+    let chips: Vec<_> = ["WSL", "WSLC", "Docker"]
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let index = i + 1;
+            let value = snapshot
+                .and_then(|s| s.environment_summary.0[index])
+                .and_then(|usage| usage.cpu_percent)
+                .map_or_else(|| "N/A".into(), |cpu| format!("{cpu:.1}%"));
+            Span::styled(
+                format!("{label} {value:>6}"),
+                environment_style(crate::summary::ENVIRONMENTS[index], colors),
+            )
+        })
+        .collect();
+    fit("Guest CPU (overlap)".into(), &chips, width, colors)
 }
 
 // Labels are ASCII and sparkline glyphs occupy one cell. Never split a chip or wrap.
@@ -284,6 +311,8 @@ VM: ALL guest partitions, including WSL, WSLC, Docker VMs and other VMs.\n\
 Other: physical execution not assigned to root/guest counters, including hypervisor work.\n\
 Without a hypervisor, all host CPU is Win. Invalid/missing partition samples show N/A.\n\
 Process/container CPU rows remain independent observations, not additive partitions.\n\
+Guest CPU (overlap): individual WSL, WSLC and Docker CPU readings, whole host = 100%.\n\
+These readings can overlap and use guest/container sampling windows; their sum is not VM CPU.\n\
 Host RAM: physical total minus available; G/M/K use powers of 1024.\n\
 History: left is older, right is now; fixed 0-100% scale for CPU and RAM.\n\
 Each column spans the configured refresh interval, also shown in the footer.\n\
@@ -304,6 +333,46 @@ i infrastructure | h VM hosts | 0 zero rows | arrows/Pg scroll\n\
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guest_detail_shows_individual_cpu_without_rescaling_to_vm_total() {
+        let mut snapshot = crate::snapshot_store::tests::snapshot(60.0);
+        snapshot.cpu_breakdown = Some(crate::cpu_accounting::Breakdown {
+            total: 60.0,
+            windows: 19.0,
+            virtual_machines: 40.0,
+            other: 1.0,
+        });
+        for (index, cpu) in [(1, 70.0), (2, 15.0), (3, 20.0)] {
+            snapshot.environment_summary.0[index] = Some(crate::summary::Usage {
+                cpu_percent: Some(cpu),
+                memory_bytes: None,
+            });
+        }
+        for width in [80, 100, 150] {
+            let lines = compact(
+                Some(&snapshot),
+                width,
+                3,
+                false,
+                false,
+                Duration::from_secs(3),
+                Instant::now(),
+            );
+            assert_eq!(lines.len(), 3);
+            let detail = lines[1].to_string();
+            for label in ["overlap", "WSL  70.0%", "WSLC  15.0%", "Docker  20.0%"] {
+                assert!(detail.contains(label), "{detail}");
+            }
+            assert!(lines[0].to_string().contains("40.0%"));
+            assert!(lines[2].to_string().starts_with("RAM"));
+            assert!(lines.iter().all(|l| l.width() <= width as usize));
+        }
+        snapshot.environment_summary.0[2] = None;
+        assert!(guest_cpu(Some(&snapshot), 80, false)
+            .to_string()
+            .contains("WSLC    N/A"));
+    }
 
     #[test]
     fn widths_heights_and_monochrome_do_not_lose_totals_or_wrap() {

@@ -67,7 +67,9 @@ pub fn run(
 }
 
 fn layout_areas(area: Rect, mode: HeaderMode) -> [Rect; 4] {
-    let summary_height = if mode == HeaderMode::Compact && area.height >= 4 {
+    let summary_height = if mode == HeaderMode::Compact && area.height >= 5 {
+        3
+    } else if mode == HeaderMode::Compact && area.height >= 4 {
         2
     } else {
         1
@@ -642,19 +644,20 @@ mod tests {
                 .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
                 .collect();
             assert!(rows[0].starts_with("CPU "));
-            assert!(rows[1].starts_with("RAM "));
-            assert!(rows[2].trim_end().chars().all(|ch| ch == '─' || ch == '-'));
+            assert!(rows[1].starts_with("Guest CPU"));
+            assert!(rows[2].starts_with("RAM "));
+            assert!(rows[3].trim_end().chars().all(|ch| ch == '─' || ch == '-'));
             assert_eq!(
-                rows[2].trim_end().chars().count(),
+                rows[3].trim_end().chars().count(),
                 usize::from(width.min(97))
             );
-            assert!(rows[3].starts_with("ENV "));
-            assert!(rows[4].starts_with("---"));
-            assert_eq!(buffer[(0, 2)].modifier, buffer[(0, 4)].modifier);
-            assert!(buffer[(0, 4)]
+            assert!(rows[4].starts_with("ENV "));
+            assert!(rows[5].starts_with("---"));
+            assert_eq!(buffer[(0, 3)].modifier, buffer[(0, 5)].modifier);
+            assert!(buffer[(0, 5)]
                 .modifier
                 .contains(ratatui::style::Modifier::DIM));
-            for y in [3, 5] {
+            for y in [4, 6] {
                 assert!(!buffer[(0, y)]
                     .modifier
                     .contains(ratatui::style::Modifier::DIM));
@@ -664,7 +667,7 @@ mod tests {
             assert!(!rows.iter().any(|row| row.contains("Resources")
                 || row.contains("Host logical CPUs")
                 || row.contains("updated")));
-            assert_eq!(buffer[(0, 5)].fg, ratatui::style::Color::Cyan);
+            assert_eq!(buffer[(0, 6)].fg, ratatui::style::Color::Cyan);
             let expected: Vec<_> =
                 crate::render::flat(state.snapshot.as_ref().unwrap(), state.cpu_scale)
                     .lines()
@@ -771,14 +774,15 @@ mod tests {
     }
 
     #[test]
-    fn layout_reserves_two_summary_rows_and_one_footer_without_a_table_border() {
+    fn layout_reserves_guest_cpu_row_when_height_allows() {
         for height in [4, 6, 12, 24] {
             let [summary, separator, table, footer] =
                 layout_areas(Rect::new(0, 0, 80, height), HeaderMode::Compact);
-            assert_eq!(summary.height, 2);
-            assert_eq!(separator.height, u16::from(height >= 5));
-            assert_eq!(table.y, 2 + separator.height);
-            assert_eq!(table.height, height - 3 - separator.height);
+            let summary_height = if height >= 5 { 3 } else { 2 };
+            assert_eq!(summary.height, summary_height);
+            assert_eq!(separator.height, u16::from(height >= summary_height + 3));
+            assert_eq!(table.y, summary_height + separator.height);
+            assert_eq!(table.height, height - summary_height - 1 - separator.height);
             assert_eq!(footer.y, height - 1);
             assert_eq!(footer.height, 1);
         }
