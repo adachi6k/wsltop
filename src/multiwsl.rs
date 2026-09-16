@@ -9,6 +9,19 @@ use std::time::Instant;
 // task name containing newlines cannot impersonate the system-section boundary.
 const SYSTEM_MARKER: &str = "\nWSLTOP_SYSTEM_COUNTERS_BEGIN\n";
 
+fn wsl_command() -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new("wsl.exe");
+    // A collector may still be starting/exiting when the TUI restores its
+    // console. Do not let wsl.exe share and change the caller's console modes.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command
+}
+
 pub fn running_distros() -> Result<Vec<String>, Box<dyn Error>> {
     list_distros(&["--list", "--running", "--quiet"])
 }
@@ -28,7 +41,7 @@ pub fn default_distro() -> Result<Option<String>, Box<dyn Error>> {
 }
 
 fn list_distros(args: &[&str]) -> Result<Vec<String>, Box<dyn Error>> {
-    let output = Command::new("wsl.exe").args(args).output()?;
+    let output = wsl_command().args(args).output()?;
     if !output.status.success() {
         return Err(format!(
             "wsl.exe distro discovery failed: {}",
@@ -68,7 +81,7 @@ fn snapshot_script(primary: bool) -> String {
 }
 
 fn run_wsl_script(distro: Option<&str>, script: &str) -> Result<Output, Box<dyn Error>> {
-    let mut command = Command::new("wsl.exe");
+    let mut command = wsl_command();
     if let Some(distro) = distro {
         command.args(["-d", distro]);
     }

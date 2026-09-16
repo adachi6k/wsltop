@@ -19,6 +19,7 @@ struct RawDockerStat {
 
 #[derive(Debug, Clone, Default)]
 pub struct DockerUsage {
+    pub cpu_probes: Vec<crate::guest_cpu::Probe>,
     pub resources: Vec<ContainerProcessUsage>,
     pub warnings: Vec<String>,
 }
@@ -72,7 +73,12 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<d
         .into());
     }
     let resources = parse_stats(&output.stdout, host_logical_cpu_count)?;
+    let cpu_probes = crate::guest_cpu::collect(
+        "docker",
+        &resources.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+    );
     Ok(DockerUsage {
+        cpu_probes,
         resources: resources
             .into_iter()
             .map(|resource| ContainerProcessUsage {
@@ -312,6 +318,7 @@ mod tests {
         .unwrap()
         .remove(0);
         let usage = super::DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![crate::model::ContainerProcessUsage {
                 resource: row,
                 processes: vec![],
