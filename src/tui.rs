@@ -424,7 +424,8 @@ impl State {
         }
         items.push(if self.help { "? close" } else { "? help" }.to_owned());
         if self.selecting {
-            items.push("s scroll; arrows select".to_owned());
+            items.push("k terminate".to_owned());
+            items.push("s scroll".to_owned());
         }
         if width >= 80 {
             items.extend([
@@ -650,8 +651,12 @@ impl State {
             }
             byte_offset += line.len();
         }
-        if self.selected.is_some() && self.selected_line().is_none() {
-            self.selected = None;
+        if let Some(selected) = self.selected.take() {
+            self.selected = self
+                .selectable_rows
+                .iter()
+                .find(|(_, row)| same_row(&selected, row))
+                .map(|(_, row)| row.clone());
         }
         self.lines = output
             .lines()
@@ -1475,6 +1480,18 @@ mod tests {
         state.apply_sample(Ok(snapshot));
         assert!(state.confirmation.is_none());
         state.key(KeyCode::Char('y'));
+        assert!(state.action_receiver.is_none());
+    }
+
+    #[test]
+    fn changed_command_name_cancels_the_old_confirmation() {
+        let mut state = action_state();
+        state.key(KeyCode::Char('k'));
+        let mut snapshot = state.snapshot.take().unwrap();
+        snapshot.query_source.as_mut().unwrap().resources[0].name = "replacement-command".into();
+        state.apply_sample(Ok(snapshot));
+        assert_eq!(state.selected.as_ref().unwrap().name, "replacement-command");
+        assert!(state.confirmation.is_none());
         assert!(state.action_receiver.is_none());
     }
 
