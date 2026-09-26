@@ -9,7 +9,7 @@ use crate::query_service::{QueryService, ServiceError, SharedQueryService, Snaps
 use crate::snapshot_store::{SnapshotError, SnapshotRequest};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
@@ -112,8 +112,8 @@ impl<C: SnapshotCollector> McpServer<C> {
 }
 
 impl<C: SnapshotCollector + Send + 'static> ServerHandler for McpServer<C> {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("wsltop", env!("CARGO_PKG_VERSION"));
         info.instructions = Some("Read-only local observations. Preserve snapshot_id across calls; resource IDs are opaque and observation-scoped. CPU percentages use the collected host-wide scale. Environment and parent/child usage can overlap; do not sum them. No actions or shell tools.".into());
         info
