@@ -176,7 +176,12 @@ fn draw_ui(
             table,
         );
     }
-    frame.render_widget(Paragraph::new(state.footer(footer.width, interval)), footer);
+    frame.render_widget(
+        Paragraph::new(state.footer(footer.width, interval)).style(separator_style(
+            state.colors && (state.action_status.is_empty() || state.help),
+        )),
+        footer,
+    );
 }
 
 fn summary_separator_width(available: u16, summary: &[Line<'_>], table: &[Line<'_>]) -> u16 {

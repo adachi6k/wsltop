@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- Dim the TUI footer menu to distinguish controls from resource rows. Process-action feedback stays at normal intensity, and `--color never` remains unstyled.
+
 ## [1.0.0-rc.1] - 2026-09-26
 
 ### Added
