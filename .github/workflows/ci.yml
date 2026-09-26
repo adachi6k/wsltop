@@ -14,6 +14,8 @@ jobs:
           components: rustfmt, clippy
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Release metadata tests
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Test
         run: cargo test --locked --all-targets
       - name: Clippy

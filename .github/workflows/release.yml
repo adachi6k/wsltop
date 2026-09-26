@@ -7,7 +7,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
-      - .github/scripts/release-notes.py
+      - .github/scripts/**
       - Cargo.toml
       - Cargo.lock
       - CHANGELOG.md
@@ -192,6 +192,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body_path: release-notes/release-notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz

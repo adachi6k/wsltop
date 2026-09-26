@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-09-26
+
+### Added
+
+- Defined the [1.x compatibility policy](docs/compatibility.md) for the CLI, JSON output and read-only MCP tools. This release candidate preserves the existing interfaces and prepares the first stable release.
+- Added confirmed, normal process termination in the Windows-native TUI for verified primary-WSL processes. Select a row with `s`, request termination with `k`, and confirm with `y`. The target distribution requires Python 3.9+ with pidfd support; unsupported targets fail closed. See [scope and prerequisites](docs/process-actions.md).
+
+### Changed
+
+- Updated the MCP dependency to rmcp 3.4 and adapted server configuration without changing the public tools.
+- Release automation now supports RC tags and marks them as prereleases without replacing the latest stable release.
+
 ## [0.5.3] - 2026-09-16
 
 ### Fixed
@@ -170,7 +182,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.0-rc.1...HEAD
+[1.0.0-rc.1]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0-rc.1
 [0.5.3]: https://github.com/adachi6k/wsltop/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/adachi6k/wsltop/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/adachi6k/wsltop/compare/v0.5.0...v0.5.1

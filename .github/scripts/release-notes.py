@@ -4,8 +4,9 @@ import re
 import sys
 
 tag = sys.argv[1]
-if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
-    sys.exit("expected a stable release tag such as v0.5.3")
+number = r"(?:0|[1-9][0-9]*)"
+if not re.fullmatch(rf"v{number}\.{number}\.{number}(?:-rc\.{number})?", tag):
+    sys.exit("expected a stable or RC release tag such as v1.0.0 or v1.0.0-rc.1")
 changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
 entry = re.search(
     rf"(?ms)^## \[{re.escape(tag[1:])}\][^\n]*\n(.*?)(?=^## |\Z)", changelog

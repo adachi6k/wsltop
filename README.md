@@ -8,6 +8,10 @@
 
 AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
 
+The 1.0 release candidate establishes a [compatibility policy](docs/compatibility.md)
+for the existing CLI, JSON output and MCP tools. RC releases are opt-in;
+the default installation continues to use the latest stable version.
+
 The default TUI keeps a compact two-line CPU/RAM summary, history graphs and
 **Win / WSL / WSLC / Docker** columns. Win CPU includes Windows system work,
 interrupts and short-lived tasks. Verified container cgroup CPU is separated from

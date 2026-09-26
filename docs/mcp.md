@@ -196,8 +196,9 @@ equivalent to `list_children`. No process ancestry is guessed from bare PIDs.
 All resource IDs are opaque and **observation-scoped**, including known-generation
 processes. Preserve the returned snapshot ID when inspecting a resource or listing
 children. After refresh, an old resource ID remains valid only within its retained
-original snapshot. Automatic namespace continuity and destructive-action identity
-revalidation remain future work.
+original snapshot. MCP does not provide automatic namespace continuity or mutation
+tools. The separate [TUI termination workflow](process-actions.md) revalidates
+its own target identity; MCP resource IDs do not authorize process actions.
 
 ## Results and errors
 
