@@ -1418,6 +1418,7 @@ mod tests {
         state.key(KeyCode::Char('k'));
         let mut snapshot = state.snapshot.take().unwrap();
         snapshot.action_scope.as_mut().unwrap().boot = "rebooted".into();
+        state.snapshot = action_state().snapshot;
         state.apply_sample(Ok(snapshot));
         assert!(state.confirmation.is_none());
         assert!(state.selected.is_none());
@@ -1477,6 +1478,7 @@ mod tests {
         assert!(state.confirmation_visible);
         let mut snapshot = state.snapshot.take().unwrap();
         snapshot.query_source.as_mut().unwrap().resources.clear();
+        state.snapshot = action_state().snapshot;
         state.apply_sample(Ok(snapshot));
         assert!(state.confirmation.is_none());
         state.key(KeyCode::Char('y'));
@@ -1489,6 +1491,7 @@ mod tests {
         state.key(KeyCode::Char('k'));
         let mut snapshot = state.snapshot.take().unwrap();
         snapshot.query_source.as_mut().unwrap().resources[0].name = "replacement-command".into();
+        state.snapshot = action_state().snapshot;
         state.apply_sample(Ok(snapshot));
         assert_eq!(state.selected.as_ref().unwrap().name, "replacement-command");
         assert!(state.confirmation.is_none());
