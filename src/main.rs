@@ -1,3 +1,4 @@
+mod action;
 mod attribution;
 mod collector;
 mod command;

@@ -402,6 +402,7 @@ mod tests {
             }],
         };
         MonitorSnapshot {
+            action_scope: None,
             cpu_overlap_unresolved: false,
             host_cpu_percent: Some(40.0),
             cpu_breakdown: None,

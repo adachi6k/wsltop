@@ -3,6 +3,7 @@
 
 #[derive(Debug, Clone)]
 pub struct Sample {
+    pub action_scope: Option<crate::action::Scope>,
     busy: [u64; 5],
     uptime: f64,
     ticks: f64,
@@ -52,6 +53,7 @@ impl Sample {
             return None;
         }
         Some(Self {
+            action_scope: None,
             busy,
             uptime,
             ticks,

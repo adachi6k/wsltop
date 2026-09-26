@@ -40,6 +40,7 @@ enum Event {
 }
 
 struct Normalized<T> {
+    action_scope: Option<crate::action::Scope>,
     cpu_count: u32,
     system_cpu: Option<f64>,
     kernel_sample: Option<crate::linux_cpu::Sample>,
@@ -49,6 +50,7 @@ struct Normalized<T> {
 impl<T> Normalized<T> {
     fn new(cpu_count: u32, value: T) -> Self {
         Self {
+            action_scope: None,
             cpu_count,
             value,
             system_cpu: None,
@@ -83,6 +85,7 @@ impl Event {
 
 #[derive(Default)]
 struct Aggregate {
+    action_scope: Option<crate::action::Scope>,
     guest_cpu: crate::guest_cpu::History,
     wsl_cpu_percent: Option<f64>,
     host_cpu_percent: Option<f64>,
@@ -234,9 +237,11 @@ impl Aggregate {
             Event::HostMemory(..) => unreachable!(),
             Event::CollectorWarnings(_) => unreachable!(),
             Event::Linux(value) => {
+                self.action_scope = None;
                 self.wsl_cpu_percent = None;
                 self.guest_cpu.kernel(value.kernel_sample.as_ref());
                 value.value.map(|rows| {
+                    self.action_scope = value.action_scope;
                     self.linux = rows;
                     self.wsl_cpu_percent = value.system_cpu;
                 })
@@ -426,6 +431,7 @@ impl Aggregate {
         );
         summary.set_wsl_cpu(normalized.then_some(self.wsl_cpu_percent).flatten());
         let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, config);
+        snapshot.action_scope = self.action_scope.clone();
         snapshot.host_cpu_percent = self.host_cpu_percent;
         snapshot.cpu_breakdown = self.cpu_breakdown;
         snapshot.host_memory = self.host_memory;
@@ -641,6 +647,10 @@ fn spawn_primary_processes(
                     if let Some((old, old_count)) = &primary_before {
                         let rows = sampler::calculate_usage(old, &after, count);
                         let mut update = Normalized::new(count, Ok(rows));
+                        update.action_scope = after
+                            .system_cpu
+                            .as_ref()
+                            .and_then(|s| s.action_scope.clone());
                         update.system_cpu =
                             stable_kernel_usage(old, &after, *old_count, stable_count);
                         if update.system_cpu.is_some() {
