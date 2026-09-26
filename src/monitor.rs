@@ -28,6 +28,7 @@ pub struct Monitor {
 }
 
 pub struct MonitorSnapshot {
+    pub action_scope: Option<crate::action::Scope>,
     pub cpu_overlap_unresolved: bool,
     pub host_cpu_percent: Option<f64>,
     pub cpu_breakdown: Option<crate::cpu_accounting::Breakdown>,
@@ -76,6 +77,7 @@ impl MonitorSnapshot {
         apply_windows_application_view(&mut resources, &tree.windows_applications, config);
         let query = config.query();
         Self {
+            action_scope: None,
             host_cpu_percent: None,
             cpu_overlap_unresolved: false,
             cpu_breakdown: None,

@@ -5,6 +5,7 @@
 - [Installation and CLI/TUI usage](../README.md#quick-start)
 - [Connect an AI agent using MCP](mcp.md#quick-start)
 - [CPU and memory accounting](cpu-accounting.md)
+- [TUI process termination: scope and validation](process-actions.md)
 - [Changelog](../CHANGELOG.md) and [published releases](https://github.com/adachi6k/wsltop/releases)
 
 ## Development and verification

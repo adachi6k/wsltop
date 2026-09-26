@@ -1,4 +1,5 @@
 use crate::header::{self, separator_style, ColorMode, HeaderMode};
+use crate::model::ResourceUsage;
 use crate::monitor::{MonitorConfig, MonitorSnapshot};
 use crate::query::{ResourceQuery, SortKey, SortOrder};
 use crate::render;
@@ -41,6 +42,7 @@ pub fn run(
     let worker = SamplingWorker::start(config, distro, initial_tree);
 
     loop {
+        state.poll_action();
         for result in worker.receiver.try_iter() {
             state.apply_sample(result);
         }
@@ -55,7 +57,7 @@ pub fn run(
                 }
                 if matches!(
                     code,
-                    KeyCode::Char('t' | 'i' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
+                    KeyCode::Char('t' | 's' | 'i' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
                 ) {
                     state.rebuild_lines();
                     worker.set_details(state.tree);
@@ -115,7 +117,24 @@ fn draw_ui(
         Paragraph::new(summary_separator(separator_width, state.colors, ascii)),
         separator,
     );
-    if state.help {
+    if let Some(request) = &state.confirmation {
+        let text = format!(
+            "Send SIGTERM?\n\nWSL: {}\nPID: {}\nProcess: {}\n\nRequests normal termination; the process may ignore it.\ny confirm | n / Esc cancel",
+            request.scope.distro.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>(),
+            request.key.pid, request.name,
+        );
+        let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+        state.confirmation_visible = paragraph.line_count(table.width) <= usize::from(table.height);
+        if state.confirmation_visible {
+            frame.render_widget(paragraph, table);
+        } else {
+            frame.render_widget(
+                Paragraph::new("Resize to show the full target before confirming. Esc cancels.")
+                    .wrap(Wrap { trim: false }),
+                table,
+            );
+        }
+    } else if state.help {
         let paragraph = Paragraph::new(state.help_text(interval)).wrap(Wrap { trim: false });
         let help_lines = paragraph.line_count(table.width);
         state.help_scroll = state.help_scroll.min(
@@ -126,15 +145,32 @@ fn draw_ui(
         frame.render_widget(paragraph.scroll((state.help_scroll, 0)), table);
     } else {
         let height = usize::from(table.height);
+        if let Some(index) = state.selected_line() {
+            if index < state.scroll {
+                state.scroll = index;
+            } else if index >= state.scroll + height {
+                state.scroll = index.saturating_sub(height.saturating_sub(1));
+            }
+        }
         state.clamp_scroll(height);
         frame.render_widget(
             Paragraph::new(
                 state
                     .lines
                     .iter()
+                    .enumerate()
                     .skip(state.scroll)
                     .take(height)
-                    .cloned()
+                    .map(|(index, line)| {
+                        let mut line = line.clone();
+                        if state.selected_line() == Some(index) {
+                            line = line.style(
+                                ratatui::style::Style::default()
+                                    .add_modifier(ratatui::style::Modifier::REVERSED),
+                            );
+                        }
+                        line
+                    })
                     .collect::<Vec<_>>(),
             ),
             table,
@@ -210,9 +246,109 @@ struct State {
     hide_zero: bool,
     snapshot: Option<MonitorSnapshot>,
     cpu_scale: CpuScale,
+    selecting: bool,
+    selected: Option<ResourceUsage>,
+    selectable_rows: Vec<(usize, ResourceUsage)>,
+    confirmation: Option<crate::action::Request>,
+    confirmation_visible: bool,
+    action_receiver: Option<mpsc::Receiver<String>>,
+    action_status: String,
+}
+
+fn same_row(a: &ResourceUsage, b: &ResourceUsage) -> bool {
+    a.environment == b.environment
+        && a.kind == b.kind
+        && a.source == b.source
+        && a.id == b.id
+        && a.pid == b.pid
+        && a.start_id == b.start_id
 }
 
 impl State {
+    fn poll_action(&mut self) {
+        if let Some(receiver) = &self.action_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.action_status = result;
+                    self.action_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.action_status =
+                        "Action worker stopped; outcome unknown. Check the target before retrying."
+                            .into();
+                    self.action_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    }
+
+    fn begin_confirmation(&mut self) {
+        if self.action_receiver.is_some() {
+            self.action_status = "A termination request is already in progress.".into();
+            return;
+        }
+        if !cfg!(any(windows, test)) {
+            self.action_status =
+                "Termination is currently supported only by the Windows-native TUI.".into();
+            return;
+        }
+        let Some(row) = self.selected.as_ref() else {
+            self.action_status =
+                "Use s and the arrows to select a process in flat view first.".into();
+            return;
+        };
+        let scope = self.snapshot.as_ref().and_then(|s| s.action_scope.as_ref());
+        match crate::action::Request::new(scope, row) {
+            Ok(request) => {
+                self.confirmation = Some(request);
+                self.confirmation_visible = false;
+            }
+            Err(reason) => self.action_status = reason.into(),
+        }
+    }
+
+    fn confirmation_is_current(&self) -> bool {
+        let Some(request) = &self.confirmation else {
+            return false;
+        };
+        let Some(snapshot) = &self.snapshot else {
+            return false;
+        };
+        self.selected
+            .as_ref()
+            .and_then(|row| crate::action::Request::new(snapshot.action_scope.as_ref(), row).ok())
+            .as_ref()
+            == Some(request)
+    }
+
+    fn selected_line(&self) -> Option<usize> {
+        let selected = self.selected.as_ref()?;
+        self.selectable_rows
+            .iter()
+            .find_map(|(line, row)| same_row(selected, row).then_some(*line))
+    }
+
+    fn move_selection(&mut self, forward: bool, distance: usize) {
+        if self.selectable_rows.is_empty() {
+            self.selected = None;
+            return;
+        }
+        let current = self.selected.as_ref().and_then(|selected| {
+            self.selectable_rows
+                .iter()
+                .position(|(_, row)| same_row(selected, row))
+        });
+        let last = self.selectable_rows.len() - 1;
+        let index = match current {
+            Some(index) if forward => index.saturating_add(distance).min(last),
+            Some(index) => index.saturating_sub(distance),
+            None if forward => 0,
+            None => last,
+        };
+        self.selected = Some(self.selectable_rows[index].1.clone());
+    }
+
     fn classic_header(&self, width: u16, interval: Duration) -> String {
         fit_text(
             &format!(
@@ -229,6 +365,12 @@ impl State {
     }
 
     fn footer(&self, width: u16, interval: Duration) -> String {
+        if !self.action_status.is_empty() && !self.help {
+            return fit_text(
+                &format!("{} | ? details", self.action_status),
+                usize::from(width),
+            );
+        }
         let width = usize::from(width);
         let view = if self.tree { "tree" } else { "flat" };
         let key = match self.query.sort.key {
@@ -281,6 +423,9 @@ impl State {
             items.push("!".to_owned());
         }
         items.push(if self.help { "? close" } else { "? help" }.to_owned());
+        if self.selecting {
+            items.push("s scroll; arrows select".to_owned());
+        }
         if width >= 80 {
             items.extend([
                 "t tree".to_owned(),
@@ -318,6 +463,9 @@ impl State {
         if !self.status.is_empty() {
             text.push_str(&format!("Status: {}\n", self.status));
         }
+        if !self.action_status.is_empty() {
+            text.push_str(&format!("Action: {}\n", self.action_status));
+        }
         text.push('\n');
         text.push_str(header::HELP);
         text
@@ -336,6 +484,34 @@ impl State {
     }
 
     fn key(&mut self, code: KeyCode) -> bool {
+        if self.confirmation.is_some() {
+            match code {
+                KeyCode::Char('y')
+                    if self.confirmation_visible && self.confirmation_is_current() =>
+                {
+                    let request = self.confirmation.take().unwrap();
+                    self.action_status = format!(
+                        "Sending SIGTERM to {} PID {}...",
+                        request.scope.distro, request.key.pid
+                    );
+                    let (sender, receiver) = mpsc::channel();
+                    self.action_receiver = Some(receiver);
+                    thread::spawn(move || {
+                        let _ = sender.send(crate::action::terminate(request));
+                    });
+                }
+                KeyCode::Esc | KeyCode::Char('n') => {
+                    self.confirmation = None;
+                    self.action_status = "Termination cancelled; no signal sent.".into();
+                }
+                KeyCode::Char('q') => {
+                    self.confirmation = None;
+                    return true;
+                }
+                _ => {}
+            }
+            return false;
+        }
         if code == KeyCode::Char('?') {
             self.help = !self.help;
             self.help_scroll = 0;
@@ -354,7 +530,27 @@ impl State {
             return false;
         }
         match code {
+            KeyCode::Char('k') => self.begin_confirmation(),
             KeyCode::Char('q') | KeyCode::Esc => return true,
+            KeyCode::Char('s') => {
+                self.action_status.clear();
+                self.selecting = !self.selecting;
+                self.selected = None;
+                if self.selecting {
+                    self.tree = false;
+                    self.scroll = 0;
+                }
+            }
+            KeyCode::Down | KeyCode::Up | KeyCode::PageDown | KeyCode::PageUp if self.selecting => {
+                self.move_selection(
+                    matches!(code, KeyCode::Down | KeyCode::PageDown),
+                    if matches!(code, KeyCode::PageDown | KeyCode::PageUp) {
+                        10
+                    } else {
+                        1
+                    },
+                );
+            }
             KeyCode::Down => self.scroll = self.scroll.saturating_add(1),
             KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_add(10),
@@ -362,6 +558,8 @@ impl State {
             KeyCode::Char('t') => {
                 self.tree = !self.tree;
                 self.scroll = 0;
+                self.selecting = false;
+                self.selected = None;
             }
             KeyCode::Char('i') => self.hide_infra = !self.hide_infra,
             KeyCode::Char('h') => self.show_hosts = !self.show_hosts,
@@ -390,6 +588,11 @@ impl State {
     fn apply_sample(&mut self, result: Result<MonitorSnapshot, String>) {
         match result {
             Ok(snapshot) => {
+                if self.snapshot.as_ref().and_then(|s| s.action_scope.as_ref())
+                    != snapshot.action_scope.as_ref()
+                {
+                    self.selected = None;
+                }
                 self.status = if snapshot.warnings.is_empty() {
                     String::new()
                 } else {
@@ -397,10 +600,19 @@ impl State {
                 };
                 self.snapshot = Some(snapshot);
                 self.rebuild_lines();
+                if self.confirmation.is_some() && !self.confirmation_is_current() {
+                    self.confirmation = None;
+                    self.action_status =
+                        "Confirmation cancelled: target changed or disappeared; no signal sent."
+                            .into();
+                }
             }
             Err(error) => {
                 self.status = error;
+                self.selected = None;
+                self.confirmation = None;
                 if let Some(snapshot) = &mut self.snapshot {
+                    snapshot.action_scope = None;
                     snapshot.host_cpu_percent = None;
                     snapshot.cpu_breakdown = None;
                     snapshot.host_memory = None;
@@ -420,11 +632,27 @@ impl State {
         self.query.hide_infra = self.hide_infra;
         self.query.show_wsl_host = self.show_hosts;
         snapshot.requery(&self.query);
-        let output = if self.tree {
-            render::tree(snapshot, self.cpu_scale)
+        let (output, rows) = if self.tree {
+            (render::tree(snapshot, self.cpu_scale), Vec::new())
         } else {
-            render::flat(snapshot, self.cpu_scale)
+            render::flat_with_rows(snapshot, self.cpu_scale)
         };
+        self.selectable_rows.clear();
+        let mut byte_offset = 0;
+        let mut line_index = 0;
+        let skip = if self.tree { 2 } else { 1 };
+        for (index, line) in output.split_inclusive('\n').enumerate() {
+            if index >= skip && (!self.hide_zero || !line.contains(" 0.00%")) {
+                if let Some((_, row)) = rows.iter().find(|(offset, _)| *offset == byte_offset) {
+                    self.selectable_rows.push((line_index, row.clone()));
+                }
+                line_index += 1;
+            }
+            byte_offset += line.len();
+        }
+        if self.selected.is_some() && self.selected_line().is_none() {
+            self.selected = None;
+        }
         self.lines = output
             .lines()
             .skip(if self.tree { 2 } else { 1 })
@@ -1072,6 +1300,182 @@ mod tests {
             state.snapshot.as_ref().unwrap().environment_summary.0,
             [None; 4]
         );
+    }
+
+    #[test]
+    fn selection_follows_identity_and_clears_on_filter_or_pid_reuse() {
+        let config = MonitorConfig {
+            sort: Default::default(),
+            interval: Duration::from_secs(3),
+            limit: 30,
+            show_wsl_host: false,
+            wsl_only: true,
+            no_wslc: true,
+            no_docker: true,
+            hide_infra: false,
+            show_container_processes: false,
+            container_process_limit: 5,
+            collect_windows_applications: false,
+        };
+        let mut first = crate::query::tests::row("busy", 10.0, 1);
+        first.pid = Some(101);
+        first.id = "101".into();
+        first.start_id = Some(11);
+        let mut second = crate::query::tests::row("large", 1.0, 100);
+        second.pid = Some(102);
+        second.id = "102".into();
+        second.start_id = Some(12);
+        let sample = |rows: Vec<crate::model::ResourceUsage>| {
+            let tree = crate::attribution::build_tree_with_docker(16, &[], &rows, &[], &[]);
+            crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config)
+        };
+        let mut state = State::from_config(&config, false, CpuScale::Core);
+        state.apply_sample(Ok(sample(vec![first.clone(), second.clone()])));
+        state.key(KeyCode::Char('s'));
+        state.rebuild_lines();
+        state.key(KeyCode::Down);
+        assert_eq!(state.selected.as_ref().unwrap().pid, Some(101));
+        let first_line = state.selected_line().unwrap();
+        state.key(KeyCode::Char('m'));
+        state.rebuild_lines();
+        assert_eq!(state.selected.as_ref().unwrap().pid, Some(101));
+        assert_ne!(state.selected_line().unwrap(), first_line);
+        first.start_id = Some(999);
+        state.apply_sample(Ok(sample(vec![first.clone(), second.clone()])));
+        assert!(
+            state.selected.is_none(),
+            "a replacement PID must not inherit selection"
+        );
+        state.key(KeyCode::Down);
+        assert_eq!(state.selected.as_ref().unwrap().pid, Some(102));
+        second.cpu_percent = 0.0;
+        state.apply_sample(Ok(sample(vec![first, second])));
+        state.key(KeyCode::Char('0'));
+        state.rebuild_lines();
+        assert!(
+            state.selected.is_none(),
+            "hidden rows must not remain selected"
+        );
+        state.key(KeyCode::Down);
+        assert!(state.selected.is_some());
+        state.key(KeyCode::Char('t'));
+        assert!(state.selected.is_none());
+        assert!(!state.selecting);
+    }
+
+    fn action_state() -> State {
+        let config = MonitorConfig {
+            sort: Default::default(),
+            interval: Duration::from_secs(3),
+            limit: 30,
+            show_wsl_host: false,
+            wsl_only: true,
+            no_wslc: true,
+            no_docker: true,
+            hide_infra: false,
+            show_container_processes: false,
+            container_process_limit: 5,
+            collect_windows_applications: false,
+        };
+        let mut row = crate::query::tests::row("worker", 10.0, 1);
+        row.environment = crate::model::EnvironmentKind::Wsl;
+        row.kind = crate::model::ResourceKind::Process;
+        row.source = None;
+        row.pid = Some(99);
+        row.start_id = Some(123);
+        let rows = vec![row];
+        let tree = crate::attribution::build_tree_with_docker(16, &[], &rows, &[], &[]);
+        let mut snapshot =
+            crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config);
+        snapshot.action_scope =
+            crate::action::Scope::parse("Ubuntu", "boot", "pid:[7] mnt:[8] 1000");
+        let mut state = State::from_config(&config, false, CpuScale::Core);
+        state.apply_sample(Ok(snapshot));
+        state.key(KeyCode::Char('s'));
+        state.rebuild_lines();
+        state.key(KeyCode::Down);
+        state
+    }
+
+    #[test]
+    fn confirmation_pins_target_and_cancel_or_hidden_prompt_never_dispatches() {
+        let mut state = action_state();
+        state.key(KeyCode::Char('k'));
+        let request = state.confirmation.clone().unwrap();
+        state.key(KeyCode::Char('y')); // Not drawn yet: cannot approve an unseen target.
+        assert!(state.action_receiver.is_none());
+        state.key(KeyCode::Down);
+        state.key(KeyCode::Char('m'));
+        assert_eq!(state.confirmation.as_ref(), Some(&request));
+        state.key(KeyCode::Esc);
+        assert!(state.confirmation.is_none());
+        assert!(state.action_receiver.is_none());
+        state.key(KeyCode::Char('k'));
+        let mut snapshot = state.snapshot.take().unwrap();
+        snapshot.action_scope.as_mut().unwrap().boot = "rebooted".into();
+        state.apply_sample(Ok(snapshot));
+        assert!(state.confirmation.is_none());
+        assert!(state.selected.is_none());
+        assert!(state.action_receiver.is_none());
+    }
+
+    #[test]
+    fn pending_action_does_not_block_keys_or_allow_a_second_dispatch() {
+        let mut state = action_state();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        state.action_receiver = Some(receiver);
+        state.key(KeyCode::Char('k'));
+        assert!(state.confirmation.is_none());
+        state.key(KeyCode::Char('?'));
+        assert!(state.help);
+        state.poll_action();
+        assert!(state.action_receiver.is_some());
+        sender.send("accepted, still running".into()).unwrap();
+        state.poll_action();
+        assert!(state.action_receiver.is_none());
+        assert_eq!(state.action_status, "accepted, still running");
+    }
+
+    #[test]
+    fn small_terminal_and_disappearing_target_cannot_confirm() {
+        let mut state = action_state();
+        state.key(KeyCode::Char('k'));
+        let backend = ratatui::backend::TestBackend::new(30, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_ui(
+                    f,
+                    &mut state,
+                    HeaderMode::Compact,
+                    true,
+                    Duration::from_secs(3),
+                )
+            })
+            .unwrap();
+        assert!(!state.confirmation_visible);
+        state.key(KeyCode::Char('y'));
+        assert!(state.action_receiver.is_none());
+        let backend = ratatui::backend::TestBackend::new(100, 25);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_ui(
+                    f,
+                    &mut state,
+                    HeaderMode::Compact,
+                    true,
+                    Duration::from_secs(3),
+                )
+            })
+            .unwrap();
+        assert!(state.confirmation_visible);
+        let mut snapshot = state.snapshot.take().unwrap();
+        snapshot.query_source.as_mut().unwrap().resources.clear();
+        state.apply_sample(Ok(snapshot));
+        assert!(state.confirmation.is_none());
+        state.key(KeyCode::Char('y'));
+        assert!(state.action_receiver.is_none());
     }
 
     #[test]

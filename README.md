@@ -255,6 +255,8 @@ Controls:
 | --- | --- |
 | `q`, `Esc` | Quit |
 | Up/Down, Page Up/Page Down | Scroll |
+| `s` | Enter/leave selection mode in flat view; arrows/Page keys select rows |
+| `k` | Request normal termination of the selected primary WSL process (Windows-native TUI) |
 | `t` | Toggle flat/tree view |
 | `c`, `m`, `n` | Sort by CPU, memory, or name |
 | `r` | Reverse sort direction |
@@ -264,6 +266,30 @@ Controls:
 | `?` | Open/close summary help (arrows/Pg scroll; Esc closes help) |
 
 Terminal raw mode, alternate-screen state, and cursor visibility are restored on normal exit and propagated errors.
+
+#### Terminating a selected WSL process
+
+In the Windows-native TUI, press `s`, select a row with the arrows, then press
+`k`. The confirmation shows the resolved WSL distribution, PID and process
+name: `y` sends SIGTERM; `n` or `Esc` cancels. The entire confirmation must fit
+on screen before it can be accepted. Selection follows the process across
+sorting and refreshes, and is cleared if the row disappears, is filtered out,
+or its identity changes. Selection mode uses the flat view; `t` clears it.
+
+This first action supports only ordinary processes in the primary WSL
+distribution already used by the collector. It requires **Python 3.9+ with
+pidfd support** in that distribution. Nothing is installed automatically.
+Windows processes, other distributions, containers, aggregate rows, init and
+unverifiable identities are unsupported. WSL-native execution remains
+read-only. MCP remains read-only on both platforms.
+
+The helper checks the boot, PID/mount namespaces, user and process start time,
+and sends SIGTERM through a pidfd so PID reuse after validation cannot redirect
+the signal. There is no sudo, PID-only fallback, automatic retry or force-kill.
+One request can run at a time, without blocking the TUI. The footer shows the
+result; `?` shows it in full. **Accepted means the signal was accepted, not that
+the process exited.** A timeout has an unknown outcome: inspect the target
+before retrying. Quitting after confirmation does not undo the request.
 
 ### Compact resource summary
 

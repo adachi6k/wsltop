@@ -316,6 +316,10 @@ N/A: disabled, warming up, unavailable or incomplete collection.\n\
 Filters, limits, sorting and row CPU scale do not change the summary.\n\n\
 ? close help | t tree/flat | c/m/n sort CPU/memory/name | r reverse\n\
 i infrastructure | h VM hosts | 0 zero rows | arrows/Pg scroll\n\
+s select in flat view (arrows/Pg move selection); s returns to scrolling\n\
+k request SIGTERM (Windows TUI, primary WSL only); y confirms, Esc cancels\n\
+Termination needs Python 3.9+ and pidfd in WSL; no install or kill fallback.\n\
+One request at a time; accepted does not mean exited. ? shows the full result.\n\
 --header classic restores the one-line header; --color never disables colors.";
 
 #[cfg(test)]

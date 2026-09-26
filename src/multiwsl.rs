@@ -68,13 +68,23 @@ pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn 
         )
         .into());
     }
-    parse_snapshot_bytes(source, &output.stdout)
+    let mut snapshot = parse_snapshot_bytes(source, &output.stdout)?;
+    if source.is_none() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        if let Some((_, scope)) = text.rsplit_once("\nWSLTOP_ACTION_SCOPE ") {
+            if let Some(system) = snapshot.system_cpu.as_mut() {
+                system.action_scope =
+                    crate::action::Scope::parse(distro, system.cumulative().0, scope);
+            }
+        }
+    }
+    Ok(snapshot)
 }
 
 fn snapshot_script(primary: bool) -> String {
     let script = "clock_ticks=$(getconf CLK_TCK) || exit; page_size=$(getconf PAGESIZE) || exit; printf '%s %s\\n' \"$clock_ticks\" \"$page_size\" || exit; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\" 2>/dev/null || :; done";
     if primary {
-        format!("{script}; printf '%s' '{SYSTEM_MARKER}'; grep '^cpu' /proc/stat 2>/dev/null || :; printf 'UPTIME '; cat /proc/uptime 2>/dev/null || :; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id 2>/dev/null || :")
+        format!("{script}; printf '%s' '{SYSTEM_MARKER}'; grep '^cpu' /proc/stat 2>/dev/null || :; printf 'UPTIME '; cat /proc/uptime 2>/dev/null || :; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id 2>/dev/null || :; printf '\\nWSLTOP_ACTION_SCOPE '; readlink /proc/self/ns/pid /proc/self/ns/mnt 2>/dev/null || :; id -u 2>/dev/null || :")
     } else {
         script.into()
     }
@@ -154,6 +164,9 @@ fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn 
     Ok(Snapshot {
         system_cpu: system.split_once("UPTIME ").and_then(|(stat, rest)| {
             let (uptime, boot) = rest.split_once("BOOT ")?;
+            let boot = boot
+                .split_once("\nWSLTOP_ACTION_SCOPE ")
+                .map_or(boot, |(boot, _)| boot);
             crate::linux_cpu::Sample::parse(stat, uptime, boot, ticks)
         }),
         captured_at: Instant::now(),
@@ -181,6 +194,15 @@ fn decode_wsl_text(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn action_scope_is_separate_from_boot_and_optional() {
+        let text = format!("100 4096\n{}cpu 100 0 0 0 0 0 0\ncpu0 0\nUPTIME 10 0\nBOOT boot-a\nWSLTOP_ACTION_SCOPE pid:[7]\nmnt:[8]\n1000\n", super::SYSTEM_MARKER);
+        let sample = super::parse_snapshot(None, &text).unwrap();
+        assert_eq!(sample.system_cpu.unwrap().cumulative().0, "boot-a");
+        assert!(crate::action::Scope::parse("Ubuntu", "boot-a", "pid:[7] mnt:[8] 1000").is_some());
+        assert!(crate::action::Scope::parse("Ubuntu", "boot-a", "1000").is_none());
+    }
+
     #[test]
     fn shared_counters_are_requested_only_for_primary_distribution() {
         assert!(super::snapshot_script(true).contains(super::SYSTEM_MARKER));
