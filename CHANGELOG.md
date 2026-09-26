@@ -4,9 +4,19 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-26
+
+### Added
+
+- First stable release with a [1.x compatibility policy](docs/compatibility.md) covering existing CLI options, JSON fields and units, and the four read-only MCP tools. No migration from the existing interfaces is required.
+- Confirmed normal termination of verified primary-WSL processes in the Windows-native TUI, first shipped in the release candidate. Press `s`, select with the arrows, then `k` to review the target and `y` to confirm; `n` or Esc cancels. Python 3.9+ and pidfd support are required only for this optional action. See [scope and prerequisites](docs/process-actions.md).
+
 ### Changed
 
 - Dim the TUI footer menu to distinguish controls from resource rows. Process-action feedback stays at normal intensity, and `--color never` remains unstyled.
+- Include the rmcp 3.4 update from the release candidate without changing public MCP tools.
+
+See the [release validation record](docs/validation/2026-09-26-v1.0.0.md) for candidate checks and their scope.
 
 ## [1.0.0-rc.1] - 2026-09-26
 
@@ -186,7 +196,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.0-rc.1...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0
 [1.0.0-rc.1]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0-rc.1
 [0.5.3]: https://github.com/adachi6k/wsltop/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/adachi6k/wsltop/compare/v0.5.1...v0.5.2

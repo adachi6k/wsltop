@@ -8,9 +8,8 @@
 
 AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
 
-The 1.0 release candidate establishes a [compatibility policy](docs/compatibility.md)
-for the existing CLI, JSON output and MCP tools. RC releases are opt-in;
-the default installation continues to use the latest stable version.
+Version 1.0 establishes a [compatibility policy](docs/compatibility.md) for the
+existing CLI, JSON output and read-only MCP tools.
 
 The default TUI keeps a compact two-line CPU/RAM summary, history graphs and
 **Win / WSL / WSLC / Docker** columns. Win CPU includes Windows system work,
@@ -176,13 +175,13 @@ Run `.\target\release\wsltop.exe --interactive` on Windows or
 Each archive in the
 [latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest)
 has a `.sha256` sidecar. Download both files into the same directory. Names
-follow `wsltop-v<version>-<target>`; replace `v0.5.3` below with your downloaded
+follow `wsltop-v<version>-<target>`; replace `v1.0.0` below with your downloaded
 version.
 
 Windows PowerShell:
 
 ```powershell
-$archive = 'wsltop-v0.5.3-x86_64-pc-windows-msvc.zip'
+$archive = 'wsltop-v1.0.0-x86_64-pc-windows-msvc.zip'
 $expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
 ```
@@ -190,7 +189,7 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Check
 WSL:
 
 ```console
-sha256sum --check wsltop-v0.5.3-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check wsltop-v1.0.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 ## Usage
