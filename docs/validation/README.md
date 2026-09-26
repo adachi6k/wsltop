@@ -8,6 +8,7 @@ published versions and downloads.
 
 | Record | Coverage |
 | --- | --- |
+| [2026-09-26 v1.0.0](2026-09-26-v1.0.0.md) | RC distribution, compatibility and final footer change |
 | [2026-09-05 Windows-native](2026-09-05-windows-native.md) | Archive and TUI smoke tests |
 | [2026-09-06 v0.4.0](2026-09-06-v0.4.0.md) | Release preparation results and pending publication checklist |
 | [2026-09-12 compact header](2026-09-12-compact-header.md) | Rendering, history, colors and terminal restoration |
