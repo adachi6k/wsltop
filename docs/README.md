@@ -6,6 +6,7 @@
 - [Connect an AI agent using MCP](mcp.md#quick-start)
 - [CPU and memory accounting](cpu-accounting.md)
 - [1.x compatibility policy](compatibility.md)
+- [Privacy policy and handling of workload data](../PRIVACY.md)
 - [TUI process termination: scope and validation](process-actions.md)
 - [Changelog](../CHANGELOG.md) and [published releases](https://github.com/adachi6k/wsltop/releases)
 

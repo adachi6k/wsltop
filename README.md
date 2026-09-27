@@ -548,6 +548,7 @@ See the [agent workflow](docs/mcp.md#agent-workflow-example) and
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
+- [Privacy policy](PRIVACY.md)
 
 ## Development
 
