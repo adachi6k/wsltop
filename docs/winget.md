@@ -13,6 +13,13 @@ The command alias is `wsltop`. Minimum Windows version is Windows 11
 (`10.0.22000.0`); the description explains the required primary WSL2 distribution.
 Installing the package does not provision WSL or a distribution.
 
+Generated manifests include `PrivacyUrl` pointing to a published, immutable
+revision of [the privacy policy](../PRIVACY.md). The 1.0.0 binary tag predates
+that document, so do not derive its URL from the binary tag. Review the policy
+against each release's data handling and update `PRIVACY_URL` in the generator
+when publishing a revised policy. Keep the submitted manifest and generator in
+sync; only link to a policy revision that is already publicly accessible.
+
 The [initial Windows CI run](https://github.com/adachi6k/wsltop/actions/runs/34032216509)
 passed generation, native validation, user-scope installation, installed
 version/help, and local-manifest uninstallation. The Microsoft submission checks

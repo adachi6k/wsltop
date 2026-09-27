@@ -12,6 +12,8 @@ import zipfile
 PACKAGE = "Adachi6k.wsltop"
 REPO = "adachi6k/wsltop"
 SCHEMA = "1.10.0"
+# Published separately from binary tags; update after reviewing data-handling changes.
+PRIVACY_URL = "https://github.com/adachi6k/wsltop/blob/11f0d10273eb2ff2cd11576c20e8ac9d75244ab6/PRIVACY.md"
 
 
 def version_from_tag(tag):
@@ -67,6 +69,7 @@ PublisherUrl: https://github.com/adachi6k
 PublisherSupportUrl: {url}/issues
 PackageName: wsltop
 PackageUrl: {url}
+PrivacyUrl: {PRIVACY_URL}
 License: MIT
 LicenseUrl: {url}/blob/{tag}/LICENSE
 ShortDescription: A unified top-like resource monitor for Windows, WSL2, Docker, and WSL Containers.
