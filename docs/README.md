@@ -18,6 +18,7 @@ These documents describe the current implementation and repeatable checks.
   [snapshot retention](snapshot-store.md), [Query API](query-api.md),
   [Query service](query-service.md)
 - [Test plan and release acceptance](test-plan.md)
+- [Release publishing and Trusted Publishing setup](publishing.md)
 - [Recorded validation runs](validation/README.md)
 - [README demo capture procedure](assets/README.md)
 
