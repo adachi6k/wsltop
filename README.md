@@ -540,6 +540,7 @@ See the [agent workflow](docs/mcp.md#agent-workflow-example) and
 
 ## Documentation
 
+- [WinGet registration and release automation](docs/winget.md) (community registration pending)
 - [Documentation index](docs/README.md)
 - [Architecture](docs/architecture.md)
 - [CPU accounting](docs/cpu-accounting.md)
@@ -547,6 +548,7 @@ See the [agent workflow](docs/mcp.md#agent-workflow-example) and
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
+- [Privacy policy](PRIVACY.md)
 
 ## Development
 

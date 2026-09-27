@@ -6,6 +6,7 @@
 - [Connect an AI agent using MCP](mcp.md#quick-start)
 - [CPU and memory accounting](cpu-accounting.md)
 - [1.x compatibility policy](compatibility.md)
+- [Privacy policy and handling of workload data](../PRIVACY.md)
 - [TUI process termination: scope and validation](process-actions.md)
 - [Changelog](../CHANGELOG.md) and [published releases](https://github.com/adachi6k/wsltop/releases)
 
@@ -19,6 +20,7 @@ These documents describe the current implementation and repeatable checks.
   [Query service](query-service.md)
 - [Test plan and release acceptance](test-plan.md)
 - [Release publishing and Trusted Publishing setup](publishing.md)
+- [WinGet distribution and submission](winget.md)
 - [Recorded validation runs](validation/README.md)
 - [README demo capture procedure](assets/README.md)
 
