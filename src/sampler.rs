@@ -10,7 +10,16 @@ pub fn calculate_usage(
         .captured_at
         .duration_since(before.captured_at)
         .as_secs_f64();
-    if elapsed <= 0.0 || host_logical_cpu_count == 0 {
+    calculate_usage_with_elapsed(before, after, host_logical_cpu_count, elapsed)
+}
+
+pub fn calculate_usage_with_elapsed(
+    before: &Snapshot,
+    after: &Snapshot,
+    host_logical_cpu_count: u32,
+    elapsed: f64,
+) -> Vec<ResourceUsage> {
+    if !elapsed.is_finite() || elapsed <= 0.0 || host_logical_cpu_count == 0 {
         return Vec::new();
     }
 

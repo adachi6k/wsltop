@@ -545,6 +545,7 @@ mod tests {
 
     fn snapshot() -> Snapshot {
         Snapshot {
+            system_cpu: None,
             captured_at: Instant::now(),
             processes: Vec::new(),
         }

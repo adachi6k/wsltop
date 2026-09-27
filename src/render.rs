@@ -37,7 +37,16 @@ impl CpuScale {
 }
 
 pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
+    flat_with_rows(snapshot, scale).0
+}
+
+/// Byte offsets bind TUI selection to source rows, never to parsed display text.
+pub fn flat_with_rows(
+    snapshot: &MonitorSnapshot,
+    scale: CpuScale,
+) -> (String, Vec<(usize, ResourceUsage)>) {
     let mut out = String::new();
+    let mut rows = Vec::new();
     let show_container_processes = snapshot.resources.iter().any(|row| {
         matches!(
             row.environment,
@@ -66,6 +75,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
         {
             continue;
         }
+        rows.push((out.len(), row.clone()));
         let _ = writeln!(
             out,
             "{:<7} {:<11} {:>12} {:>6.2}% {:>9} {:>10}  {}",
@@ -99,6 +109,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
                     })
                     .collect();
                 for process in &displayed {
+                    rows.push((out.len(), (*process).clone()));
                     let _ = writeln!(
                         out,
                         "{:<7} {:<11} {:>12} {:>6.2}% {:>9} {:>10}    |- {}",
@@ -165,7 +176,7 @@ pub fn flat(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
             }
         }
     }
-    out
+    (out, rows)
 }
 
 pub fn tree(snapshot: &MonitorSnapshot, scale: CpuScale) -> String {
@@ -416,7 +427,7 @@ fn env_name(environment: EnvironmentKind) -> &'static str {
         EnvironmentKind::Docker => "Docker",
     }
 }
-fn format_bytes(bytes: u64) -> String {
+pub(crate) fn format_bytes(bytes: u64) -> String {
     let value = bytes as f64;
     if value >= 1024.0 * 1024.0 * 1024.0 {
         format!("{:.2}G", value / (1024.0 * 1024.0 * 1024.0))
@@ -504,6 +515,13 @@ mod tests {
 
     fn snapshot(row: ResourceUsage) -> MonitorSnapshot {
         MonitorSnapshot {
+            action_scope: None,
+            cpu_overlap_unresolved: false,
+            host_memory: None,
+            host_history: Default::default(),
+            environment_summary: Default::default(),
+            host_cpu_percent: None,
+            cpu_breakdown: None,
             sort: Default::default(),
             query_source: None,
             host_logical_cpu_count: 16,

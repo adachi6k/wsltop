@@ -221,6 +221,19 @@ pub struct QuerySource {
     pub tree: AttributionTree,
 }
 
+impl QuerySource {
+    /// Read-only identity lookup over the untruncated flat-view source. The
+    /// Query API builds its combined flat/PID/tree catalog separately (#24).
+    #[allow(dead_code)]
+    pub fn resource_index(
+        &self,
+        scope: &crate::identity::IdentityScope,
+        observation: &crate::identity::ObservationId,
+    ) -> crate::identity::ResourceIndex<'_> {
+        crate::identity::ResourceIndex::new(scope, observation, &self.resources)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

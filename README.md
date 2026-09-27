@@ -6,7 +6,67 @@
 
 `wsltop` provides a one-shot CLI and interactive terminal UI on both Windows and WSL. A graphical UI is outside the current scope.
 
-![wsltop terminal UI showing flat and tree views](docs/assets/wsltop-demo.gif)
+AI agents can inspect the same workloads through the [read-only MCP server](#use-wsltop-from-ai-agents).
+
+Version 1.0 establishes a [compatibility policy](docs/compatibility.md) for the
+existing CLI, JSON output and read-only MCP tools.
+
+The default TUI keeps a compact two-line CPU/RAM summary, history graphs and
+**Win / WSL / WSLC / Docker** columns. Win CPU includes Windows system work,
+interrupts and short-lived tasks. Verified container cgroup CPU is separated from
+WSL over a common sampling window. `WSL*` means overlap could not be resolved.
+Guest accounting and sampling differences can still cause a gap from host CPU.
+Process and container CPU rows remain available below the header.
+Use `--header classic` for the traditional one-line header and `--color never`
+for monochrome output. See [release notes](https://github.com/adachi6k/wsltop/releases/latest).
+
+![wsltop v0.5.0 showing CPU and RAM history, Windows and WSL workloads, and running WSLC and Docker containers](docs/assets/wsltop-demo.gif)
+
+Live v0.5.0 session with workloads in another WSL distribution and running WSLC
+and Docker containers, including their process details. The two demo containers
+are each limited to 0.25 CPU cores. [Capture details](docs/assets/README.md).
+
+## Quick start
+
+Requires Windows 11 with a usable WSL2 distribution; the Linux binary runs
+inside WSL2. Docker and WSLC are optional.
+
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
+you can fetch the x64 GitHub Releases binaries without a source build,
+which is faster than `cargo install`.
+
+### Windows
+
+Download the **Windows x86_64 MSVC ZIP** from the
+[latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest).
+Extract it and open PowerShell in the versioned directory:
+
+```powershell
+.\wsltop.exe --interactive
+```
+
+You can instead install with `cargo binstall wsltop`, then run
+`wsltop --interactive`.
+
+### WSL / Linux
+
+Fast prebuilt install:
+
+```console
+cargo binstall wsltop
+wsltop --interactive
+```
+
+Or build from [crates.io](https://crates.io/crates/wsltop):
+
+```console
+cargo install --locked wsltop
+```
+
+Without Cargo, download the **Linux x86_64 tar.gz** from the
+[latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest),
+extract it and run `./wsltop --interactive` from the versioned directory.
+See [checksum verification](#verify-downloads) for downloaded archives.
 
 ## Why wsltop?
 
@@ -40,69 +100,31 @@ Parent and child CPU values are attribution views, not values to add together.
 - Resource classification as `process`, `container`, `infra`, or internal `host`
 - Best-effort degradation when optional WSLC, Docker, or additional-distro collectors are unavailable
 
-## Quick start
-
-### Windows
-
-Download `wsltop-v0.4.0-x86_64-pc-windows-msvc.zip` and its `.sha256` file from
-[GitHub Releases](https://github.com/adachi6k/wsltop/releases). Verify the checksum
-as described under Installation, extract the ZIP, and open PowerShell in the
-extracted directory:
-
-```powershell
-.\wsltop.exe --version
-.\wsltop.exe --interactive
-```
-
-Windows 11 and a usable primary WSL2 distribution are required. Docker and WSLC
-are optional. Use `--distro NAME` to select a primary (Windows executable only).
-
-### WSL
-
-Install from [crates.io](https://crates.io/crates/wsltop) and start the TUI:
-
-```console
-cargo install --locked wsltop
-wsltop --interactive
-```
-
-Alternatively, download the prebuilt Linux x86_64 archive and checksum from the
-[latest release](https://github.com/adachi6k/wsltop/releases/latest), then:
-
-```console
-tar -xzf wsltop-v*-x86_64-unknown-linux-gnu.tar.gz
-cd wsltop-v*-x86_64-unknown-linux-gnu
-./wsltop --interactive
-```
-
-For a single sample:
-
-```console
-./wsltop --once
-```
-
-Run `./wsltop --help` for the complete option reference.
-
 ## What the TUI shows
 
 The flat view is a host-wide activity ranking. Windows and WSL processes appear alongside Docker and WSLC containers. A container is ranked once by its total CPU; optional process rows are an indented explanation of that total, not extra CPU to add to it.
 
-```text
-flat | CPU 1 core = 100% | sort cpu desc | interval 3000ms
+This example uses 16 host logical CPUs: summary CPU percentages are host-wide, while table rows use the core scale (Docker's `11.99%` becomes `0.7%` in the summary).
 
-ENV     TYPE               ID/PID    CPU%       MEM      TIME+ COMMAND
+```text
+CPU 12.0%      ▁▁▂▁▁▁▂▂▁▁▁▁▂▁▁▁▂▂▁▁▁▁▁ | Win   5.7%   WSL   0.3%   WSLC   0.4%   Docker   0.7%
+RAM 15.7/31.9G ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ | Win 16.79G   WSL  1.50G   WSLC   348M   Docker   520M
+─────────────────────────────────────────────────────────────────────────────────────────────────
+ENV     TYPE              ID/PID    CPU%       MEM      TIME+ COMMAND
 -------------------------------------------------------------------------------------------------
-Docker  container  68dae66282ff  11.99%      520M          -  act-CI-simulate...
-        process           34692  11.75%      157M   62:03.46    |- simx
-        residual              -   0.24%          -          -    `- unattributed
-WSLC    container  5e0c144e6a3c   5.94%      348M          -  mighty_flinders
-        process             806   5.71%       31M    4:12.08    |- cc1plus
-        process             470   0.19%        6M    0:03.20    |- ninja
-        residual              -   0.04%          -          -    `- unattributed
-Windows application     3 PIDs   4.82%     1.24G  103:27.51  Teams
-Windows application    12 PIDs   2.37%     1.68G  248:10.03  Chrome
+Docker  container   68dae66282ff  11.99%      520M          -  act-CI-simulate...
+        process            34692  11.75%      157M   62:03.46    |- simx
+        residual               -   0.24%         -          -    `- unattributed
+WSLC    container   5e0c144e6a3c   5.94%      348M          -  mighty_flinders
+        process              806   5.71%       31M    4:12.08    |- cc1plus
+        process              470   0.19%        6M    0:03.20    |- ninja
+        residual               -   0.04%         -          -    `- unattributed
+Windows application       3 PIDs   4.82%     1.24G  103:27.51  Teams
+Windows application      12 PIDs   2.37%     1.68G  248:10.03  Chrome
 Windows application        31460   1.20%      198M  178:27.95  Taskmgr
-WSL     infra                 5   0.05%        4M    0:14.82  plan9
+WSL     infra                  5   0.05%        4M    0:14.82  plan9
+
+[flat cpu↓ core 3.0s]  q quit  ? help  t tree  i infra:on  h hosts:off  0 zero:on
 ```
 
 In this example, `simx 11.75%` is included in its Docker container's `11.99%`; the values must not be added. Containers keep their position according to total container CPU, while their processes are sorted within the container. Windows rows are ranked by application, so multi-process applications such as Teams and Chrome appear once. By default, at most five processes are shown per container and additional processes are summarized.
@@ -129,72 +151,45 @@ The default text/TUI scale treats one fully occupied logical CPU as `100%`; use 
 
 ## Installation
 
-Requirements:
+Choose a prebuilt or Cargo install in [Quick start](#quick-start).
+WSL execution requires Windows interoperability and `powershell.exe` on PATH.
+Docker collection needs a reachable Docker daemon; WSLC collection needs
+`wslc.exe`.
 
-- Windows 11 with WSL2
-- PowerShell available as `powershell.exe` for Windows process collection
-- For WSL-native execution, Windows interoperability enabled
-- Optional: `wslc.exe` for WSL Containers data
-- Optional: Docker CLI plus a reachable Docker daemon for Docker data
+### Build from source
 
-### Windows-native CLI and TUI
-
-Building on Windows produces `wsltop.exe`. It collects the primary WSL
-distribution through `wsl.exe`, while Windows, WSLC, and Docker collectors run
-from Windows. The primary distribution is selected in this order: `--distro
-NAME`, the WSL default distribution, then the first running distribution.
-
-```powershell
-cargo build --release --locked
-.\target\release\wsltop.exe --once
-.\target\release\wsltop.exe --distro Ubuntu-24.04 --tree
-.\target\release\wsltop.exe --distro Ubuntu-24.04 --interactive
-```
-
-Run these source-build commands from a checkout in PowerShell with a Rust
-toolchain and the Visual Studio C++ build tools installed. At least one usable
-WSL2 distribution is required, including when only Windows rows are of interest.
-The selected primary may be started by `wsl.exe`; additional distributions are
-collected only while running. `--distro` is accepted only by the Windows executable.
-
-The release workflow packages Windows x86_64 builds as
-`wsltop-<tag>-x86_64-pc-windows-msvc.zip` with a `.zip.sha256` checksum. For a
-release containing that asset, download both files from
-[GitHub Releases](https://github.com/adachi6k/wsltop/releases), then run in PowerShell
-(replace `<tag>` with the downloaded version):
-
-```powershell
-$archive = 'wsltop-<tag>-x86_64-pc-windows-msvc.zip'
-$expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
-if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
-Expand-Archive $archive -DestinationPath .
-& ".\wsltop-<tag>-x86_64-pc-windows-msvc\wsltop.exe" --interactive
-```
-
-The ZIP includes `wsltop.exe`, README, and license; using it requires no Rust
-toolchain. Releases predating Windows packaging may have only Linux assets.
-The source checkout documents the current development version; use a release's
-bundled README for the features available in that binary.
-
-### WSL-native CLI and TUI
-
-Install with Cargo (requires a Rust toolchain):
-
-```console
-cargo install --locked wsltop
-```
-
-Prebuilt Linux x86_64 archives and SHA-256 checksums are available from
-[GitHub Releases](https://github.com/adachi6k/wsltop/releases/latest) and do not
-require a Rust toolchain.
-
-Build from source:
+A Rust toolchain is required; Windows builds also need the Visual Studio C++
+build tools. From PowerShell or a WSL shell:
 
 ```console
 git clone https://github.com/adachi6k/wsltop.git
 cd wsltop
 cargo build --release --locked
-install -Dm755 target/release/wsltop ~/.local/bin/wsltop
+```
+
+Run `.\target\release\wsltop.exe --interactive` on Windows or
+`./target/release/wsltop --interactive` in WSL.
+
+### Verify downloads
+
+Each archive in the
+[latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest)
+has a `.sha256` sidecar. Download both files into the same directory. Names
+follow `wsltop-v<version>-<target>`; replace `v1.0.0` below with your downloaded
+version.
+
+Windows PowerShell:
+
+```powershell
+$archive = 'wsltop-v1.0.0-x86_64-pc-windows-msvc.zip'
+$expected = ((Get-Content "$archive.sha256") -split '\s+')[0]
+if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
+```
+
+WSL:
+
+```console
+sha256sum --check wsltop-v1.0.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 ## Usage
@@ -249,7 +244,7 @@ memory values additive or enable parent-minus-child memory accounting.
 
 ## Interactive TUI
 
-Start the terminal UI with `wsltop --interactive` in WSL or `wsltop.exe --interactive` in Windows. It draws immediately and accepts partial collector updates instead of waiting for every source. The primary WSL collector reads local `/proc` in WSL or samples remotely through `wsl.exe` on Windows. After its first successful baseline it waits a fixed 150 ms warmup, then uses the configured interval. While Windows host discovery is pending, non-Windows collectors use the executing platform's visible CPU count and are marked provisional. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` keeps the executing platform's visible CPU count. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize primary sampling. Windows primary selection may still require synchronous default/fallback discovery.
+Start the terminal UI with `wsltop --interactive` in WSL or `wsltop.exe --interactive` in Windows. It draws immediately and accepts partial collector updates instead of waiting for every source. The primary WSL collector reads local `/proc` in WSL or samples remotely through `wsl.exe` on Windows. After its first successful baseline it waits a fixed 150 ms warmup, then uses the configured interval. While Windows host discovery is pending, non-Windows collectors use the executing platform's visible CPU count and are marked provisional; WSL category CPU remains unavailable until the host count is confirmed. If the Windows-reported count differs, provisional rows are discarded and repopulated on the host-wide scale; delayed results carrying the old normalization count are ignored. `--wsl-only` uses WSL-visible logical CPUs in WSL-native execution and the Windows host logical CPU count in Windows-native execution. Windows collection runs independently; additional WSL distributions, WSLC, and Docker refresh on a slower cadence (at least two seconds), so a slow optional collector cannot serialize primary sampling. Windows primary selection may still require synchronous default/fallback discovery.
 
 Additional distro discovery runs in its own worker and discovers newly started distributions during the session. Its initial baseline remains `loading` until a CPU delta is available, no additional distro is running, or an error is reported. Transient failures retain last-good rows; confirmed stopped distributions lose their rows and baseline. Distribution-name matching ignores ASCII casing.
 
@@ -263,16 +258,134 @@ Controls:
 | --- | --- |
 | `q`, `Esc` | Quit |
 | Up/Down, Page Up/Page Down | Scroll |
+| `s` | Enter/leave selection mode in flat view; arrows/Page keys select rows |
+| `k` | Request normal termination of the selected primary WSL process (Windows-native TUI) |
 | `t` | Toggle flat/tree view |
 | `c`, `m`, `n` | Sort by CPU, memory, or name |
 | `r` | Reverse sort direction |
 | `i` | Toggle infrastructure rows |
 | `h` | Toggle raw WSL host rows in flat view |
 | `0` | Toggle zero-CPU rows |
+| `?` | Open/close summary help (arrows/Pg scroll; Esc closes help) |
 
 Terminal raw mode, alternate-screen state, and cursor visibility are restored on normal exit and propagated errors.
 
+#### Terminating a selected WSL process
+
+In the Windows-native TUI, press `s`, select a row with the arrows, then press
+`k`. The confirmation shows the resolved WSL distribution, PID and process
+name: `y` sends SIGTERM; `n` or `Esc` cancels. The entire confirmation must fit
+on screen before it can be accepted. Selection follows the process across
+sorting and refreshes, and is cleared if the row disappears, is filtered out,
+or its identity changes. Selection mode uses the flat view; `t` clears it.
+
+This first action supports only ordinary processes in the primary WSL
+distribution already used by the collector. It requires **Python 3.9+ with
+pidfd support** in that distribution. Nothing is installed automatically.
+Windows processes, other distributions, containers, aggregate rows, init and
+unverifiable identities are unsupported. WSL-native execution remains
+read-only. MCP remains read-only on both platforms.
+
+The helper checks the boot, PID/mount namespaces, user and process start time,
+and sends SIGTERM through a pidfd so PID reuse after validation cannot redirect
+the signal. There is no sudo, PID-only fallback, automatic retry or force-kill.
+One request can run at a time, without blocking the TUI. The footer shows the
+result; `?` shows it in full. **Accepted means the signal was accepted, not that
+the process exited.** A timeout has an unknown outcome: inspect the target
+before retrying. Quitting after confirmation does not undo the request.
+
+### Compact resource summary
+
+The TUI defaults to a two-line CPU/RAM summary. Windows, WSL, WSLC and Docker
+labels use the same colors in the summary and resource list: blue, green, magenta
+and cyan respectively. A neutral separator divides the summary from the resource
+table; its length follows the wider of the summary and table headings/rule,
+capped by terminal width. Long commands do not stretch it. The existing rule
+below column headings remains. A single footer groups
+view, sort, CPU scale and interval as `[flat cpu↓ core 3.0s]`, followed by option states and
+key hints. Press `?` for metric definitions, detailed controls and collector status.
+
+Host CPU and RAM have short history graphs alongside their totals when all four
+environment labels fit. Left is older, right is now. Both use a fixed 0–100%
+scale (RAM is physical memory in use / total), with 23 time slots at 120 columns
+or wider and 15 slots at 80–119 columns. Each slot spans the configured refresh
+interval: at the default 3 seconds these cover 69 and 45 seconds respectively.
+Both graphs share a fixed clock and
+shift left together once per interval. Until a new result arrives, the previous
+value is held; these held values are not new measurements. Before the first result,
+slots are blank. An explicitly failed or unavailable reading shows `!` until a
+successful reading arrives; `▁` represents low/zero usage. Redraws and other
+collectors do not advance the clock or append observations. The graphs are not
+rescaled to exaggerate small changes. `TERM=dumb` uses ASCII levels (`_` through `#`)
+with the same `!` failure marker.
+
+The Windows collector includes query time in its refresh interval: a 0.8-second
+query with a 3-second interval waits another 2.2 seconds. If collection takes longer
+than the interval, the next query starts when it finishes, without overlapping
+queries. The history holds the last value during that wait.
+Below 80 columns, only CPU/RAM totals remain in the summary; history continues
+to be recorded while hidden. Classic and WSL-only views do not show host graphs.
+Totals are left-aligned in fixed-width fields, so both values and graphs start
+at matching columns. Environment observations also have fixed columns, with three
+spaces between blocks at 120+ columns and one on medium terminals, including while
+values are unavailable or change digit count. Large memory
+values use fewer decimals or larger binary units to keep columns stable. Very short
+terminals reduce the summary to one line. The footer progressively omits hints,
+preserving flat/tree, sort key/order and `q quit` whenever physically possible.
+
+```text
+CPU 23.4%      ▄▃▂▂▂▂▄▃▂▂▂▂▄▃▂ | Win   5.0% WSL  10.0% WSLC   2.0% Docker   4.0%
+RAM 12.3/32.0G ▃▃▃▄▄▄▃▃▃▄▄▄▃▃▃ | Win  3.20G WSL  2.10G WSLC   300M Docker   800M
+```
+
+These example values are **not an exact additive breakdown of host CPU**:
+
+- `Win` CPU measures Windows root partition execution, including interrupts and
+  short-lived tasks. It excludes guest execution and does not absorb the residual.
+  Without a hypervisor it equals total host CPU. Win RAM still sums observed
+  process working sets, excluding VM host rows.
+- `WSL` CPU uses the shared WSL kernel's `/proc/stat` counters, sampled once through
+  the primary distribution. It includes short-lived processes and kernel work,
+  including other distributions even with `--wsl-only`. Verified Docker/WSLC
+  cgroup CPU is subtracted from this total and displayed in its own column.
+- `WSLC` and `Docker` use common-window cgroup rates when overlap is resolved;
+  otherwise they retain CLI container statistics. Child process rows are excluded.
+- `WSL*` marks inclusive fallback values: container membership, counter history
+  or collection could not be verified. The warning explains why.
+- Even without container overlap, Win root time and WSL guest-kernel time are
+  not an additive physical-CPU breakdown; see [CPU accounting](docs/cpu-accounting.md#wsl-category-cpu).
+- Environment RAM values are Windows working sets, WSL RSS, and container CLI memory
+  statistics respectively. Shared pages and overlapping observations mean these
+  values must not be summed or subtracted from host physical RAM.
+
+`RAM` is physical total minus available memory, collected using
+[GlobalMemoryStatusEx](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-globalmemorystatusex).
+`K`, `M`, `G`, `T`, `P`, and `E` use powers of 1024. Missing, disabled, warming-up or incomplete
+collectors display `N/A`; a successful empty collection displays zero. Host RAM can
+appear before the first CPU interval. With `--wsl-only`, host totals are unavailable
+and CPU observations use the WSL CPU scale, as explained in help.
+Summary observations are independent of row filters, limits, sorting and `--cpu-scale`.
+
+Overlap detection runs a short read-only `sh` probe in existing containers using
+`docker exec` / `wslc.exe exec`. It reads kernel boot identity, uptime and leaf
+cgroup v2 `cpu.stat`; it does not start containers, install tools or elevate
+privileges. Up to 16 containers per backend are probed, four at a time, with a
+two-second timeout per probe. Missing shell/tools/permissions, non-leaf or cgroup
+v1 configurations, foreign kernels and excessive container counts retain `WSL*`.
+The probes are independent of process-detail visibility. Exact cgroup aliases
+exposed by both backends count once under Docker. Rates use interpolation within
+observed cumulative-counter intervals, so they remain estimates. See
+[CPU overlap accounting](docs/cpu-accounting.md#container-overlap).
+
+Use `--header classic` for the existing one-line header, or `--header compact`
+for the new default. `--color auto|always|never` controls TUI colors; `auto` honors
+nonempty `NO_COLOR` and disables colors with `TERM=dumb`, while `always` explicitly
+overrides them. `--color never` retains all labels and numbers. These display options
+do not change text or JSON output.
+
 ## CPU display and accounting
+
+The TUI header shows `CPU` for the entire Windows host (all logical CPUs together = 100%), including WSL/container activity. It uses Hyper-V physical execution counters when a hypervisor is present, otherwise Windows system counters, independently of row limits, filters, sorting, and `--cpu-scale`. It displays `N/A` during warmup, with `--wsl-only`, or when the counter is unavailable. This is busy CPU time, which can differ from Task Manager's frequency-adjusted utilization.
 
 Text and TUI output default to the familiar Linux `top` convention where one fully busy logical CPU is 100%; multi-threaded workloads can exceed 100%. Use `--cpu-scale host` for the Task Manager-style whole-host display where all Windows host logical CPUs together equal 100%.
 
@@ -311,7 +424,13 @@ WSLC collection uses the current/default CLI session. A single available `vmmemw
 
 Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,time,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container. If the process backend does not support `time`, wsltop retries the older column set and leaves TIME+ unavailable instead of dropping the container detail.
 
-Docker Desktop containers run in Docker Desktop's own Linux VM, so they are shown under an independent top-level `Docker` group. They are not manufactured as children of the current WSL VM. The legacy current-WSL PID-matching path is used only if sharing of the host PID namespace has been positively established; the current Docker Desktop path does not make that claim. Text/TUI output includes Docker and WSLC process rows by default while preserving each container row; use `--hide-container-processes` to suppress them (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
+Docker Desktop's WSL 2 backend shares the WSL kernel, so its CPU is already included
+in the WSL category total. A separate Hyper-V backend does not share that kernel.
+Kernel sharing does not establish a shared PID namespace or a verified attribution
+parent: Docker stays a top-level group unless host/PID mapping is proven.
+See [Docker's WSL backend documentation](https://docs.docker.com/desktop/features/wsl/).
+
+Text/TUI output includes Docker and WSLC process rows by default while preserving each container row; use `--hide-container-processes` to suppress them (`--show-docker-processes` remains a compatibility alias). Flat ranking and `--limit` treat each container as the top-level resource; its processes and residual are displayed directly beneath it and are not independently ranked or counted toward the limit. Each container shows its top five processes by default; `--container-process-limit` changes that cap and omitted processes are summarized by count and combined CPU (`--docker-process-limit` remains an alias).
 
 A missing `wslc.exe`, missing Docker CLI, or recognized unavailable Docker daemon is treated as an expected absence: its rows are silently omitted and monitoring continues. Unexpected command, output, parse, or per-container attribution failures are reported through the common warning path. Use `--no-wslc` or `--no-docker` to disable a collector intentionally.
 
@@ -323,7 +442,14 @@ Application CPU is exactly the sum of observed member-process CPU; child PIDs ex
 
 When wsltop runs inside WSL, the current distribution is sampled directly from `/proc`. Other running distributions are discovered with `wsl.exe --list --running --quiet`, sampled through `wsl.exe -d`, and labelled with their distribution name. These additional remote samples are best-effort and introduce more timing skew than direct `/proc` access.
 
-When `wsltop.exe` runs on Windows, the selected primary distribution and every additional distribution are sampled remotely through `wsl.exe`. Primary failure aborts a one-shot sample; the TUI reports sampling errors and retries while retaining last-good data. Failure to select a primary prevents streaming startup. Additional distributions remain best-effort. `--distro NAME` selects the required primary explicitly. JSON omits `source` for the primary and includes the distro name for additional sources.
+When `wsltop.exe` runs on Windows, primary selection uses `--distro NAME`, then
+the WSL default, then the first running distribution. The selected primary may
+be started by `wsl.exe`; additional distributions are collected only while
+running. All are sampled remotely through `wsl.exe`. Primary failure aborts a
+one-shot sample; the TUI reports sampling errors and retries while retaining
+last-good data. Failure to select a primary prevents streaming startup.
+Additional distributions remain best-effort. JSON omits `source` for the primary
+and includes the distro name for additional sources.
 
 `--wsl-only` limits WSL distribution collection to the primary distribution and disables Windows and WSLC collection. Optional Docker collection remains enabled unless `--no-docker` is also passed. In WSL-native execution it uses the WSL-visible logical CPU count and warns that exact Windows-host normalization is unavailable. In Windows-native execution it uses the Windows logical CPU count but still disables Windows host-process attribution.
 
@@ -338,6 +464,67 @@ wsltop --once --json
 `--tree --json` emits a structured object containing `host_logical_cpu_count`, attribution groups, additive Windows application groups, Docker subgroups, unmapped children, `unattributed_cpu_percent`, and sampling-skew information.
 
 JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
+
+<a id="mcp"></a>
+
+## Use wsltop from AI agents
+
+With v0.5.1 or later, your MCP client can launch `wsltop mcp` as a local stdio
+server. It is **read-only and observability-only**: no shell or arbitrary command
+execution tools, process kill/termination, container stop/control, or network listener.
+The four tools are `get_system_summary`, `list_resources`, `inspect_resource`,
+and `list_children`.
+
+For a client running inside WSL2, add this stdio server configuration (replace
+`<user>` with your username). Run `command -v wsltop` to check the absolute path:
+
+```json
+{
+  "mcpServers": {
+    "wsltop": {
+      "command": "/home/<user>/.cargo/bin/wsltop",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+For a Windows client, use the absolute path to `wsltop.exe` as `command`, with
+the same `["mcp"]` args. Configuration formats vary by client; see
+[MCP quick start and snapshot semantics](docs/mcp.md#quick-start).
+
+Once connected, ask your agent:
+
+- “What is using the most CPU on my machine?”
+- “Which Windows, WSL, Docker, or WSLC workload uses the most memory?”
+- “Inspect the busiest resource and explain its immediate children.”
+- “Compare current Windows, WSL, Docker, and WSLC usage.”
+
+### Agent example: a slow build
+
+An actual Codex session used this prompt:
+
+> My build is running slowly.
+> Use wsltop MCP to identify the likely bottleneck and explain which environment,
+> container, and process are responsible.
+
+The agent called `get_system_summary`, `list_resources`, `inspect_resource`, and
+`list_children`, plus a container-filtered listing, keeping the **same snapshot
+while drilling down**. wsltop MCP distinguishes Windows, WSL, Docker, and WSLC
+observations. The result, summarized for readability:
+
+> The current load is mainly from WSL. The busiest process, `gw_sh` in Ubuntu,
+> is using about one CPU core. No Docker or WSLC container is observed as
+> responsible in this snapshot. Overall host CPU usage is moderate, so if this
+> process is the build, limited parallelism is a likely bottleneck; host CPU
+> is not saturated.
+
+Parent/child and environment values may overlap and **must not be summed**.
+This is a likely diagnosis: agents should not infer paging, disk-I/O stalls,
+memory-pressure causality, container membership, or the exact build task without
+supporting observations; see the [observation limits](docs/mcp.md#memory-and-causal-limits).
+See the [agent workflow](docs/mcp.md#agent-workflow-example) and
+[manual agent evaluation guide](docs/mcp-agent-evaluation.md).
 
 ## Limitations
 
@@ -354,6 +541,7 @@ JSON is a one-shot interface; `--interactive --json` is rejected explicitly.
 ## Documentation
 
 - [WinGet registration and release automation](docs/winget.md) (community registration pending)
+- [Documentation index](docs/README.md)
 - [Architecture](docs/architecture.md)
 - [CPU accounting](docs/cpu-accounting.md)
 - [Validation and test plan](docs/test-plan.md)

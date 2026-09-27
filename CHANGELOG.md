@@ -4,6 +4,101 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-26
+
+### Added
+
+- First stable release with a [1.x compatibility policy](docs/compatibility.md) covering existing CLI options, JSON fields and units, and the four read-only MCP tools. No migration from the existing interfaces is required.
+- Confirmed normal termination of verified primary-WSL processes in the Windows-native TUI, first shipped in the release candidate. Press `s`, select with the arrows, then `k` to review the target and `y` to confirm; `n` or Esc cancels. Python 3.9+ and pidfd support are required only for this optional action. See [scope and prerequisites](docs/process-actions.md).
+
+### Changed
+
+- Dim the TUI footer menu to distinguish controls from resource rows. Process-action feedback stays at normal intensity, and `--color never` remains unstyled.
+- Include the rmcp 3.4 update from the release candidate without changing public MCP tools.
+
+See the [release validation record](docs/validation/2026-09-26-v1.0.0.md) for candidate checks and their scope.
+
+## [1.0.0-rc.1] - 2026-09-26
+
+### Added
+
+- Defined the [1.x compatibility policy](docs/compatibility.md) for the CLI, JSON output and read-only MCP tools. This release candidate preserves the existing interfaces and prepares the first stable release.
+- Added confirmed, normal process termination in the Windows-native TUI for verified primary-WSL processes. Select a row with `s`, request termination with `k`, and confirm with `y`. The target distribution requires Python 3.9+ with pidfd support; unsupported targets fail closed. See [scope and prerequisites](docs/process-actions.md).
+
+### Changed
+
+- Updated the MCP dependency to rmcp 3.4 and adapted server configuration without changing the public tools.
+- Release automation now supports RC tags and marks them as prereleases without replacing the latest stable release.
+
+## [0.5.3] - 2026-09-16
+
+### Fixed
+
+- Improved CPU usage accuracy across Windows, WSL and containers by fixing missing Windows measurements, reducing sampling drift and removing verified WSL/container double counting. Unresolved overlap is marked `WSL*`; totals may still differ.
+
+## [0.5.2] - 2026-09-14
+
+### Changed
+
+- Improved MCP onboarding for AI agents with practical Codex and GitHub Copilot CLI setup and usage examples.
+- Documented multi-step diagnosis using system summary, resource listing, inspection, and hierarchy drill-down, preserving the same snapshot and observation-scoped resource IDs.
+- Added an agent evaluation checklist and reusable manual test scenarios for MCP tool selection, arguments, and reasoning.
+- Clarified that null environment observations do not necessarily mean zero usage and that container membership requires evidence from the returned hierarchy.
+- Clarified that high memory usage alone does not prove paging, swapping, disk-I/O stalls, or memory-pressure causality.
+- Improved MCP tool descriptions and guidance for snapshot reuse and safer interpretation.
+
+This is a documentation and guidance-focused patch release. There are no MCP
+protocol breaking changes, no new write/action tools, and no CLI/TUI behavior
+changes intended. The MCP protocol, CLI/TUI behavior, and read-only safety model
+remain compatible with v0.5.1.
+
+## [0.5.1] - 2026-09-13
+
+### Added
+
+- Optional `wsltop mcp` read-only stdio server with system summary, resource listing, inspection and immediate-child tools, backed by the official Rust MCP SDK.
+- Retained snapshots with opaque IDs, capture metadata, freshness/expiration rules and observation-scoped resource IDs. Pinned queries remain available during a refresh; failed collection preserves retained observations.
+- MCP setup documentation and Linux/Windows protocol tests, including validation against extracted release executables.
+- Target-specific cargo-binstall metadata for existing Linux and Windows GitHub release archives.
+
+### Changed
+
+- Installation guidance prioritizes prebuilt binaries and cargo-binstall. README examples and the live demo reflect the compact TUI introduced in v0.5.0.
+
+### Fixed
+
+- WSL category CPU uses a single shared-kernel observation instead of summing matched process rows, avoiding undercount during short-lived build-process churn. Process rows and one-shot JSON are unchanged.
+- Container process-detail failures do not invalidate valid Docker/WSLC aggregate CPU and memory observations in MCP summaries.
+- Resource lookup rejects ambiguous hierarchy parents and unknown Windows process generations; resource IDs are scoped to the original retained observation.
+
+Existing CLI/TUI controls and one-shot JSON remain compatible. MCP adds no process
+termination, container control, shell tools or network listener.
+
+## [0.5.0] - 2026-09-12
+
+### Added
+
+- Default compact two-line host CPU/RAM summary, including host-wide CPU counter metrics and physical RAM in use/total, independent of row filters and CPU display scale.
+- Aligned CPU/RAM history graphs with a fixed 0–100% scale, held values between results and explicit failure markers.
+- Colorized Windows/WSL/WSLC/Docker observations and environment labels; help explains overlapping CPU observations and different memory definitions.
+- `--header classic` for the traditional one-line header and `--color auto|always|never`, including NO_COLOR and TERM=dumb support.
+
+### Changed
+
+- TUI summary, resource table and single-line footer are organized into distinct areas. Footer groups view, sort, CPU scale and refresh interval alongside key hints.
+- Responsive summaries use 23 history columns on wide terminals and 15 on medium terminals; below 80 columns, totals and essential controls take priority. Values and environment columns stay aligned.
+- Summary and table separators share a restrained Dim style; separator width follows content rather than filling wide terminals. Wide summaries add spacing between environments.
+- Help and tree presentation retain top-like simplicity, consistent environment colors and existing container child grouping.
+- Windows refresh periods include query time without overlapping collection calls.
+
+### Fixed
+
+- Windows TUI restores the caller's exact console input/output modes on exit, including flags changed by event handling.
+- CPU and RAM from one Windows collection share a history timestamp, preventing slot drift when event processing crosses an interval boundary.
+- Help scroll bounds use actual word wrapping so the last lines remain reachable on narrow terminals.
+- Classic mode restores its original header fields; long tree commands do not stretch the summary separator, and standalone Docker headings receive their environment color.
+- Windows command timeout handling uses Job Objects and bounded output cleanup, closes a completion/timeout race, and covers Windows command-line quoting. Success-path tests tolerate slow CI process startup.
+
 ## [0.4.0] - 2026-09-06
 
 ### Added
@@ -101,7 +196,13 @@ All notable changes to this project will be documented in this file. The format 
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0
+[1.0.0-rc.1]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0-rc.1
+[0.5.3]: https://github.com/adachi6k/wsltop/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/adachi6k/wsltop/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/adachi6k/wsltop/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/adachi6k/wsltop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/adachi6k/wsltop/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/adachi6k/wsltop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/adachi6k/wsltop/compare/v0.1.0...v0.2.0

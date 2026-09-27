@@ -3,7 +3,6 @@ use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, Resourc
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
-use std::process::Command;
 use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
@@ -20,14 +19,26 @@ struct RawDockerStat {
 
 #[derive(Debug, Clone, Default)]
 pub struct DockerUsage {
+    pub cpu_probes: Vec<crate::guest_cpu::Probe>,
     pub resources: Vec<ContainerProcessUsage>,
     pub warnings: Vec<String>,
 }
 
-pub fn usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>> {
-    let mut result = aggregate_usage(host_logical_cpu_count)?;
-    populate_processes(&mut result, host_logical_cpu_count);
-    Ok(result)
+pub fn usage(host_logical_cpu_count: u32) -> Result<(DockerUsage, bool), Box<dyn Error>> {
+    let result = aggregate_usage(host_logical_cpu_count)?;
+    Ok(with_details(result, |result| {
+        populate_processes(result, host_logical_cpu_count)
+    }))
+}
+
+fn with_details(
+    mut result: DockerUsage,
+    populate: impl FnOnce(&mut DockerUsage),
+) -> (DockerUsage, bool) {
+    // Detail failures do not invalidate successfully collected aggregate rows.
+    let complete = !result.resources.is_empty() && result.warnings.is_empty();
+    populate(&mut result);
+    (result, complete)
 }
 
 pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>> {
@@ -35,13 +46,16 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<d
         return Ok(DockerUsage::default());
     }
     let output = match command::output_with_timeout(
-        Command::new("docker").args([
-            "stats",
-            "--no-stream",
-            "--no-trunc",
-            "--format",
-            "{{json .}}",
-        ]),
+        command::CommandSpec::new(
+            "docker",
+            &[
+                "stats",
+                "--no-stream",
+                "--no-trunc",
+                "--format",
+                "{{json .}}",
+            ],
+        ),
         Duration::from_secs(5),
     ) {
         Ok(output) => output,
@@ -59,7 +73,12 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<d
         .into());
     }
     let resources = parse_stats(&output.stdout, host_logical_cpu_count)?;
+    let cpu_probes = crate::guest_cpu::collect(
+        "docker",
+        &resources.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+    );
     Ok(DockerUsage {
+        cpu_probes,
         resources: resources
             .into_iter()
             .map(|resource| ContainerProcessUsage {
@@ -119,7 +138,7 @@ fn container_processes(
         "pid,ppid,pcpu,rss,comm,args",
     ] {
         let output = command::output_with_timeout(
-            Command::new("docker").args(["top", id, "-eo", columns]),
+            command::CommandSpec::new("docker", &["top", id, "-eo", columns]),
             Duration::from_secs(5),
         )?;
         if output.status.success() {
@@ -290,6 +309,34 @@ fn parse_memory(value: &str) -> Result<u64, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn detail_failures_preserve_aggregate_availability() {
+        let row = super::parse_stats(
+            br#"{"ID":"abcdef","Name":"web","CPUPerc":"32.00%","MemUsage":"12.5MiB / 1GiB"}"#,
+            16,
+        )
+        .unwrap()
+        .remove(0);
+        let usage = super::DockerUsage {
+            cpu_probes: Vec::new(),
+            resources: vec![crate::model::ContainerProcessUsage {
+                resource: row,
+                processes: vec![],
+                host_pids: vec![],
+            }],
+            warnings: vec![],
+        };
+        let (mut usage, complete) = super::with_details(usage, |usage| {
+            usage.warnings.push("docker top failed".into())
+        });
+        assert!(complete);
+        assert_eq!(usage.resources[0].resource.memory_bytes, 13_107_200);
+        assert_eq!(usage.warnings, ["docker top failed"]);
+        usage.warnings = vec!["aggregate incomplete".into()];
+        assert!(!super::with_details(usage, |_| {}).1);
+        assert!(!super::with_details(super::DockerUsage::default(), |_| {}).1);
+    }
+
     use super::{daemon_unavailable, parse_cpu_time, parse_stats, parse_top};
     use crate::model::{EnvironmentKind, ResourceKind};
 

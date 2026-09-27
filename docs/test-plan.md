@@ -2,7 +2,8 @@
 
 This document separates automated CI checks from real Windows/WSL host validation. CI runs portable checks on Ubuntu, a Windows GNU cross-target check, and native Windows tests, an MSVC release build, and help/version smoke checks. Collectors that require WSL2, Windows interoperability, WSLC, Docker, or multiple distributions must be exercised on representative hosts before release.
 
-Recorded runs: [2026-09-05 Windows-native archive and TUI smoke tests](validation/2026-09-05-windows-native.md).
+Recorded runs: [validation index](validation/README.md), including Windows-native
+archive/TUI smoke tests, CPU investigations and release acceptance records.
 
 ## Automated checks
 
@@ -190,20 +191,31 @@ Before tagging a release:
 2. The feature matrix is exercised on at least one current Windows 11 + WSL2 host.
 3. CPU normalization is checked against one-CPU and four-CPU workloads.
 4. At least one optional-collector failure path is verified for WSLC and Docker.
-5. Validate both Linux x86_64 tar.gz and Windows x86_64 MSVC ZIP packaging in a dry run: each archive contains its executable, README, and LICENSE in a versioned directory; each SHA-256 file matches the archive; extracted executables pass help/version. Do not push a test `v*` tag merely to validate packaging, because it publishes a release.
+5. Validate both Linux x86_64 tar.gz and Windows x86_64 MSVC ZIP packaging in a dry run: each archive contains its executable, README, and LICENSE in a versioned directory; each SHA-256 file matches the archive; extracted executables pass help/version. Do not push a test `v*` tag merely to validate packaging, because a valid release tag publishes to both GitHub Releases and crates.io.
 6. README installation and quick-start commands work as written.
 7. Record native Windows and WSL interactive results, including distro discovery,
    baseline loading, failure recovery, and terminal restoration.
+8. Complete the [Trusted Publishing setup](publishing.md#one-time-setup), verify
+   `cargo publish --locked --dry-run`, and confirm the version is not already
+   published to crates.io. Supported tags are `vMAJOR.MINOR.PATCH` and
+   `vMAJOR.MINOR.PATCH-rc.N`, with a matching Cargo version and changelog entry.
 
 The tagged release workflow checks the tag against `Cargo.toml`, builds on each
 native runner, and publishes both platforms' archives/checksums only after both
-packaging jobs succeed. It does not publish to crates.io. Packaging verification
-and real-host results should be attached to the release PR; skipped checks remain
-explicitly pending.
+packaging jobs and release-asset/Cargo-package verification succeed. After GitHub
+Release publication succeeds, it publishes the crate using Trusted Publishing
+through the `crates-io` environment. Confirm both the GitHub assets and crates.io
+version before declaring publication complete. A crates.io failure can leave a
+GitHub Release in place; follow the [retry guidance](publishing.md#failures-and-retries).
+Packaging verification and real-host results should be attached to the release
+PR; skipped checks remain explicitly pending.
 
 Changes to the release workflow run the same packaging jobs in pull requests.
 The workflow also supports a manual `workflow_dispatch` dry run. Both use the
 package version for archive names, verify transferred checksums and extracted
-executables, and upload downloadable Actions artifacts without publishing a
-GitHub release. Only a `v*` tag push reaches the publication step. Download those
+executables, validate the Cargo package with `cargo publish --locked --dry-run`,
+and upload downloadable Actions artifacts without publishing to GitHub Releases
+or crates.io or requesting an OIDC token. Only a supported `v*` tag push reaches
+the publication jobs. Dry runs do not verify OIDC authorization; confirm it on
+the first real publication. Download those
 artifacts to perform the Windows/WSL runtime procedure on the exact packaged build.

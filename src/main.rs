@@ -1,18 +1,38 @@
+mod action;
 mod attribution;
 mod collector;
 mod command;
+mod cpu_accounting;
 mod docker;
+mod guest_cpu;
+mod header;
+mod history;
+// Includes identity-comparison primitives reserved for future action backends.
+#[allow(dead_code)]
+mod identity;
 #[cfg(unix)]
 mod linux;
+mod linux_cpu;
 #[cfg_attr(windows, allow(dead_code))]
 mod linux_proc;
+mod mcp;
 mod model;
 mod monitor;
 mod multiwsl;
 mod query;
+// Read-only API over retained snapshots, used by MCP.
+#[allow(dead_code)]
+mod query_api;
+// Includes explicit collector replacement for future reconfiguration adapters.
+#[allow(dead_code)]
+mod query_service;
 mod render;
 mod sampler;
+// Includes lower-level insertion modes for producers with verified namespaces.
+#[allow(dead_code)]
+mod snapshot_store;
 mod stream;
+mod summary;
 mod tui;
 mod windows;
 mod windows_app;
@@ -29,6 +49,8 @@ const DEFAULT_INTERVAL_MS: u64 = 3000;
 
 #[derive(Debug)]
 struct Options {
+    header: header::HeaderMode,
+    color: header::ColorMode,
     sort: Sort,
     interval: Duration,
     limit: usize,
@@ -49,6 +71,9 @@ struct Options {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if env::args().nth(1).as_deref() == Some("mcp") {
+        return mcp::run(env::args().skip(2).collect());
+    }
     let options = parse_args()?;
     validate_options(&options)?;
     run(options)
@@ -90,7 +115,14 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         collect_windows_applications,
     };
     if options.interactive {
-        return tui::run(config, options.distro, options.tree, options.cpu_scale);
+        return tui::run(
+            config,
+            options.distro,
+            options.tree,
+            options.cpu_scale,
+            options.header,
+            options.color,
+        );
     }
 
     let mut monitor = Monitor::new(config, options.distro);
@@ -127,6 +159,8 @@ where
     S: Into<String>,
 {
     let mut options = Options {
+        header: Default::default(),
+        color: Default::default(),
         sort: Sort::default(),
         interval: Duration::from_millis(DEFAULT_INTERVAL_MS),
         limit: 30,
@@ -149,6 +183,18 @@ where
     let mut args = args.into_iter().map(Into::into);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--header" => {
+                options.header = header::HeaderMode::parse(
+                    &args.next().ok_or("--header requires classic or compact")?,
+                )?;
+            }
+            "--color" => {
+                options.color = header::ColorMode::parse(
+                    &args
+                        .next()
+                        .ok_or("--color requires auto, always or never")?,
+                )?;
+            }
             "--sort" => {
                 options.sort.key =
                     SortKey::parse(&args.next().ok_or("--sort requires cpu, memory or name")?)?;
@@ -231,11 +277,12 @@ fn print_help() {
     println!(
         "wsltop {}\n\n\
 Unified Windows, WSL, WSL Containers, and Docker resource monitor for WSL2\n\n\
-USAGE:\n    wsltop [OPTIONS]\n\n\
+USAGE:\n    wsltop [OPTIONS]\n    wsltop mcp [COLLECTOR OPTIONS] (read-only stdio; see wsltop mcp --help)\n\n\
 OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --sort KEY            Sort resources by cpu, memory or name [default: cpu]\n    --sort-order ORDER    Sort direction: asc or desc [default: desc]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --distro NAME          Select the primary WSL distro (Windows-native only)\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
         env!("CARGO_PKG_VERSION"),
         DEFAULT_INTERVAL_MS
     );
+    println!("TUI DISPLAY:\n    --header MODE          compact (two lines, default) or classic (one line)\n    --color MODE           auto (default), always or never; auto honors NO_COLOR\n\nPress ? in the TUI for summary metrics and controls. Environment observations\nmay overlap (WSL can include Docker); they are not an additive host breakdown.");
 }
 
 #[cfg(test)]
@@ -244,6 +291,25 @@ mod tests {
         parse_args_from, validate_options, validate_options_for_platform, DEFAULT_INTERVAL_MS,
     };
     use crate::render::CpuScale;
+
+    #[test]
+    fn parses_tui_display_options() {
+        let defaults = parse_args_from(Vec::<String>::new()).unwrap();
+        assert_eq!(defaults.header, crate::header::HeaderMode::Compact);
+        assert_eq!(defaults.color, crate::header::ColorMode::Auto);
+        let options =
+            parse_args_from(["--interactive", "--header", "classic", "--color", "never"]).unwrap();
+        assert_eq!(options.header, crate::header::HeaderMode::Classic);
+        assert_eq!(options.color, crate::header::ColorMode::Never);
+        for args in [
+            vec!["--header"],
+            vec!["--header", "huge"],
+            vec!["--color"],
+            vec!["--color", "blue"],
+        ] {
+            assert!(parse_args_from(args).is_err());
+        }
+    }
 
     #[test]
     fn defaults_human_output_to_per_core_scale() {

@@ -3,7 +3,6 @@ use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, Resourc
 use serde::Deserialize;
 use std::error::Error;
 use std::io;
-use std::process::Command;
 use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
@@ -20,6 +19,7 @@ struct RawWslcStat {
 
 #[derive(Debug, Clone, Default)]
 pub struct WslcUsage {
+    pub cpu_probes: Vec<crate::guest_cpu::Probe>,
     pub resources: Vec<ResourceUsage>,
     pub process_resources: Vec<ContainerProcessUsage>,
     pub warnings: Vec<String>,
@@ -30,10 +30,18 @@ pub struct WslcUsage {
 /// `wslc stats` reports CPU in the container convention where one fully busy
 /// logical CPU is approximately 100%. wsltop divides that value by the Windows
 /// host logical CPU count so that all host logical CPUs busy is 100%.
-pub fn usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
-    let mut result = aggregate_usage(host_logical_cpu_count)?;
-    populate_processes(&mut result, host_logical_cpu_count);
-    Ok(result)
+pub fn usage(host_logical_cpu_count: u32) -> Result<(WslcUsage, bool), Box<dyn Error>> {
+    let result = aggregate_usage(host_logical_cpu_count)?;
+    Ok(with_details(result, |result| {
+        populate_processes(result, host_logical_cpu_count)
+    }))
+}
+
+fn with_details(mut result: WslcUsage, populate: impl FnOnce(&mut WslcUsage)) -> (WslcUsage, bool) {
+    // Detail failures do not invalidate successfully collected aggregate rows.
+    let complete = !result.resources.is_empty() && result.warnings.is_empty();
+    populate(&mut result);
+    (result, complete)
 }
 
 pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
@@ -42,7 +50,7 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
     }
 
     let output = match command::output_with_timeout(
-        Command::new("wslc.exe").args(["stats", "--format", "json", "--no-trunc"]),
+        command::CommandSpec::new("wslc.exe", &["stats", "--format", "json", "--no-trunc"]),
         Duration::from_secs(5),
     ) {
         Ok(output) => output,
@@ -102,6 +110,10 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
     }
 
     Ok(WslcUsage {
+        cpu_probes: crate::guest_cpu::collect(
+            "wslc.exe",
+            &result.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        ),
         resources: result,
         process_resources: Vec::new(),
         warnings,
@@ -162,7 +174,7 @@ fn container_processes(
         "pid,ppid,pcpu,rss,comm,args",
     ] {
         let output = command::output_with_timeout(
-            Command::new("wslc.exe").args(["exec", id, "ps", "-eo", columns]),
+            command::CommandSpec::new("wslc.exe", &["exec", id, "ps", "-eo", columns]),
             Duration::from_secs(5),
         )?;
         if output.status.success() {
@@ -338,6 +350,31 @@ fn parse_size_bytes(value: &str) -> Result<u64, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn detail_failures_preserve_aggregate_availability() {
+        let mut row = crate::snapshot_store::tests::snapshot(1.0)
+            .query_source
+            .unwrap()
+            .resources
+            .remove(0);
+        row.environment = crate::model::EnvironmentKind::WslContainer;
+        row.kind = crate::model::ResourceKind::Container;
+        row.memory_bytes = 4096;
+        let usage = super::WslcUsage {
+            resources: vec![row],
+            ..Default::default()
+        };
+        let (mut usage, complete) = super::with_details(usage, |usage| {
+            usage.warnings.push("wslc exec ps failed".into())
+        });
+        assert!(complete);
+        assert_eq!(usage.resources[0].memory_bytes, 4096);
+        assert_eq!(usage.warnings, ["wslc exec ps failed"]);
+        usage.warnings = vec!["aggregate incomplete".into()];
+        assert!(!super::with_details(usage, |_| {}).1);
+        assert!(!super::with_details(super::WslcUsage::default(), |_| {}).1);
+    }
+
     use super::{
         parse_cpu_time, parse_memory_usage, parse_percent, parse_processes, parse_size_bytes,
     };

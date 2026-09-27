@@ -18,11 +18,19 @@ use std::time::Duration;
 const STARTUP_WARMUP: Duration = Duration::from_millis(150);
 const SLOW_COLLECTOR_MIN_INTERVAL: Duration = Duration::from_secs(2);
 
+type WindowsUpdate = (
+    Vec<ResourceUsage>,
+    u32,
+    Option<f64>,
+    Option<crate::cpu_accounting::Breakdown>,
+);
+
 enum Event {
     HostCpuCount(u32),
+    HostMemory(std::time::Instant, Option<crate::model::HostMemory>),
     CollectorWarnings(Vec<String>),
     Linux(Normalized<Result<Vec<ResourceUsage>, String>>),
-    Windows(Result<(Vec<ResourceUsage>, u32), String>),
+    Windows(std::time::Instant, Result<WindowsUpdate, String>),
     WindowsMetadata(Result<WindowsMetadata, String>),
     ExtraWsl(Normalized<Result<ExtraWslUpdate, String>>),
     WslcAggregate(Normalized<Result<WslcUsage, String>>),
@@ -32,13 +40,22 @@ enum Event {
 }
 
 struct Normalized<T> {
+    action_scope: Option<crate::action::Scope>,
     cpu_count: u32,
+    system_cpu: Option<f64>,
+    kernel_sample: Option<crate::linux_cpu::Sample>,
     value: T,
 }
 
 impl<T> Normalized<T> {
     fn new(cpu_count: u32, value: T) -> Self {
-        Self { cpu_count, value }
+        Self {
+            action_scope: None,
+            cpu_count,
+            value,
+            system_cpu: None,
+            kernel_sample: None,
+        }
     }
 }
 
@@ -54,9 +71,10 @@ impl Event {
     fn name(&self) -> &'static str {
         match self {
             Self::HostCpuCount(_) => "Windows host CPU",
+            Self::HostMemory(..) => "Windows host RAM",
             Self::CollectorWarnings(_) => "WSL collector plan",
             Self::Linux(_) => "current WSL",
-            Self::Windows(_) => "Windows",
+            Self::Windows(..) => "Windows",
             Self::WindowsMetadata(_) => "Windows applications",
             Self::ExtraWsl(_) => "additional WSL",
             Self::WslcAggregate(_) | Self::WslcDetails(_) => "WSLC",
@@ -67,6 +85,13 @@ impl Event {
 
 #[derive(Default)]
 struct Aggregate {
+    action_scope: Option<crate::action::Scope>,
+    guest_cpu: crate::guest_cpu::History,
+    wsl_cpu_percent: Option<f64>,
+    host_cpu_percent: Option<f64>,
+    cpu_breakdown: Option<crate::cpu_accounting::Breakdown>,
+    host_memory: Option<crate::model::HostMemory>,
+    host_history: crate::history::HostHistory,
     host_cpu_count: u32,
     host_cpu_authoritative: bool,
     linux: Vec<ResourceUsage>,
@@ -102,6 +127,10 @@ impl Aggregate {
         }
         Self {
             host_cpu_count: fallback_cpu_count(),
+            host_history: crate::history::HostHistory::new(
+                std::time::Instant::now(),
+                config.interval,
+            ),
             host_cpu_authoritative: config.wsl_only,
             normalized_collectors,
             pending,
@@ -110,9 +139,25 @@ impl Aggregate {
     }
 
     fn apply(&mut self, event: Event) {
+        if let Event::HostMemory(captured_at, memory) = event {
+            self.host_memory = memory;
+            self.host_history.memory.record(
+                captured_at,
+                memory.and_then(|memory| {
+                    memory
+                        .used_bytes()
+                        .map(|used| 100.0 * used as f64 / memory.total_bytes as f64)
+                }),
+            );
+            return;
+        }
         let name = event.name();
         if let Event::HostCpuCount(count) = &event {
             if self.host_cpu_count != *count {
+                self.host_cpu_percent = None;
+                self.cpu_breakdown = None;
+                self.wsl_cpu_percent = None;
+                self.guest_cpu = Default::default();
                 self.linux.clear();
                 self.extra_wsl.clear();
                 self.wslc = WslcUsage::default();
@@ -189,12 +234,36 @@ impl Aggregate {
         }
         let result = match event {
             Event::HostCpuCount(_) => unreachable!(),
+            Event::HostMemory(..) => unreachable!(),
             Event::CollectorWarnings(_) => unreachable!(),
-            Event::Linux(value) => value.value.map(|rows| self.linux = rows),
-            Event::Windows(value) => value.map(|(rows, count)| {
-                self.windows = rows;
-                self.host_cpu_count = count;
-            }),
+            Event::Linux(value) => {
+                self.action_scope = None;
+                self.wsl_cpu_percent = None;
+                self.guest_cpu.kernel(value.kernel_sample.as_ref());
+                value.value.map(|rows| {
+                    self.action_scope = value.action_scope;
+                    self.linux = rows;
+                    self.wsl_cpu_percent = value.system_cpu;
+                })
+            }
+            Event::Windows(captured_at, value) => {
+                self.host_cpu_percent = None;
+                self.cpu_breakdown = None;
+                self.host_history.cpu.record(
+                    captured_at,
+                    value.as_ref().ok().and_then(|(_, _, total, _)| *total),
+                );
+                if value.is_err() {
+                    self.host_memory = None;
+                    self.host_history.memory.record(captured_at, None);
+                }
+                value.map(|(rows, count, total, breakdown)| {
+                    self.windows = rows;
+                    self.host_cpu_count = count;
+                    self.host_cpu_percent = total;
+                    self.cpu_breakdown = breakdown;
+                })
+            }
             Event::WindowsMetadata(value) => value.map(|metadata| {
                 self.windows_metadata = metadata;
             }),
@@ -213,6 +282,7 @@ impl Aggregate {
                 self.extra_wsl_errors = update.failures;
             }),
             Event::WslcAggregate(value) => value.value.map(|mut usage| {
+                self.guest_cpu.containers(2, &usage.cpu_probes);
                 usage.process_resources = self
                     .wslc
                     .process_resources
@@ -233,6 +303,7 @@ impl Aggregate {
             }),
             Event::WslcDetails(_) => unreachable!(),
             Event::DockerAggregate(value) => value.value.map(|mut usage| {
+                self.guest_cpu.containers(3, &usage.cpu_probes);
                 for item in &mut usage.resources {
                     if let Some(old) = self
                         .docker
@@ -269,6 +340,10 @@ impl Aggregate {
         warnings.extend(self.wslc_detail_warnings.iter().cloned());
         warnings.extend(self.docker.warnings.iter().cloned());
         warnings.extend(self.docker_detail_warnings.iter().cloned());
+        if !config.wsl_only && !self.pending.contains("Windows") && self.cpu_breakdown.is_none() {
+            warnings
+                .push("Host CPU partition counters unavailable or inconsistent; CPU is N/A".into());
+        }
         if !self.pending.is_empty() {
             warnings.push(format!(
                 "loading: {}",
@@ -282,7 +357,11 @@ impl Aggregate {
             );
         }
         if config.wsl_only {
-            warnings.push("--wsl-only uses the WSL-visible logical CPU count".to_string());
+            warnings.push(if cfg!(windows) {
+                "--wsl-only uses the Windows host logical CPU count; host-process collection is disabled"
+            } else {
+                "--wsl-only uses the WSL-visible logical CPU count"
+            }.to_string());
         }
 
         let mut linux = self.linux.clone();
@@ -328,7 +407,58 @@ impl Aggregate {
                 .iter()
                 .map(|item| item.resource.clone()),
         );
-        MonitorSnapshot::from_collected(resources, tree, warnings, config)
+        let ready = |name| !self.pending.contains(name) && !self.errors.contains_key(name);
+        let normalized = self.host_cpu_authoritative;
+        let mut summary = crate::summary::EnvironmentSummary::collect(
+            &resources,
+            [
+                !config.wsl_only && ready("Windows"),
+                normalized
+                    && ready("current WSL")
+                    && (config.wsl_only || ready("additional WSL"))
+                    && self.extra_wsl_errors.is_empty()
+                    && self.collector_warnings.is_empty(),
+                normalized
+                    && !config.wsl_only
+                    && !config.no_wslc
+                    && ready("WSLC")
+                    && self.wslc.warnings.is_empty(),
+                normalized
+                    && !config.no_docker
+                    && ready("Docker")
+                    && self.docker.warnings.is_empty(),
+            ],
+        );
+        summary.set_wsl_cpu(normalized.then_some(self.wsl_cpu_percent).flatten());
+        let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, config);
+        snapshot.action_scope = self.action_scope.clone();
+        snapshot.host_cpu_percent = self.host_cpu_percent;
+        snapshot.cpu_breakdown = self.cpu_breakdown;
+        snapshot.host_memory = self.host_memory;
+        snapshot.host_history = self.host_history.clone();
+        snapshot.environment_summary = summary;
+        let mut targets = Vec::new();
+        if !config.wsl_only && !config.no_wslc {
+            targets.extend(self.wslc.resources.iter().map(|r| (2, r.id.as_str())));
+        }
+        if !config.no_docker {
+            targets.extend(
+                self.docker
+                    .resources
+                    .iter()
+                    .map(|r| (3, r.resource.id.as_str())),
+            );
+        }
+        let containers_ready = (config.no_docker || ready("Docker"))
+            && (config.wsl_only || config.no_wslc || ready("WSLC"));
+        crate::guest_cpu::apply(
+            &mut snapshot,
+            &self.guest_cpu,
+            &targets,
+            containers_ready && normalized,
+            config.interval,
+        );
+        snapshot
     }
 }
 
@@ -345,8 +475,9 @@ impl Event {
             Self::DockerAggregate(value) => value.cpu_count != current_count,
             Self::DockerDetails(value) => value.cpu_count != current_count,
             Self::HostCpuCount(_)
+            | Self::HostMemory(..)
             | Self::CollectorWarnings(_)
-            | Self::Windows(_)
+            | Self::Windows(..)
             | Self::WindowsMetadata(_) => false,
         }
     }
@@ -411,8 +542,25 @@ pub fn run(
             return;
         }
     };
-    let host_cpu_count = Arc::new(AtomicU32::new(fallback_cpu_count()));
+    #[cfg(windows)]
+    let initial_count =
+        match select_initial_cpu_count(initial.wsl_only, fallback_cpu_count(), || {
+            windows::host_logical_cpu_count().map_err(|error| error.to_string())
+        }) {
+            Ok(count) => count,
+            Err(error) => {
+                let _ = output.send(Err(format!("Windows host CPU count unavailable: {error}")));
+                return;
+            }
+        };
+    #[cfg(not(windows))]
+    let initial_count = fallback_cpu_count();
+    let host_cpu_count = Arc::new(AtomicU32::new(initial_count));
     let (sender, receiver) = mpsc::channel();
+    #[cfg(windows)]
+    if initial.wsl_only {
+        let _ = sender.send(Event::HostCpuCount(initial_count));
+    }
     let _ = sender.send(Event::CollectorWarnings(collector_plan.warnings));
     spawn_primary_processes(
         collector_plan.primary,
@@ -483,9 +631,11 @@ fn spawn_primary_processes(
     interval: Duration,
 ) {
     thread::spawn(move || {
-        let mut primary_before: Option<crate::model::Snapshot> = None;
+        let mut primary_before: Option<(crate::model::Snapshot, Option<u32>)> = None;
         let mut delay = Duration::ZERO;
         while wait(&stop, delay) {
+            let started = std::time::Instant::now();
+            let capture_count = cpus.load(Ordering::Relaxed);
             match collector.snapshot() {
                 Ok(after) => {
                     let had_baseline = primary_before.is_some();
@@ -493,18 +643,26 @@ fn spawn_primary_processes(
                         0 => fallback_cpu_count(),
                         count => count,
                     };
-                    if let Some(old) = &primary_before {
+                    let stable_count = (capture_count == count).then_some(count);
+                    if let Some((old, old_count)) = &primary_before {
                         let rows = sampler::calculate_usage(old, &after, count);
-                        if sender
-                            .send(Event::Linux(Normalized::new(count, Ok(rows))))
-                            .is_err()
-                        {
+                        let mut update = Normalized::new(count, Ok(rows));
+                        update.action_scope = after
+                            .system_cpu
+                            .as_ref()
+                            .and_then(|s| s.action_scope.clone());
+                        update.system_cpu =
+                            stable_kernel_usage(old, &after, *old_count, stable_count);
+                        if update.system_cpu.is_some() {
+                            update.kernel_sample = after.system_cpu.clone();
+                        }
+                        if sender.send(Event::Linux(update)).is_err() {
                             break;
                         }
                     }
-                    primary_before = Some(after);
+                    primary_before = Some((after, stable_count));
                     delay = if had_baseline {
-                        interval
+                        remaining_sample_delay(interval, started.elapsed())
                     } else {
                         STARTUP_WARMUP
                     };
@@ -517,7 +675,7 @@ fn spawn_primary_processes(
                     {
                         break;
                     }
-                    delay = interval;
+                    delay = remaining_sample_delay(interval, started.elapsed());
                 }
             }
         }
@@ -536,6 +694,7 @@ fn spawn_additional_processes(
         let mut before = BTreeMap::<String, crate::model::Snapshot>::new();
         let mut delay = Duration::ZERO;
         while wait(&stop, delay) {
+            let started = std::time::Instant::now();
             let count = cpus.load(Ordering::Relaxed).max(1);
             match collector.snapshot() {
                 Ok(after) => {
@@ -556,7 +715,7 @@ fn spawn_additional_processes(
                     }
                 }
             }
-            delay = cadence;
+            delay = remaining_sample_delay(cadence, started.elapsed());
         }
     });
 }
@@ -631,35 +790,57 @@ fn sample_windows(
     let mut before: Option<crate::model::WindowsSnapshot> = None;
     let mut delay = Duration::ZERO;
     while wait(&stop, delay) {
+        let started = std::time::Instant::now();
         match windows::snapshot() {
             Ok(after) => {
+                let captured_at = after.snapshot.captured_at;
                 let count = after.host_logical_cpu_count;
                 cpus.store(count, Ordering::Relaxed);
                 if sender.send(Event::HostCpuCount(count)).is_err() {
                     break;
                 }
-                if let Some(old) = &before {
-                    let rows = sampler::calculate_usage(&old.snapshot, &after.snapshot, count);
-                    if sender.send(Event::Windows(Ok((rows, count)))).is_err() {
-                        break;
-                    }
-                }
-                before = Some(after);
-                delay = interval;
-            }
-            Err(error) => {
                 if sender
-                    .send(Event::Windows(Err(format!(
-                        "Windows collector unavailable: {error}"
-                    ))))
+                    .send(Event::HostMemory(captured_at, after.host_memory))
                     .is_err()
                 {
                     break;
                 }
-                delay = interval;
+                if let Some(old) = &before {
+                    let rows = windows::calculate_usage(old, &after);
+                    let breakdown = windows::cpu_breakdown(old, &after);
+                    let total = breakdown.map(|cpu| cpu.total);
+                    if sender
+                        .send(Event::Windows(
+                            captured_at,
+                            Ok((rows, count, total, breakdown)),
+                        ))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                before = Some(after);
+            }
+            Err(error) => {
+                if sender
+                    .send(Event::Windows(
+                        std::time::Instant::now(),
+                        Err(format!("Windows collector unavailable: {error}")),
+                    ))
+                    .is_err()
+                {
+                    break;
+                }
             }
         }
+        delay = remaining_sample_delay(interval, started.elapsed());
     }
+}
+
+fn remaining_sample_delay(interval: Duration, elapsed: Duration) -> Duration {
+    // Start-to-start cadence. Slow calls run back-to-back, never overlapping or
+    // trying to catch up with concurrent queries from the same collector.
+    interval.saturating_sub(elapsed)
 }
 
 fn spawn_wslc(
@@ -694,6 +875,7 @@ fn spawn_wslc(
     thread::spawn(move || {
         let cadence = interval.max(SLOW_COLLECTOR_MIN_INTERVAL);
         while let Some(count) = ready_cpu_count(&stop, &cpus) {
+            let started = std::time::Instant::now();
             match wslc::aggregate_usage(count) {
                 Ok(usage) => {
                     if sender
@@ -721,7 +903,7 @@ fn spawn_wslc(
                     }
                 }
             }
-            if !wait(&stop, cadence) {
+            if !wait(&stop, remaining_sample_delay(cadence, started.elapsed())) {
                 break;
             }
         }
@@ -760,6 +942,7 @@ fn spawn_docker(
     thread::spawn(move || {
         let cadence = interval.max(SLOW_COLLECTOR_MIN_INTERVAL);
         while let Some(count) = ready_cpu_count(&stop, &cpus) {
+            let started = std::time::Instant::now();
             match docker::aggregate_usage(count) {
                 Ok(usage) => {
                     if sender
@@ -787,7 +970,7 @@ fn spawn_docker(
                     }
                 }
             }
-            if !wait(&stop, cadence) {
+            if !wait(&stop, remaining_sample_delay(cadence, started.elapsed())) {
                 break;
             }
         }
@@ -820,8 +1003,72 @@ fn fallback_cpu_count() -> u32 {
     thread::available_parallelism().map_or(1, |count| count.get() as u32)
 }
 
+#[cfg(any(windows, test))]
+fn select_initial_cpu_count(
+    wsl_only: bool,
+    visible: u32,
+    host: impl FnOnce() -> Result<u32, String>,
+) -> Result<u32, String> {
+    let count = if wsl_only { host()? } else { visible };
+    if count == 0 {
+        Err("zero logical CPU count".into())
+    } else {
+        Ok(count)
+    }
+}
+
+fn stable_kernel_usage(
+    before: &crate::model::Snapshot,
+    after: &crate::model::Snapshot,
+    before_count: Option<u32>,
+    after_count: Option<u32>,
+) -> Option<f64> {
+    let count = after_count?;
+    (before_count == Some(count))
+        .then(|| crate::linux_cpu::usage(before, after, count))
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_wsl_only_requires_host_count_without_affinity_fallback() {
+        assert_eq!(
+            super::select_initial_cpu_count(true, 2, || Ok(16)).unwrap(),
+            16
+        );
+        assert!(super::select_initial_cpu_count(true, 2, || Err("unavailable".into())).is_err());
+        assert!(super::select_initial_cpu_count(true, 2, || Ok(0)).is_err());
+        assert_eq!(
+            super::select_initial_cpu_count(false, 2, || panic!(
+                "normal mode discovers asynchronously"
+            ))
+            .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn system_cpu_requires_stable_host_count_across_both_captures() {
+        let mut before = empty_snapshot();
+        let mut after = empty_snapshot();
+        before.system_cpu =
+            crate::linux_cpu::Sample::parse("cpu 100 0 0 0 0 0 0\ncpu0 0", "10", "boot", 100.0);
+        after.system_cpu =
+            crate::linux_cpu::Sample::parse("cpu 200 0 0 0 0 0 0\ncpu0 0", "11", "boot", 100.0);
+        assert_eq!(
+            super::stable_kernel_usage(&before, &after, Some(16), Some(16)),
+            Some(6.25)
+        );
+        for (old, new) in [
+            (Some(8), Some(16)),
+            (None, Some(16)),
+            (Some(16), None),
+            (Some(0), Some(0)),
+        ] {
+            assert!(super::stable_kernel_usage(&before, &after, old, new).is_none());
+        }
+    }
     use super::{
         additional_process_cadence, calculate_additional_update, fallback_cpu_count,
         reuse_docker_processes, reuse_wslc_processes, wait, Aggregate, Event, ExtraWslUpdate,
@@ -877,6 +1124,7 @@ mod tests {
 
     fn empty_snapshot() -> crate::model::Snapshot {
         crate::model::Snapshot {
+            system_cpu: None,
             captured_at: Instant::now(),
             processes: Vec::new(),
         }
@@ -1102,6 +1350,296 @@ mod tests {
     }
 
     #[test]
+    fn history_only_records_host_results_not_other_collectors_or_requeries() {
+        let options = config();
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostMemory(
+            std::time::Instant::now(),
+            Some(crate::model::HostMemory {
+                total_bytes: 4096,
+                available_bytes: 1024,
+            }),
+        ));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![], 16, Some(50.0), None)),
+        ));
+        let mut snapshot = aggregate.snapshot(&options);
+        let history = snapshot.host_history.clone();
+        aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::new())));
+        aggregate.apply(Event::Linux(normalized(Ok(vec![]))));
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(
+            DockerUsage::default(),
+        ))));
+        for _ in 0..10 {
+            snapshot.requery(&options.query());
+            assert_eq!(snapshot.host_history, history);
+            assert_eq!(aggregate.snapshot(&options).host_history, history);
+        }
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Err("offline".into()),
+        ));
+        let failed = aggregate.snapshot(&options).host_history;
+        assert_ne!(failed.cpu, history.cpu);
+        assert_ne!(failed.memory, history.memory);
+        let now = std::time::Instant::now();
+        assert!(failed.cpu.sparkline(12, now, false).ends_with('!'));
+        assert!(failed.memory.sparkline(12, now, false).ends_with('!'));
+    }
+
+    #[test]
+    fn queued_windows_metrics_share_collection_slots_across_boundaries() {
+        let mut options = config();
+        options.interval = Duration::from_secs(1);
+        let mut aggregate = Aggregate::new(&options);
+        // Collection happened earlier; handling now is several slots late.
+        // No sleeps or scheduler assumptions are needed to reproduce the bug.
+        let origin = std::time::Instant::now() - Duration::from_secs(10);
+        aggregate.host_history = crate::history::HostHistory::new(origin, options.interval);
+        for (millis, used) in [(999, 50), (1001, 100)] {
+            let captured_at = origin + Duration::from_millis(millis);
+            aggregate.apply(Event::HostMemory(
+                captured_at,
+                Some(crate::model::HostMemory {
+                    total_bytes: 100,
+                    available_bytes: 100 - used,
+                }),
+            ));
+            // A snapshot can be constructed between the two queued events.
+            let _ = aggregate.snapshot(&options);
+            aggregate.apply(Event::Windows(
+                captured_at,
+                Ok((vec![], 16, Some(used as f64), None)),
+            ));
+        }
+        let at = origin + Duration::from_secs(3);
+        for history in [&aggregate.host_history.cpu, &aggregate.host_history.memory] {
+            let graph = history.sparkline(4, at, false);
+            assert_eq!(graph.chars().next(), Some('▅'));
+            assert!(graph.ends_with("███"));
+        }
+        aggregate.apply(Event::Windows(
+            origin + Duration::from_secs(2),
+            Err("offline".into()),
+        ));
+        for history in [&aggregate.host_history.cpu, &aggregate.host_history.memory] {
+            assert_eq!(history.sparkline(4, at, false), "▅█!!");
+        }
+    }
+
+    #[test]
+    fn collector_cadence_accounts_for_fast_slow_and_overrunning_calls() {
+        let interval = Duration::from_secs(3);
+        for (elapsed, remaining) in [(0, 3000), (800, 2200), (2999, 1), (3000, 0), (10000, 0)] {
+            assert_eq!(
+                super::remaining_sample_delay(interval, Duration::from_millis(elapsed)),
+                Duration::from_millis(remaining)
+            );
+        }
+    }
+
+    #[test]
+    fn host_total_is_independent_of_rows_and_cleared_on_collection_failure() {
+        let mut options = config();
+        options.limit = 1;
+        let mut aggregate = Aggregate::new(&options);
+        let memory = crate::model::HostMemory {
+            total_bytes: 4096,
+            available_bytes: 1024,
+        };
+        aggregate.apply(Event::HostMemory(std::time::Instant::now(), Some(memory)));
+        assert_eq!(aggregate.snapshot(&options).host_memory, Some(memory));
+        assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![], 16, Some(42.5), None)),
+        ));
+        let mut snapshot = aggregate.snapshot(&options);
+        snapshot.requery(&options.query());
+        assert_eq!(snapshot.host_cpu_percent, Some(42.5));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Err("offline".into()),
+        ));
+        assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
+        assert_eq!(aggregate.snapshot(&options).host_memory, None);
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![], 16, None, None)),
+        ));
+        assert_eq!(aggregate.snapshot(&options).host_cpu_percent, None);
+    }
+
+    #[test]
+    fn summary_is_unfiltered_and_clears_failed_collectors_without_confusing_empty_with_missing() {
+        let mut options = config();
+        options.limit = 1;
+        options.hide_infra = true;
+        let mut aggregate = Aggregate::new(&options);
+        assert_eq!(
+            aggregate.snapshot(&options).environment_summary.0,
+            [None; 4]
+        );
+        aggregate.apply(Event::HostCpuCount(16));
+        let first = row(EnvironmentKind::Wsl, ResourceKind::Process, "first");
+        let infra = row(EnvironmentKind::Wsl, ResourceKind::Infra, "infra");
+        let mut primary = Normalized::new(16, Ok(vec![first.clone(), infra.clone()]));
+        primary.system_cpu = Some(80.0);
+        aggregate.apply(Event::Linux(primary));
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Ok(ExtraWslUpdate::default()),
+        )));
+        aggregate.apply(Event::DockerAggregate(Normalized::new(
+            16,
+            Ok(DockerUsage::default()),
+        )));
+        let mut snapshot = aggregate.snapshot(&options);
+        let expected = Some(80.0);
+        assert_eq!(
+            snapshot.environment_summary.0[1].unwrap().cpu_percent,
+            expected
+        );
+        assert_eq!(
+            snapshot.environment_summary.0[3],
+            Some(crate::summary::Usage::default())
+        );
+        let mut query = options.query();
+        query.sort.key = crate::query::SortKey::Memory;
+        query.limit = 0;
+        snapshot.requery(&query);
+        assert_eq!(
+            snapshot.environment_summary.0[1].unwrap().cpu_percent,
+            expected
+        );
+        aggregate.apply(Event::Linux(Normalized::new(16, Err("offline".into()))));
+        aggregate.apply(Event::DockerAggregate(Normalized::new(
+            16,
+            Err("offline".into()),
+        )));
+        let snapshot = aggregate.snapshot(&options);
+        assert!(snapshot.environment_summary.0[1].is_none());
+        assert!(snapshot.environment_summary.0[3].is_none());
+        let mut empty = Normalized::new(16, Ok(vec![]));
+        empty.system_cpu = Some(0.0);
+        aggregate.apply(Event::Linux(empty));
+        assert_eq!(
+            aggregate.snapshot(&options).environment_summary.0[1],
+            Some(crate::summary::Usage::default())
+        );
+    }
+
+    #[test]
+    fn wsl_kernel_cpu_waits_for_authoritative_normalization() {
+        let mut options = config();
+        for changed in [false, true] {
+            let mut aggregate = Aggregate::new(&options);
+            let provisional = aggregate.host_cpu_count;
+            let mut primary = Normalized::new(provisional, Ok(vec![]));
+            primary.system_cpu = Some(85.0);
+            aggregate.apply(Event::Linux(primary));
+            assert!(aggregate.snapshot(&options).environment_summary.0[1].is_none());
+            let authoritative = if changed {
+                provisional + 1
+            } else {
+                provisional
+            };
+            aggregate.apply(Event::HostCpuCount(authoritative));
+            let usage = aggregate.snapshot(&options).environment_summary.0[1];
+            assert_eq!(
+                usage.and_then(|usage| usage.cpu_percent),
+                (!changed).then_some(85.0)
+            );
+            let mut fresh = Normalized::new(authoritative, Ok(vec![]));
+            fresh.system_cpu = Some(70.0);
+            aggregate.apply(Event::Linux(fresh));
+            assert_eq!(
+                aggregate.snapshot(&options).environment_summary.0[1]
+                    .unwrap()
+                    .cpu_percent,
+                Some(70.0)
+            );
+        }
+        options.wsl_only = true;
+        let mut aggregate = Aggregate::new(&options);
+        let mut primary = Normalized::new(aggregate.host_cpu_count, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        assert_eq!(
+            aggregate.snapshot(&options).environment_summary.0[1]
+                .unwrap()
+                .cpu_percent,
+            Some(85.0)
+        );
+    }
+
+    #[test]
+    fn wsl_cpu_and_memory_recover_independently() {
+        let options = config();
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostCpuCount(16));
+        let mut primary = Normalized::new(16, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        aggregate.apply(Event::ExtraWsl(Normalized::new(16, Err("offline".into()))));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, Some(85.0));
+        assert_eq!(usage.memory_bytes, None);
+
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Ok(ExtraWslUpdate::default()),
+        )));
+        let process = row(EnvironmentKind::Wsl, ResourceKind::Process, "compiler");
+        aggregate.apply(Event::Linux(Normalized::new(16, Ok(vec![process.clone()]))));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, None);
+        assert_eq!(usage.memory_bytes, Some(process.memory_bytes));
+
+        let mut recovered = Normalized::new(16, Ok(vec![process.clone()]));
+        recovered.system_cpu = Some(0.0);
+        aggregate.apply(Event::Linux(recovered));
+        let usage = aggregate.snapshot(&options).environment_summary.0[1].unwrap();
+        assert_eq!(usage.cpu_percent, Some(0.0));
+        assert_eq!(usage.memory_bytes, Some(process.memory_bytes));
+    }
+
+    #[test]
+    fn additional_distros_do_not_add_kernel_cpu_and_old_normalization_is_rejected() {
+        let options = config();
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostCpuCount(16));
+        let mut primary = Normalized::new(16, Ok(vec![]));
+        primary.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(primary));
+        let mut other = row(EnvironmentKind::Wsl, ResourceKind::Process, "compiler");
+        other.source = Some("other".into());
+        other.cpu_percent = 60.0;
+        let mut extra = Normalized::new(
+            16,
+            Ok(ExtraWslUpdate {
+                rows: vec![other.clone()],
+                running_sources: ["other".into()].into(),
+                successful_sources: ["other".into()].into(),
+                failures: BTreeMap::new(),
+            }),
+        );
+        extra.system_cpu = Some(85.0); // Even a second kernel sample must not be added.
+        aggregate.apply(Event::ExtraWsl(extra));
+        let summary = aggregate.snapshot(&options).environment_summary;
+        assert_eq!(summary.0[1].unwrap().cpu_percent, Some(85.0));
+        assert_eq!(summary.0[1].unwrap().memory_bytes, Some(other.memory_bytes));
+        assert_eq!(aggregate.extra_wsl["other"][0].cpu_percent, 60.0);
+        aggregate.apply(Event::HostCpuCount(32));
+        let mut stale = Normalized::new(16, Ok(vec![]));
+        stale.system_cpu = Some(85.0);
+        aggregate.apply(Event::Linux(stale));
+        assert!(aggregate.wsl_cpu_percent.is_none());
+        assert!(aggregate.snapshot(&options).environment_summary.0[1].is_none());
+    }
+
+    #[test]
     fn windows_applications_are_ranked_once_while_pid_rows_remain_for_json() {
         let mut options = config();
         options.limit = 1;
@@ -1114,7 +1652,10 @@ mod tests {
         second.pid = Some(11);
         second.name = "chrome".into();
         second.cpu_percent = 2.0;
-        aggregate.apply(Event::Windows(Ok((vec![first, second], 16))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![first, second], 16, None, None)),
+        ));
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::new())));
 
         let snapshot = aggregate.snapshot(&options);
@@ -1137,7 +1678,10 @@ mod tests {
         let mut process = row(EnvironmentKind::Windows, ResourceKind::Process, "10");
         process.pid = Some(10);
         process.name = "chrome".into();
-        aggregate.apply(Event::Windows(Ok((vec![process], 16))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![process], 16, None, None)),
+        ));
 
         let snapshot = aggregate.snapshot(&options);
         assert_eq!(snapshot.resources.len(), 1);
@@ -1156,7 +1700,10 @@ mod tests {
         webview.pid = Some(11);
         webview.start_id = Some(11);
         webview.name = "msedgewebview2".into();
-        aggregate.apply(Event::Windows(Ok((vec![teams, webview], 16))));
+        aggregate.apply(Event::Windows(
+            std::time::Instant::now(),
+            Ok((vec![teams, webview], 16, None, None)),
+        ));
         aggregate.apply(Event::WindowsMetadata(Ok(WindowsMetadata::from([
             (
                 10,
@@ -1212,6 +1759,7 @@ mod tests {
         let cached_wslc = Normalized::new(
             8,
             WslcUsage {
+                cpu_probes: Vec::new(),
                 resources: vec![container.clone()],
                 process_resources: vec![ContainerProcessUsage {
                     resource: container.clone(),
@@ -1232,6 +1780,7 @@ mod tests {
         let cached_docker = Normalized::new(
             8,
             DockerUsage {
+                cpu_probes: Vec::new(),
                 resources: vec![ContainerProcessUsage {
                     resource: docker_container.clone(),
                     processes: vec![process],
@@ -1241,6 +1790,7 @@ mod tests {
             },
         );
         let mut fresh_docker = DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: docker_container,
                 processes: Vec::new(),
@@ -1261,6 +1811,7 @@ mod tests {
             "container",
         );
         let usage = || DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: Vec::new(),
@@ -1297,6 +1848,7 @@ mod tests {
         );
         let process = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: Vec::new(),
@@ -1305,6 +1857,7 @@ mod tests {
             warnings: Vec::new(),
         }))));
         aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
                 processes: vec![process],
@@ -1313,6 +1866,7 @@ mod tests {
             warnings: Vec::new(),
         })));
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container,
                 processes: Vec::new(),
@@ -1333,6 +1887,7 @@ mod tests {
         );
         current.cpu_percent = 9.0;
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: current,
                 processes: Vec::new(),
@@ -1351,6 +1906,7 @@ mod tests {
         );
         let detail = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
         aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
+            cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: stale,
                 processes: vec![detail],
@@ -1377,6 +1933,7 @@ mod tests {
         );
         current.cpu_percent = 9.0;
         aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
+            cpu_probes: Vec::new(),
             resources: vec![current],
             process_resources: Vec::new(),
             warnings: Vec::new(),
@@ -1393,6 +1950,7 @@ mod tests {
             "process",
         );
         aggregate.apply(Event::WslcDetails(normalized(WslcUsage {
+            cpu_probes: Vec::new(),
             resources: vec![stale.clone()],
             process_resources: vec![ContainerProcessUsage {
                 resource: stale,
@@ -1413,6 +1971,7 @@ mod tests {
         );
         newer.cpu_percent = 12.0;
         aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
+            cpu_probes: Vec::new(),
             resources: vec![newer],
             process_resources: Vec::new(),
             warnings: Vec::new(),

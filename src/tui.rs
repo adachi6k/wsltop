@@ -1,5 +1,7 @@
+use crate::header::{self, separator_style, ColorMode, HeaderMode};
+use crate::model::ResourceUsage;
 use crate::monitor::{MonitorConfig, MonitorSnapshot};
-use crate::query::{ResourceQuery, SortKey};
+use crate::query::{ResourceQuery, SortKey, SortOrder};
 use crate::render;
 use crate::render::CpuScale;
 use crate::stream;
@@ -9,9 +11,9 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Terminal;
 use std::error::Error;
 use std::io::{self, stdout};
@@ -25,53 +27,28 @@ pub fn run(
     distro: Option<String>,
     initial_tree: bool,
     cpu_scale: CpuScale,
+    header_mode: HeaderMode,
+    color_mode: ColorMode,
 ) -> Result<(), Box<dyn Error>> {
     let interval = config.interval;
+    let colors = color_mode.enabled();
+    // Crossterm also caches NO_COLOR; keep its global switch consistent with our
+    // explicit --color policy, including --color always overriding NO_COLOR.
+    crossterm::style::force_color_output(colors);
     let mut terminal = TerminalGuard::new()?;
     let mut state = State::from_config(&config, initial_tree, cpu_scale);
+    state.colors = colors;
+    let wsl_only = config.wsl_only;
     let worker = SamplingWorker::start(config, distro, initial_tree);
 
     loop {
+        state.poll_action();
         for result in worker.receiver.try_iter() {
             state.apply_sample(result);
         }
-        terminal.terminal.draw(|frame| {
-            let [header, body, footer] = Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Min(1),
-                Constraint::Length(1),
-            ])
-            .areas(frame.area());
-            frame.render_widget(
-                Paragraph::new(format!(
-                    " {} | CPU {} | sort {} {} | interval {}ms",
-                    if state.tree { "tree" } else { "flat" },
-                    state.cpu_scale.label(),
-                    state.query.sort.key.label(),
-                    state.query.sort.order.label(),
-                    interval.as_millis()
-                )),
-                header,
-            );
-            let height = body.height.saturating_sub(2) as usize;
-            state.clamp_scroll(height);
-            let visible = state.lines.iter().skip(state.scroll).take(height).cloned();
-            frame.render_widget(
-                Paragraph::new(visible.collect::<Vec<_>>())
-                    .block(Block::default().borders(Borders::ALL).title("Resources")),
-                body,
-            );
-            frame.render_widget(
-                Paragraph::new(format!(
-                    " q/Esc quit  ↑↓/Pg scroll  t tree  i infra:{}  h hosts:{}  0 zero:{}  {}",
-                    on_off(!state.hide_infra),
-                    on_off(state.show_hosts),
-                    on_off(!state.hide_zero),
-                    state.status
-                )),
-                footer,
-            );
-        })?;
+        terminal
+            .terminal
+            .draw(|frame| draw_ui(frame, &mut state, header_mode, wsl_only, interval))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Some(code) = actionable_key(event::read()?) {
@@ -80,7 +57,7 @@ pub fn run(
                 }
                 if matches!(
                     code,
-                    KeyCode::Char('t' | 'i' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
+                    KeyCode::Char('t' | 's' | 'i' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
                 ) {
                     state.rebuild_lines();
                     worker.set_details(state.tree);
@@ -91,6 +68,161 @@ pub fn run(
     Ok(())
 }
 
+fn layout_areas(area: Rect, mode: HeaderMode) -> [Rect; 4] {
+    let summary_height = if mode == HeaderMode::Compact && area.height >= 4 {
+        2
+    } else {
+        1
+    };
+    Layout::vertical([
+        Constraint::Length(summary_height),
+        Constraint::Length(u16::from(area.height >= summary_height + 3)),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(area)
+}
+
+fn draw_ui(
+    frame: &mut ratatui::Frame<'_>,
+    state: &mut State,
+    mode: HeaderMode,
+    wsl_only: bool,
+    interval: Duration,
+) {
+    let [summary, separator, table, footer] = layout_areas(frame.area(), mode);
+    let summary_lines = if mode == HeaderMode::Classic {
+        vec![Line::raw(state.classic_header(summary.width, interval))]
+    } else {
+        header::compact(
+            state.snapshot.as_ref(),
+            summary.width,
+            summary.height,
+            state.colors,
+            wsl_only,
+            interval,
+            std::time::Instant::now(),
+        )
+    };
+    let structural_lines = if state.tree {
+        &[][..]
+    } else {
+        &state.lines[..]
+    };
+    let separator_width =
+        summary_separator_width(separator.width, &summary_lines, structural_lines);
+    frame.render_widget(Paragraph::new(summary_lines), summary);
+    let ascii = std::env::var_os("TERM").is_some_and(|term| term == "dumb");
+    frame.render_widget(
+        Paragraph::new(summary_separator(separator_width, state.colors, ascii)),
+        separator,
+    );
+    if let Some(request) = &state.confirmation {
+        let text = format!(
+            "Send SIGTERM?\n\nWSL: {}\nPID: {}\nProcess: {}\n\nRequests normal termination; the process may ignore it.\ny confirm | n / Esc cancel",
+            request.scope.distro.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>(),
+            request.key.pid, request.name,
+        );
+        let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+        state.confirmation_visible = paragraph.line_count(table.width) <= usize::from(table.height);
+        if state.confirmation_visible {
+            frame.render_widget(paragraph, table);
+        } else {
+            frame.render_widget(
+                Paragraph::new("Resize to show the full target before confirming. Esc cancels.")
+                    .wrap(Wrap { trim: false }),
+                table,
+            );
+        }
+    } else if state.help {
+        let paragraph = Paragraph::new(state.help_text(interval)).wrap(Wrap { trim: false });
+        let help_lines = paragraph.line_count(table.width);
+        state.help_scroll = state.help_scroll.min(
+            help_lines
+                .saturating_sub(usize::from(table.height))
+                .min(usize::from(u16::MAX)) as u16,
+        );
+        frame.render_widget(paragraph.scroll((state.help_scroll, 0)), table);
+    } else {
+        let height = usize::from(table.height);
+        if let Some(index) = state.selected_line() {
+            if index < state.scroll {
+                state.scroll = index;
+            } else if index >= state.scroll + height {
+                state.scroll = index.saturating_sub(height.saturating_sub(1));
+            }
+        }
+        state.clamp_scroll(height);
+        frame.render_widget(
+            Paragraph::new(
+                state
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .skip(state.scroll)
+                    .take(height)
+                    .map(|(index, line)| {
+                        let mut line = line.clone();
+                        if state.selected_line() == Some(index) {
+                            line = line.style(
+                                ratatui::style::Style::default()
+                                    .add_modifier(ratatui::style::Modifier::REVERSED),
+                            );
+                        }
+                        line
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            table,
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(state.footer(footer.width, interval)).style(separator_style(
+            state.colors && (state.action_status.is_empty() || state.help),
+        )),
+        footer,
+    );
+}
+
+fn summary_separator_width(available: u16, summary: &[Line<'_>], table: &[Line<'_>]) -> u16 {
+    // Match the summary or table headings/rule, whichever is wider. Long command
+    // rows and scrolling must not stretch this structural separator.
+    summary
+        .iter()
+        .chain(table.iter().take(2))
+        .map(Line::width)
+        .max()
+        .unwrap_or(0)
+        .min(usize::from(available)) as u16
+}
+
+fn summary_separator(width: u16, colors: bool, ascii: bool) -> Line<'static> {
+    Line::styled(
+        if ascii { "-" } else { "─" }.repeat(usize::from(width)),
+        separator_style(colors),
+    )
+}
+
+fn fit_text(text: &str, width: usize) -> String {
+    if Line::raw(text).width() <= width {
+        return text.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    for ch in text.chars() {
+        let mut candidate = result.clone();
+        candidate.push(ch);
+        if Line::raw(candidate.as_str()).width() + 1 > width {
+            break;
+        }
+        result.push(ch);
+    }
+    result.push('…');
+    result
+}
+
 fn actionable_key(event: Event) -> Option<KeyCode> {
     match event {
         Event::Key(key) if key.kind != KeyEventKind::Release => Some(key.code),
@@ -98,8 +230,17 @@ fn actionable_key(event: Event) -> Option<KeyCode> {
     }
 }
 
+fn host_cpu_label(snapshot: Option<&MonitorSnapshot>) -> String {
+    snapshot
+        .and_then(|snapshot| snapshot.host_cpu_percent)
+        .map_or_else(|| "N/A".to_string(), |cpu| format!("{cpu:.1}%"))
+}
+
 #[derive(Default)]
 struct State {
+    colors: bool,
+    help: bool,
+    help_scroll: u16,
     query: ResourceQuery,
     lines: Vec<Line<'static>>,
     scroll: usize,
@@ -110,9 +251,232 @@ struct State {
     hide_zero: bool,
     snapshot: Option<MonitorSnapshot>,
     cpu_scale: CpuScale,
+    selecting: bool,
+    selected: Option<ResourceUsage>,
+    selectable_rows: Vec<(usize, ResourceUsage)>,
+    confirmation: Option<crate::action::Request>,
+    confirmation_visible: bool,
+    action_receiver: Option<mpsc::Receiver<String>>,
+    action_status: String,
+}
+
+fn same_row(a: &ResourceUsage, b: &ResourceUsage) -> bool {
+    a.environment == b.environment
+        && a.kind == b.kind
+        && a.source == b.source
+        && a.id == b.id
+        && a.pid == b.pid
+        && a.start_id == b.start_id
 }
 
 impl State {
+    fn poll_action(&mut self) {
+        if let Some(receiver) = &self.action_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.action_status = result;
+                    self.action_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.action_status =
+                        "Action worker stopped; outcome unknown. Check the target before retrying."
+                            .into();
+                    self.action_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    }
+
+    fn begin_confirmation(&mut self) {
+        if self.action_receiver.is_some() {
+            self.action_status = "A termination request is already in progress.".into();
+            return;
+        }
+        if !cfg!(any(windows, test)) {
+            self.action_status =
+                "Termination is currently supported only by the Windows-native TUI.".into();
+            return;
+        }
+        let Some(row) = self.selected.as_ref() else {
+            self.action_status =
+                "Use s and the arrows to select a process in flat view first.".into();
+            return;
+        };
+        let scope = self.snapshot.as_ref().and_then(|s| s.action_scope.as_ref());
+        match crate::action::Request::new(scope, row) {
+            Ok(request) => {
+                self.confirmation = Some(request);
+                self.confirmation_visible = false;
+            }
+            Err(reason) => self.action_status = reason.into(),
+        }
+    }
+
+    fn confirmation_is_current(&self) -> bool {
+        let Some(request) = &self.confirmation else {
+            return false;
+        };
+        let Some(snapshot) = &self.snapshot else {
+            return false;
+        };
+        self.selected
+            .as_ref()
+            .and_then(|row| crate::action::Request::new(snapshot.action_scope.as_ref(), row).ok())
+            .as_ref()
+            == Some(request)
+    }
+
+    fn selected_line(&self) -> Option<usize> {
+        let selected = self.selected.as_ref()?;
+        self.selectable_rows
+            .iter()
+            .find_map(|(line, row)| same_row(selected, row).then_some(*line))
+    }
+
+    fn move_selection(&mut self, forward: bool, distance: usize) {
+        if self.selectable_rows.is_empty() {
+            self.selected = None;
+            return;
+        }
+        let current = self.selected.as_ref().and_then(|selected| {
+            self.selectable_rows
+                .iter()
+                .position(|(_, row)| same_row(selected, row))
+        });
+        let last = self.selectable_rows.len() - 1;
+        let index = match current {
+            Some(index) if forward => index.saturating_add(distance).min(last),
+            Some(index) => index.saturating_sub(distance),
+            None if forward => 0,
+            None => last,
+        };
+        self.selected = Some(self.selectable_rows[index].1.clone());
+    }
+
+    fn classic_header(&self, width: u16, interval: Duration) -> String {
+        fit_text(
+            &format!(
+                " {} | Host CPU {} | CPU {} | sort {} {} | interval {}ms",
+                if self.tree { "tree" } else { "flat" },
+                host_cpu_label(self.snapshot.as_ref()),
+                self.cpu_scale.label(),
+                self.query.sort.key.label(),
+                self.query.sort.order.label(),
+                interval.as_millis()
+            ),
+            usize::from(width),
+        )
+    }
+
+    fn footer(&self, width: u16, interval: Duration) -> String {
+        if !self.action_status.is_empty() && !self.help {
+            return fit_text(
+                &format!("{} | ? details", self.action_status),
+                usize::from(width),
+            );
+        }
+        let width = usize::from(width);
+        let view = if self.tree { "tree" } else { "flat" };
+        let key = match self.query.sort.key {
+            SortKey::Memory => "mem",
+            key => key.label(),
+        };
+        let arrow = if self.query.sort.order == SortOrder::Desc {
+            '↓'
+        } else {
+            '↑'
+        };
+        let scale = if self.cpu_scale == CpuScale::Core {
+            "core"
+        } else {
+            "host"
+        };
+        // Keep scale ahead of interval and optional hints when space is limited.
+        let mut text = [
+            format!(
+                "[{view} {key}{arrow} {scale} {:.1}s]  q quit",
+                interval.as_secs_f64()
+            ),
+            format!("[{view} {key}{arrow} {scale}]  q quit"),
+            format!("[{view} {key}{arrow}]  q quit"),
+        ]
+        .into_iter()
+        .find(|text| Line::raw(text.as_str()).width() <= width)
+        .unwrap_or_else(|| format!("{view} {key}{arrow} q quit"));
+        if Line::raw(text.as_str()).width() > width {
+            text = format!("{view} {key}{arrow} q quit");
+            if Line::raw(text.as_str()).width() <= width {
+                return text;
+            }
+            if width <= 6 {
+                return fit_text("q quit", width);
+            }
+            return format!(
+                "{} q quit",
+                fit_text(&format!("{view} {key}{arrow}"), width - 7)
+            );
+        }
+        let status = self
+            .status
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect::<String>();
+        let separator = if width >= 120 { "  " } else { " " };
+        let mut items = Vec::new();
+        if !status.is_empty() {
+            items.push("!".to_owned());
+        }
+        items.push(if self.help { "? close" } else { "? help" }.to_owned());
+        if self.selecting {
+            items.push("k terminate".to_owned());
+            items.push("s scroll".to_owned());
+        }
+        if width >= 80 {
+            items.extend([
+                "t tree".to_owned(),
+                format!("i infra:{}", on_off(!self.hide_infra)),
+                format!("h hosts:{}", on_off(self.show_hosts)),
+                format!("0 zero:{}", on_off(!self.hide_zero)),
+            ]);
+        }
+        for item in items {
+            let candidate = format!("{text}{separator}{item}");
+            if Line::raw(candidate.as_str()).width() <= width {
+                text = candidate;
+            } else {
+                break;
+            }
+        }
+        if width >= 120 && !status.is_empty() {
+            let available = width.saturating_sub(Line::raw(text.as_str()).width() + 3);
+            if available >= 5 {
+                text.push_str(" | ");
+                text.push_str(&fit_text(&status, available));
+            }
+        }
+        text
+    }
+
+    fn help_text(&self, interval: Duration) -> String {
+        let mut text = format!(
+            "Help (? / Esc close, arrows / Pg scroll)\nRefresh: {:.1}s | Row CPU scale: {}\nSort: {} {}\n",
+            interval.as_secs_f64(),
+            self.cpu_scale.label(),
+            self.query.sort.key.label(),
+            self.query.sort.order.label()
+        );
+        if !self.status.is_empty() {
+            text.push_str(&format!("Status: {}\n", self.status));
+        }
+        if !self.action_status.is_empty() {
+            text.push_str(&format!("Action: {}\n", self.action_status));
+        }
+        text.push('\n');
+        text.push_str(header::HELP);
+        text
+    }
+
     fn from_config(config: &MonitorConfig, tree: bool, cpu_scale: CpuScale) -> Self {
         Self {
             query: config.query(),
@@ -126,8 +490,73 @@ impl State {
     }
 
     fn key(&mut self, code: KeyCode) -> bool {
+        if self.confirmation.is_some() {
+            match code {
+                KeyCode::Char('y')
+                    if self.confirmation_visible && self.confirmation_is_current() =>
+                {
+                    let request = self.confirmation.take().unwrap();
+                    self.action_status = format!(
+                        "Sending SIGTERM to {} PID {}...",
+                        request.scope.distro, request.key.pid
+                    );
+                    let (sender, receiver) = mpsc::channel();
+                    self.action_receiver = Some(receiver);
+                    thread::spawn(move || {
+                        let _ = sender.send(crate::action::terminate(request));
+                    });
+                }
+                KeyCode::Esc | KeyCode::Char('n') => {
+                    self.confirmation = None;
+                    self.action_status = "Termination cancelled; no signal sent.".into();
+                }
+                KeyCode::Char('q') => {
+                    self.confirmation = None;
+                    return true;
+                }
+                _ => {}
+            }
+            return false;
+        }
+        if code == KeyCode::Char('?') {
+            self.help = !self.help;
+            self.help_scroll = 0;
+            return false;
+        }
+        if self.help {
+            match code {
+                KeyCode::Esc => self.help = false,
+                KeyCode::Char('q') => return true,
+                KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
+                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(10),
+                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                _ => {}
+            }
+            return false;
+        }
         match code {
+            KeyCode::Char('k') => self.begin_confirmation(),
             KeyCode::Char('q') | KeyCode::Esc => return true,
+            KeyCode::Char('s') => {
+                self.action_status.clear();
+                self.selecting = !self.selecting;
+                self.selected = None;
+                if self.selecting {
+                    self.tree = false;
+                    self.scroll = 0;
+                }
+            }
+            KeyCode::Down | KeyCode::Up | KeyCode::PageDown | KeyCode::PageUp if self.selecting => {
+                self.move_selection(
+                    matches!(code, KeyCode::Down | KeyCode::PageDown),
+                    if matches!(code, KeyCode::PageDown | KeyCode::PageUp) {
+                        10
+                    } else {
+                        1
+                    },
+                );
+            }
             KeyCode::Down => self.scroll = self.scroll.saturating_add(1),
             KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_add(10),
@@ -135,6 +564,8 @@ impl State {
             KeyCode::Char('t') => {
                 self.tree = !self.tree;
                 self.scroll = 0;
+                self.selecting = false;
+                self.selected = None;
             }
             KeyCode::Char('i') => self.hide_infra = !self.hide_infra,
             KeyCode::Char('h') => self.show_hosts = !self.show_hosts,
@@ -163,15 +594,40 @@ impl State {
     fn apply_sample(&mut self, result: Result<MonitorSnapshot, String>) {
         match result {
             Ok(snapshot) => {
+                if self.snapshot.as_ref().and_then(|s| s.action_scope.as_ref())
+                    != snapshot.action_scope.as_ref()
+                {
+                    self.selected = None;
+                }
                 self.status = if snapshot.warnings.is_empty() {
-                    "updated".to_string()
+                    String::new()
                 } else {
                     snapshot.warnings.join("; ")
                 };
                 self.snapshot = Some(snapshot);
                 self.rebuild_lines();
+                if self.confirmation.is_some() && !self.confirmation_is_current() {
+                    self.confirmation = None;
+                    self.action_status =
+                        "Confirmation cancelled: target changed or disappeared; no signal sent."
+                            .into();
+                }
             }
-            Err(error) => self.status = error,
+            Err(error) => {
+                self.status = error;
+                self.selected = None;
+                self.confirmation = None;
+                if let Some(snapshot) = &mut self.snapshot {
+                    snapshot.action_scope = None;
+                    snapshot.host_cpu_percent = None;
+                    snapshot.cpu_breakdown = None;
+                    snapshot.host_memory = None;
+                    let now = std::time::Instant::now();
+                    snapshot.host_history.cpu.record(now, None);
+                    snapshot.host_history.memory.record(now, None);
+                    snapshot.environment_summary = Default::default();
+                }
+            }
         }
     }
 
@@ -182,15 +638,44 @@ impl State {
         self.query.hide_infra = self.hide_infra;
         self.query.show_wsl_host = self.show_hosts;
         snapshot.requery(&self.query);
-        let output = if self.tree {
-            render::tree(snapshot, self.cpu_scale)
+        let (output, rows) = if self.tree {
+            (render::tree(snapshot, self.cpu_scale), Vec::new())
         } else {
-            render::flat(snapshot, self.cpu_scale)
+            render::flat_with_rows(snapshot, self.cpu_scale)
         };
+        self.selectable_rows.clear();
+        let mut byte_offset = 0;
+        let mut line_index = 0;
+        let skip = if self.tree { 2 } else { 1 };
+        for (index, line) in output.split_inclusive('\n').enumerate() {
+            if index >= skip && (!self.hide_zero || !line.contains(" 0.00%")) {
+                if let Some((_, row)) = rows.iter().find(|(offset, _)| *offset == byte_offset) {
+                    self.selectable_rows.push((line_index, row.clone()));
+                }
+                line_index += 1;
+            }
+            byte_offset += line.len();
+        }
+        if let Some(selected) = self.selected.take() {
+            self.selected = self
+                .selectable_rows
+                .iter()
+                .find(|(_, row)| same_row(&selected, row))
+                .map(|(_, row)| row.clone());
+        }
         self.lines = output
             .lines()
-            .filter(|line| !self.hide_zero || !line.contains(" 0.00%"))
-            .map(|line| Line::raw(line.to_string()))
+            .skip(if self.tree { 2 } else { 1 })
+            .enumerate()
+            .filter(|(_, line)| !self.hide_zero || !line.contains(" 0.00%"))
+            .map(|(index, line)| {
+                if !self.tree && index == 1 && !line.is_empty() && line.bytes().all(|ch| ch == b'-')
+                {
+                    Line::styled(line.to_owned(), separator_style(self.colors))
+                } else {
+                    header::resource_line(line, self.colors)
+                }
+            })
             .collect();
     }
 }
@@ -249,14 +734,62 @@ fn on_off(value: bool) -> &'static str {
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    #[cfg(windows)]
+    _console_modes: console_modes::Saved,
 }
 impl TerminalGuard {
     fn new() -> Result<Self, Box<dyn Error>> {
+        // Crossterm disables raw mode by setting default bits; its event reader
+        // also changes console input flags. Preserve the caller's exact modes.
+        #[cfg(windows)]
+        let console_modes = console_modes::Saved::capture()?;
         enable_raw_mode()?;
         execute!(stdout(), EnterAlternateScreen)?;
         Ok(Self {
             terminal: Terminal::new(CrosstermBackend::new(stdout()))?,
+            #[cfg(windows)]
+            _console_modes: console_modes,
         })
+    }
+}
+
+#[cfg(windows)]
+mod console_modes {
+    use std::{ffi::c_void, io};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(kind: u32) -> *mut c_void;
+        fn GetConsoleMode(handle: *mut c_void, mode: *mut u32) -> i32;
+        fn SetConsoleMode(handle: *mut c_void, mode: u32) -> i32;
+    }
+
+    pub(super) struct Saved([(*mut c_void, u32); 2]);
+
+    impl Saved {
+        pub(super) fn capture() -> io::Result<Self> {
+            let mut modes = [(std::ptr::null_mut(), 0); 2];
+            for (entry, kind) in modes.iter_mut().zip([-10_i32, -11_i32]) {
+                // Standard handles are borrowed and remain owned by the process.
+                let handle = unsafe { GetStdHandle(kind as u32) };
+                let mut mode = 0;
+                if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                *entry = (handle, mode);
+            }
+            Ok(Self(modes))
+        }
+    }
+
+    impl Drop for Saved {
+        fn drop(&mut self) {
+            // Dropped after TerminalGuard's screen/cursor cleanup, or if startup
+            // fails. No console handle is closed here.
+            for &(handle, mode) in &self.0 {
+                let _ = unsafe { SetConsoleMode(handle, mode) };
+            }
+        }
     }
 }
 impl Drop for TerminalGuard {
@@ -270,10 +803,422 @@ impl Drop for TerminalGuard {
 #[cfg(test)]
 mod tests {
     use super::State;
+    use super::{draw_ui, layout_areas, HeaderMode, Line, Rect};
     use crate::monitor::MonitorConfig;
     use crate::render::CpuScale;
     use crossterm::event::KeyCode;
     use std::time::Duration;
+
+    fn layout_state() -> State {
+        use crate::model::{ContainerProcessUsage, EnvironmentKind, HostMemory, ResourceKind};
+        let config = MonitorConfig {
+            sort: Default::default(),
+            interval: Duration::from_secs(3),
+            limit: 20,
+            show_wsl_host: false,
+            wsl_only: false,
+            no_wslc: false,
+            no_docker: false,
+            hide_infra: false,
+            show_container_processes: true,
+            container_process_limit: 5,
+            collect_windows_applications: false,
+        };
+        let mut container = crate::query::tests::row("container", 5.0, 1024);
+        container.environment = EnvironmentKind::Docker;
+        container.kind = ResourceKind::Container;
+        let mut child = crate::query::tests::row("child-process", 2.0, 512);
+        child.environment = EnvironmentKind::Docker;
+        child.source = Some(container.id.clone());
+        let tree = crate::attribution::build_tree_with_docker(
+            16,
+            &[],
+            &[],
+            &[],
+            &[ContainerProcessUsage {
+                resource: container.clone(),
+                processes: vec![child.clone()],
+                host_pids: vec![],
+            }],
+        );
+        let mut snapshot = crate::monitor::MonitorSnapshot::from_collected(
+            vec![container, child],
+            tree,
+            vec![],
+            &config,
+        );
+        snapshot.host_cpu_percent = Some(25.0);
+        snapshot.host_memory = Some(HostMemory {
+            total_bytes: 32 * 1073741824,
+            available_bytes: 16 * 1073741824,
+        });
+        let mut state = State::from_config(&config, false, CpuScale::Core);
+        state.colors = true;
+        state.apply_sample(Ok(snapshot));
+        state
+    }
+
+    #[test]
+    fn three_layers_have_no_extra_title_and_keep_table_columns_and_grouping() {
+        use ratatui::{backend::TestBackend, Terminal};
+        for width in [40, 79, 80, 119, 120, 160] {
+            let mut state = layout_state();
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw_ui(
+                        frame,
+                        &mut state,
+                        HeaderMode::Compact,
+                        false,
+                        Duration::from_secs(3),
+                    )
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..12)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            assert!(rows[0].starts_with("CPU "));
+            assert!(rows[1].starts_with("RAM "));
+            assert!(rows[2].trim_end().chars().all(|ch| ch == '─' || ch == '-'));
+            assert!(rows[2].trim_end().chars().count() >= usize::from(width.min(97)));
+            assert!(rows[3].starts_with("ENV "));
+            assert!(rows[4].starts_with("---"));
+            assert_eq!(buffer[(0, 2)].modifier, buffer[(0, 4)].modifier);
+            assert!(buffer[(0, 4)]
+                .modifier
+                .contains(ratatui::style::Modifier::DIM));
+            for y in [3, 5] {
+                assert!(!buffer[(0, y)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::DIM));
+            }
+            assert!(rows[11].contains("flat cpu↓"));
+            assert!(rows[11].contains("q quit"));
+            assert!(!rows.iter().any(|row| row.contains("Resources")
+                || row.contains("Host logical CPUs")
+                || row.contains("updated")));
+            assert_eq!(buffer[(0, 5)].fg, ratatui::style::Color::Cyan);
+            let expected: Vec<_> =
+                crate::render::flat(state.snapshot.as_ref().unwrap(), state.cpu_scale)
+                    .lines()
+                    .skip(1)
+                    .map(str::to_owned)
+                    .collect();
+            assert_eq!(
+                state
+                    .lines
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(expected.iter().any(|row| row.contains("child-process")));
+            state.key(KeyCode::Char('t'));
+            state.rebuild_lines();
+            let expected: Vec<_> =
+                crate::render::tree(state.snapshot.as_ref().unwrap(), state.cpu_scale)
+                    .lines()
+                    .skip(2)
+                    .map(str::to_owned)
+                    .collect();
+            assert_eq!(
+                state
+                    .lines
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn footer_preserves_view_sort_and_quit_across_widths_and_options() {
+        use crate::query::{SortKey, SortOrder};
+        let mut state = layout_state();
+        for (key, order, label) in [
+            (SortKey::Cpu, SortOrder::Desc, "cpu↓"),
+            (SortKey::Cpu, SortOrder::Asc, "cpu↑"),
+            (SortKey::Memory, SortOrder::Desc, "mem↓"),
+            (SortKey::Name, SortOrder::Asc, "name↑"),
+        ] {
+            state.query.sort.key = key;
+            state.query.sort.order = order;
+            for tree in [true, false] {
+                state.tree = tree;
+                for width in [20, 40, 79, 80, 119, 120] {
+                    let text = state.footer(width, Duration::from_secs(3));
+                    assert!(Line::raw(text.as_str()).width() <= usize::from(width));
+                    assert!(text.contains(if tree { "tree" } else { "flat" }));
+                    assert!(text.contains(label));
+                    assert!(text.contains("q quit"));
+                    assert!(!text.contains("updated"));
+                    if width >= 80 {
+                        assert!(text.contains("3.0s"));
+                        assert!(text.starts_with('['));
+                        assert!(text.contains("3.0s]  q quit"));
+                    }
+                    if width >= 120 {
+                        for hint in ["? help", "t tree", "i infra:on", "h hosts:off", "0 zero:on"] {
+                            assert!(text.contains(hint));
+                        }
+                    }
+                }
+            }
+        }
+        for key in ['i', 'h', '0'] {
+            state.key(KeyCode::Char(key));
+        }
+        let text = state.footer(120, Duration::from_secs(3));
+        for label in ["i infra:off", "h hosts:on", "0 zero:off"] {
+            assert!(text.contains(label));
+        }
+        state.status = "収集エラー: Windows unavailable\n詳細".repeat(10);
+        for width in [0, 6, 16, 20, 40, 80, 120] {
+            let text = state.footer(width, Duration::from_secs(3));
+            assert!(Line::raw(text.as_str()).width() <= usize::from(width));
+            assert!(!text.contains('\n'));
+            if width >= 6 {
+                assert!(text.contains("q quit"));
+            }
+        }
+        assert!(state
+            .help_text(Duration::from_secs(3))
+            .contains(&state.status));
+    }
+
+    #[test]
+    fn footer_keeps_scale_inside_status_and_drops_interval_before_scale() {
+        let mut state = layout_state();
+        for (scale, label) in [(CpuScale::Core, "core"), (CpuScale::Host, "host")] {
+            state.cpu_scale = scale;
+            for width in [40, 60, 79, 80, 119, 120, 160] {
+                let text = state.footer(width, Duration::from_secs(3));
+                assert!(text.starts_with(&format!("[flat cpu↓ {label} 3.0s]  q quit")));
+                assert!(!text.contains("cpu:"));
+                assert!(Line::raw(text).width() <= usize::from(width));
+            }
+            let text = state.footer(24, Duration::from_secs(3));
+            assert_eq!(text, format!("[flat cpu↓ {label}]  q quit"));
+        }
+    }
+
+    #[test]
+    fn layout_reserves_two_summary_rows_and_one_footer_without_a_table_border() {
+        for height in [4, 6, 12, 24] {
+            let [summary, separator, table, footer] =
+                layout_areas(Rect::new(0, 0, 80, height), HeaderMode::Compact);
+            assert_eq!(summary.height, 2);
+            assert_eq!(separator.height, u16::from(height >= 5));
+            assert_eq!(table.y, 2 + separator.height);
+            assert_eq!(table.height, height - 3 - separator.height);
+            assert_eq!(footer.y, height - 1);
+            assert_eq!(footer.height, 1);
+        }
+        let [summary, separator, table, footer] =
+            layout_areas(Rect::new(0, 0, 80, 12), HeaderMode::Classic);
+        assert_eq!(summary.height, 1);
+        assert_eq!(separator.height, 1);
+        assert_eq!(table.height, 9);
+        assert_eq!(footer.height, 1);
+    }
+    #[test]
+    fn summary_separator_is_neutral_and_supports_ascii_and_no_color() {
+        for width in [0, 1, 60, 80, 120] {
+            for ascii in [true, false] {
+                for colors in [true, false] {
+                    let line = super::summary_separator(width, colors, ascii);
+                    assert_eq!(line.width(), usize::from(width));
+                    assert_eq!(
+                        line.to_string(),
+                        if ascii { "-" } else { "─" }.repeat(usize::from(width))
+                    );
+                    assert_eq!(line.style.fg, None);
+                    assert_eq!(line.style.bg, None);
+                    assert_eq!(
+                        line.style
+                            .add_modifier
+                            .contains(ratatui::style::Modifier::DIM),
+                        colors
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn release_display_options_do_not_change_flat_or_tree_json() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = layout_state();
+        let json = |state: &State| {
+            let snapshot = state.snapshot.as_ref().unwrap();
+            (
+                serde_json::to_value(&snapshot.pid_resources).unwrap(),
+                serde_json::to_value(&snapshot.tree).unwrap(),
+            )
+        };
+        let expected = json(&state);
+        for mode in [HeaderMode::Classic, HeaderMode::Compact] {
+            for colors in [false, true] {
+                state.colors = colors;
+                for width in [75, 90, 120, 200] {
+                    let mut terminal = Terminal::new(TestBackend::new(width, 16)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            draw_ui(frame, &mut state, mode, false, Duration::from_secs(3))
+                        })
+                        .unwrap();
+                    assert_eq!(json(&state), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn help_scroll_reaches_last_wrapped_row_and_reclamps_after_resize() {
+        use ratatui::{
+            backend::TestBackend,
+            buffer::Buffer,
+            widgets::{Paragraph, Widget, Wrap},
+            Terminal,
+        };
+        let mut state = layout_state();
+        state.help = true;
+        state.status = "A long collector status with words that wrap at boundaries. 日本語の状態も表示します。".repeat(5);
+        let interval = Duration::from_secs(3);
+        for width in [19, 40, 80, 120, 19] {
+            // Independently render the complete help into a tall buffer and find
+            // its actual last occupied row, rather than duplicating the counter.
+            let text = state.help_text(interval);
+            let mut full = Buffer::empty(Rect::new(0, 0, width, 2000));
+            Paragraph::new(text.clone())
+                .wrap(Wrap { trim: false })
+                .render(full.area, &mut full);
+            let last = (0..2000)
+                .rev()
+                .find(|&y| (0..width).any(|x| full[(x, y)].symbol() != " "))
+                .unwrap();
+            let [_, _, table, _] = layout_areas(Rect::new(0, 0, width, 12), HeaderMode::Compact);
+            let expected_scroll = (last + 1).saturating_sub(table.height);
+            if width == 19 {
+                let old_count: usize = text
+                    .lines()
+                    .map(|line| Line::raw(line).width().div_ceil(usize::from(width)).max(1))
+                    .sum();
+                assert!(usize::from(last + 1) > old_count);
+            }
+            for _ in 0..200 {
+                state.key(KeyCode::PageDown);
+            }
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            terminal
+                .draw(|frame| draw_ui(frame, &mut state, HeaderMode::Compact, false, interval))
+                .unwrap();
+            assert_eq!(state.help_scroll, expected_scroll);
+            let buffer = terminal.backend().buffer();
+            for x in 0..width {
+                assert_eq!(
+                    buffer[(x, table.y + table.height - 1)].symbol(),
+                    full[(x, last)].symbol()
+                );
+            }
+            state.key(KeyCode::PageUp);
+            assert_eq!(state.help_scroll, expected_scroll.saturating_sub(10));
+        }
+    }
+
+    #[test]
+    fn classic_header_restores_view_cpu_scale_sort_and_interval() {
+        let mut state = layout_state();
+        state.snapshot.as_mut().unwrap().host_cpu_percent = Some(42.5);
+        for tree in [false, true] {
+            state.tree = tree;
+            let view = if tree { "tree" } else { "flat" };
+            assert_eq!(state.classic_header(160, Duration::from_secs(3)),
+                format!(" {view} | Host CPU 42.5% | CPU 1 core = 100% | sort cpu desc | interval 3000ms"));
+            for width in [0, 40, 80, 160] {
+                use ratatui::{backend::TestBackend, Terminal};
+                let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        draw_ui(
+                            frame,
+                            &mut state,
+                            HeaderMode::Classic,
+                            false,
+                            Duration::from_secs(3),
+                        )
+                    })
+                    .unwrap();
+                let row: String = (0..width)
+                    .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+                    .collect();
+                assert_eq!(
+                    row.trim_end(),
+                    state
+                        .classic_header(width, Duration::from_secs(3))
+                        .trim_end()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tree_commands_do_not_stretch_summary_separator() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = layout_state();
+        state.tree = true;
+        state.rebuild_lines();
+        for width in [80, 160, 240] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+            let mut lengths = Vec::new();
+            for name in ["short".to_owned(), "command".repeat(100)] {
+                state.lines = vec![Line::raw("Windows applications"), Line::raw(name)];
+                terminal
+                    .draw(|frame| {
+                        draw_ui(
+                            frame,
+                            &mut state,
+                            HeaderMode::Compact,
+                            false,
+                            Duration::from_secs(3),
+                        )
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                lengths.push(
+                    (0..width)
+                        .filter(|&x| matches!(buffer[(x, 2)].symbol(), "─" | "-"))
+                        .count(),
+                );
+            }
+            assert_eq!(lengths[0], lengths[1]);
+            assert!(lengths[0] < 140);
+        }
+    }
+
+    #[test]
+    fn summary_separator_tracks_content_instead_of_terminal_or_commands() {
+        let summary = [Line::raw("s".repeat(94))];
+        let table = [
+            Line::raw("ENV"),
+            Line::raw("-".repeat(97)),
+            Line::raw("x".repeat(300)),
+        ];
+        for width in [0, 60, 80, 120, 240] {
+            assert_eq!(
+                super::summary_separator_width(width, &summary, &table),
+                width.min(97)
+            );
+        }
+        assert_eq!(super::summary_separator_width(240, &summary, &[]), 94);
+        assert_eq!(
+            super::summary_separator_width(240, &[Line::raw("s".repeat(110))], &table),
+            110
+        );
+        assert_eq!(super::summary_separator_width(240, &[], &[]), 0);
+    }
     #[test]
     fn updates_navigation_and_toggles() {
         let mut state = State::default();
@@ -329,9 +1274,13 @@ mod tests {
                 crate::query::tests::row("large", 1.0, 100),
             ];
             let tree = crate::attribution::build_tree_with_docker(16, &[], &rows, &[], &[]);
-            crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config)
+            let mut snapshot =
+                crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config);
+            snapshot.host_cpu_percent = Some(42.5);
+            snapshot
         };
         let mut state = State::from_config(&config, false, CpuScale::Core);
+        assert_eq!(super::host_cpu_label(None), "N/A");
         state.apply_sample(Ok(sample()));
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
         state.scroll = 10;
@@ -340,6 +1289,7 @@ mod tests {
         assert_eq!(state.scroll, 0);
         assert_eq!(state.query.sort.key, SortKey::Memory);
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
+        assert_eq!(super::host_cpu_label(state.snapshot.as_ref()), "42.5%");
         state.apply_sample(Ok(sample()));
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
         state.key(KeyCode::Char('r'));
@@ -353,6 +1303,218 @@ mod tests {
         state.key(KeyCode::Char('c'));
         state.rebuild_lines();
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
+        state.apply_sample(Err("offline".into()));
+        assert_eq!(super::host_cpu_label(state.snapshot.as_ref()), "N/A");
+        assert!(state.snapshot.as_ref().unwrap().host_memory.is_none());
+        assert_eq!(
+            state.snapshot.as_ref().unwrap().environment_summary.0,
+            [None; 4]
+        );
+    }
+
+    #[test]
+    fn selection_follows_identity_and_clears_on_filter_or_pid_reuse() {
+        let config = MonitorConfig {
+            sort: Default::default(),
+            interval: Duration::from_secs(3),
+            limit: 30,
+            show_wsl_host: false,
+            wsl_only: true,
+            no_wslc: true,
+            no_docker: true,
+            hide_infra: false,
+            show_container_processes: false,
+            container_process_limit: 5,
+            collect_windows_applications: false,
+        };
+        let mut first = crate::query::tests::row("busy", 10.0, 1);
+        first.pid = Some(101);
+        first.id = "101".into();
+        first.start_id = Some(11);
+        let mut second = crate::query::tests::row("large", 1.0, 100);
+        second.pid = Some(102);
+        second.id = "102".into();
+        second.start_id = Some(12);
+        let sample = |rows: Vec<crate::model::ResourceUsage>| {
+            let tree = crate::attribution::build_tree_with_docker(16, &[], &rows, &[], &[]);
+            crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config)
+        };
+        let mut state = State::from_config(&config, false, CpuScale::Core);
+        state.apply_sample(Ok(sample(vec![first.clone(), second.clone()])));
+        state.key(KeyCode::Char('s'));
+        state.rebuild_lines();
+        state.key(KeyCode::Down);
+        assert_eq!(state.selected.as_ref().unwrap().pid, Some(101));
+        let first_line = state.selected_line().unwrap();
+        state.key(KeyCode::Char('m'));
+        state.rebuild_lines();
+        assert_eq!(state.selected.as_ref().unwrap().pid, Some(101));
+        assert_ne!(state.selected_line().unwrap(), first_line);
+        first.start_id = Some(999);
+        state.apply_sample(Ok(sample(vec![first.clone(), second.clone()])));
+        assert!(
+            state.selected.is_none(),
+            "a replacement PID must not inherit selection"
+        );
+        state.key(KeyCode::Down);
+        assert_eq!(state.selected.as_ref().unwrap().pid, Some(102));
+        second.cpu_percent = 0.0;
+        state.apply_sample(Ok(sample(vec![first, second])));
+        state.key(KeyCode::Char('0'));
+        state.rebuild_lines();
+        assert!(
+            state.selected.is_none(),
+            "hidden rows must not remain selected"
+        );
+        state.key(KeyCode::Down);
+        assert!(state.selected.is_some());
+        state.key(KeyCode::Char('t'));
+        assert!(state.selected.is_none());
+        assert!(!state.selecting);
+    }
+
+    fn action_state() -> State {
+        let config = MonitorConfig {
+            sort: Default::default(),
+            interval: Duration::from_secs(3),
+            limit: 30,
+            show_wsl_host: false,
+            wsl_only: true,
+            no_wslc: true,
+            no_docker: true,
+            hide_infra: false,
+            show_container_processes: false,
+            container_process_limit: 5,
+            collect_windows_applications: false,
+        };
+        let mut row = crate::query::tests::row("worker", 10.0, 1);
+        row.environment = crate::model::EnvironmentKind::Wsl;
+        row.kind = crate::model::ResourceKind::Process;
+        row.source = None;
+        row.pid = Some(99);
+        row.start_id = Some(123);
+        let rows = vec![row];
+        let tree = crate::attribution::build_tree_with_docker(16, &[], &rows, &[], &[]);
+        let mut snapshot =
+            crate::monitor::MonitorSnapshot::from_collected(rows, tree, vec![], &config);
+        snapshot.action_scope =
+            crate::action::Scope::parse("Ubuntu", "boot", "pid:[7] mnt:[8] 1000");
+        let mut state = State::from_config(&config, false, CpuScale::Core);
+        state.apply_sample(Ok(snapshot));
+        state.key(KeyCode::Char('s'));
+        state.rebuild_lines();
+        state.key(KeyCode::Down);
+        state
+    }
+
+    #[test]
+    fn confirmation_pins_target_and_cancel_or_hidden_prompt_never_dispatches() {
+        let mut state = action_state();
+        state.key(KeyCode::Char('k'));
+        let request = state.confirmation.clone().unwrap();
+        state.key(KeyCode::Char('y')); // Not drawn yet: cannot approve an unseen target.
+        assert!(state.action_receiver.is_none());
+        state.key(KeyCode::Down);
+        state.key(KeyCode::Char('m'));
+        assert_eq!(state.confirmation.as_ref(), Some(&request));
+        state.key(KeyCode::Esc);
+        assert!(state.confirmation.is_none());
+        assert!(state.action_receiver.is_none());
+        state.key(KeyCode::Char('k'));
+        let mut snapshot = state.snapshot.take().unwrap();
+        snapshot.action_scope.as_mut().unwrap().boot = "rebooted".into();
+        state.snapshot = action_state().snapshot;
+        state.apply_sample(Ok(snapshot));
+        assert!(state.confirmation.is_none());
+        assert!(state.selected.is_none());
+        assert!(state.action_receiver.is_none());
+    }
+
+    #[test]
+    fn pending_action_does_not_block_keys_or_allow_a_second_dispatch() {
+        let mut state = action_state();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        state.action_receiver = Some(receiver);
+        state.key(KeyCode::Char('k'));
+        assert!(state.confirmation.is_none());
+        state.key(KeyCode::Char('?'));
+        assert!(state.help);
+        state.poll_action();
+        assert!(state.action_receiver.is_some());
+        sender.send("accepted, still running".into()).unwrap();
+        state.poll_action();
+        assert!(state.action_receiver.is_none());
+        assert_eq!(state.action_status, "accepted, still running");
+    }
+
+    #[test]
+    fn small_terminal_and_disappearing_target_cannot_confirm() {
+        let mut state = action_state();
+        state.key(KeyCode::Char('k'));
+        let backend = ratatui::backend::TestBackend::new(30, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_ui(
+                    f,
+                    &mut state,
+                    HeaderMode::Compact,
+                    true,
+                    Duration::from_secs(3),
+                )
+            })
+            .unwrap();
+        assert!(!state.confirmation_visible);
+        state.key(KeyCode::Char('y'));
+        assert!(state.action_receiver.is_none());
+        let backend = ratatui::backend::TestBackend::new(100, 25);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_ui(
+                    f,
+                    &mut state,
+                    HeaderMode::Compact,
+                    true,
+                    Duration::from_secs(3),
+                )
+            })
+            .unwrap();
+        assert!(state.confirmation_visible);
+        let mut snapshot = state.snapshot.take().unwrap();
+        snapshot.query_source.as_mut().unwrap().resources.clear();
+        state.snapshot = action_state().snapshot;
+        state.apply_sample(Ok(snapshot));
+        assert!(state.confirmation.is_none());
+        state.key(KeyCode::Char('y'));
+        assert!(state.action_receiver.is_none());
+    }
+
+    #[test]
+    fn changed_command_name_cancels_the_old_confirmation() {
+        let mut state = action_state();
+        state.key(KeyCode::Char('k'));
+        let mut snapshot = state.snapshot.take().unwrap();
+        snapshot.query_source.as_mut().unwrap().resources[0].name = "replacement-command".into();
+        state.snapshot = action_state().snapshot;
+        state.apply_sample(Ok(snapshot));
+        assert_eq!(state.selected.as_ref().unwrap().name, "replacement-command");
+        assert!(state.confirmation.is_none());
+        assert!(state.action_receiver.is_none());
+    }
+
+    #[test]
+    fn help_navigation_does_not_change_resource_view() {
+        let mut state = State::default();
+        assert!(!state.key(KeyCode::Char('?')));
+        assert!(state.help);
+        state.key(KeyCode::Down);
+        assert_eq!(state.help_scroll, 1);
+        assert_eq!(state.scroll, 0);
+        state.key(KeyCode::Char('t'));
+        assert!(!state.tree);
+        assert!(!state.key(KeyCode::Esc));
+        assert!(!state.help);
     }
 }
 #[test]

@@ -1,10 +1,13 @@
+use crate::command::CommandSpec;
 use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+pub fn output_with_timeout(spec: CommandSpec<'_>, timeout: Duration) -> io::Result<Output> {
+    let mut command = Command::new(spec.program);
+    command.args(spec.args);
     // Put the command in its own process group so a timed-out shell cannot leave
     // descendants holding stdout/stderr open after the direct child is killed.
     unsafe {
@@ -86,15 +89,14 @@ fn collect_output(
 
 #[cfg(test)]
 mod tests {
-    use super::output_with_timeout;
+    use crate::command::{output_with_timeout, CommandSpec};
     use std::io::ErrorKind;
-    use std::process::Command;
     use std::time::Duration;
 
     #[test]
     fn returns_output_for_completed_command() {
         let output = output_with_timeout(
-            Command::new("sh").args(["-c", "printf done"]),
+            CommandSpec::new("sh", &["-c", "printf done"]),
             Duration::from_secs(1),
         )
         .unwrap();
@@ -105,7 +107,7 @@ mod tests {
     fn terminates_timed_out_command() {
         let started = std::time::Instant::now();
         let error = output_with_timeout(
-            Command::new("sh").args(["-c", "sleep 10 & wait"]),
+            CommandSpec::new("sh", &["-c", "sleep 10 & wait"]),
             Duration::from_millis(10),
         )
         .unwrap_err();
@@ -117,7 +119,7 @@ mod tests {
     fn timeout_includes_pipes_inherited_by_a_descendant() {
         let started = std::time::Instant::now();
         let error = output_with_timeout(
-            Command::new("sh").args(["-c", "sleep 10 &"]),
+            CommandSpec::new("sh", &["-c", "sleep 10 &"]),
             Duration::from_millis(50),
         )
         .unwrap_err();
@@ -128,7 +130,10 @@ mod tests {
     #[test]
     fn drains_output_larger_than_pipe_capacity() {
         let output = output_with_timeout(
-            Command::new("sh").args(["-c", "yes x | head -c 262144; yes y | head -c 262144 >&2"]),
+            CommandSpec::new(
+                "sh",
+                &["-c", "yes x | head -c 262144; yes y | head -c 262144 >&2"],
+            ),
             Duration::from_secs(2),
         )
         .unwrap();

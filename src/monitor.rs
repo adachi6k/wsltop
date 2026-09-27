@@ -28,6 +28,13 @@ pub struct Monitor {
 }
 
 pub struct MonitorSnapshot {
+    pub action_scope: Option<crate::action::Scope>,
+    pub cpu_overlap_unresolved: bool,
+    pub host_cpu_percent: Option<f64>,
+    pub cpu_breakdown: Option<crate::cpu_accounting::Breakdown>,
+    pub host_memory: Option<crate::model::HostMemory>,
+    pub host_history: crate::history::HostHistory,
+    pub environment_summary: crate::summary::EnvironmentSummary,
     pub sort: Sort,
     pub query_source: Option<QuerySource>,
     pub host_logical_cpu_count: u32,
@@ -70,6 +77,13 @@ impl MonitorSnapshot {
         apply_windows_application_view(&mut resources, &tree.windows_applications, config);
         let query = config.query();
         Self {
+            action_scope: None,
+            host_cpu_percent: None,
+            cpu_overlap_unresolved: false,
+            cpu_breakdown: None,
+            host_memory: None,
+            host_history: Default::default(),
+            environment_summary: Default::default(),
             sort: config.sort,
             host_logical_cpu_count: tree.host_logical_cpu_count,
             resources: query.flat(&resources),
@@ -93,6 +107,7 @@ impl Monitor {
         let mut warnings = Vec::new();
         let collector_plan = CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
         let linux_before = collector_plan.capture()?;
+        let linux_before_complete = linux_before.warnings.is_empty();
         for warning in linux_before.warnings {
             push_unique_warning(&mut warnings, warning);
         }
@@ -107,26 +122,39 @@ impl Monitor {
         };
         let collect_wslc = !self.config.wsl_only && !self.config.no_wslc;
         let collect_docker = !self.config.no_docker;
+        let interval = self.config.interval.max(Duration::from_secs(2));
         let wslc_worker = collect_wslc.then(|| {
             thread::spawn(move || {
-                wslc::usage(collector_cpu_count).map_err(|error| error.to_string())
+                let baseline =
+                    wslc::aggregate_usage(collector_cpu_count).map_err(|e| e.to_string())?;
+                if !baseline.resources.is_empty() {
+                    thread::sleep(interval);
+                }
+                let (mut usage, complete) =
+                    wslc::usage(collector_cpu_count).map_err(|e| e.to_string())?;
+                let mut probes = baseline.cpu_probes;
+                probes.append(&mut usage.cpu_probes);
+                usage.cpu_probes = probes;
+                Ok::<_, String>((usage, complete))
             })
         });
         let docker_worker = collect_docker.then(|| {
             thread::spawn(move || {
-                docker::usage(collector_cpu_count).map_err(|error| error.to_string())
+                let baseline =
+                    docker::aggregate_usage(collector_cpu_count).map_err(|e| e.to_string())?;
+                if !baseline.resources.is_empty() {
+                    thread::sleep(interval);
+                }
+                let (mut usage, complete) =
+                    docker::usage(collector_cpu_count).map_err(|e| e.to_string())?;
+                let mut probes = baseline.cpu_probes;
+                probes.append(&mut usage.cpu_probes);
+                usage.cpu_probes = probes;
+                Ok::<_, String>((usage, complete))
             })
         });
         thread::sleep(self.config.interval);
-        let after_result = (|| -> Result<_, Box<dyn Error>> {
-            let linux_after = collector_plan.capture()?;
-            let windows_after = if self.config.wsl_only {
-                None
-            } else {
-                Some(windows::snapshot()?)
-            };
-            Ok((linux_after, windows_after))
-        })();
+        let linux_middle = collector_plan.capture();
         let mut wslc_result = wslc_worker.map(|worker| {
             worker
                 .join()
@@ -137,7 +165,22 @@ impl Monitor {
                 .join()
                 .unwrap_or_else(|_| Err("Docker collector panicked".to_string()))
         });
-        let (linux_after, windows_after) = after_result?;
+        // Bracket both container probe rounds with the primary kernel samples.
+        let linux_after = collector_plan.capture()?;
+        let windows_after = if self.config.wsl_only {
+            None
+        } else {
+            Some(windows::snapshot()?)
+        };
+        let linux_complete = linux_before_complete
+            && linux_after.warnings.is_empty()
+            && linux_before.additional.len() == linux_after.additional.len()
+            && linux_before.additional.iter().all(|(name, _)| {
+                linux_after
+                    .additional
+                    .iter()
+                    .any(|(other, _)| name == other)
+            });
         for warning in linux_after.warnings {
             push_unique_warning(&mut warnings, warning);
         }
@@ -169,8 +212,7 @@ impl Monitor {
                     before.host_logical_cpu_count, after.host_logical_cpu_count
                 ));
             }
-            windows_usage =
-                sampler::calculate_usage(&before.snapshot, &after.snapshot, host_cpu_count);
+            windows_usage = windows::calculate_usage(before, after);
         }
         if collector_cpu_count != host_cpu_count {
             warnings.push(format!(
@@ -179,10 +221,48 @@ impl Monitor {
             wslc_result = None;
             docker_result = None;
         }
+        // Empty optional results can also mean an unavailable executable/daemon
+        // in the legacy collectors. Do not turn that ambiguity into a known zero.
+        let summary_available = [
+            windows_before.is_some()
+                && windows_after.is_some()
+                && collector_cpu_count == host_cpu_count,
+            linux_complete && collector_cpu_count == host_cpu_count,
+            matches!(wslc_result.as_ref(), Some(Ok((_, true)))),
+            matches!(docker_result.as_ref(), Some(Ok((_, true)))),
+        ];
+        let mut guest_cpu = crate::guest_cpu::History::default();
+        guest_cpu.kernel(linux_before.primary.system_cpu.as_ref());
+        if let Ok(middle) = &linux_middle {
+            guest_cpu.kernel(middle.primary.system_cpu.as_ref());
+        }
+        guest_cpu.kernel(linux_after.primary.system_cpu.as_ref());
+        if let Some(Ok((usage, _))) = &wslc_result {
+            guest_cpu.containers(2, &usage.cpu_probes);
+        }
+        if let Some(Ok((usage, _))) = &docker_result {
+            guest_cpu.containers(3, &usage.cpu_probes);
+        }
+        let guest_targets: Vec<_> = wslc_result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .into_iter()
+            .flat_map(|(u, _)| u.resources.iter().map(|r| (2, r.id.clone())))
+            .chain(
+                docker_result
+                    .as_ref()
+                    .and_then(|r| r.as_ref().ok())
+                    .into_iter()
+                    .flat_map(|(u, _)| u.resources.iter().map(|r| (3, r.resource.id.clone()))),
+            )
+            .collect();
+        let containers_ready = (!collect_wslc || wslc_result.as_ref().is_some_and(Result::is_ok))
+            && (!collect_docker || docker_result.as_ref().is_some_and(Result::is_ok))
+            && collector_cpu_count == host_cpu_count;
         let wslc_usage = match wslc_result {
             None => wslc::WslcUsage::default(),
             Some(result) => match result {
-                Ok(result) => {
+                Ok((result, _)) => {
                     warnings.extend(result.warnings.iter().cloned());
                     result
                 }
@@ -195,7 +275,7 @@ impl Monitor {
         let docker_usage = match docker_result {
             None => Vec::new(),
             Some(result) => match result {
-                Ok(result) => {
+                Ok((result, _)) => {
                     warnings.extend(result.warnings);
                     result.resources
                 }
@@ -246,12 +326,48 @@ impl Monitor {
             );
         }
         resources.extend(docker_usage.into_iter().map(|item| item.resource));
-        Ok(MonitorSnapshot::from_collected(
-            resources,
-            tree,
-            warnings,
-            &self.config,
-        ))
+        let mut snapshot = MonitorSnapshot::from_collected(resources, tree, warnings, &self.config);
+        snapshot.environment_summary = crate::summary::EnvironmentSummary::collect(
+            &snapshot
+                .query_source
+                .as_ref()
+                .expect("collected snapshot retains query source")
+                .pid_resources,
+            summary_available,
+        );
+        snapshot.host_memory = windows_after.as_ref().and_then(|sample| sample.host_memory);
+        snapshot.environment_summary.set_wsl_cpu(
+            (collector_cpu_count == host_cpu_count)
+                .then(|| {
+                    crate::linux_cpu::usage(
+                        &linux_before.primary,
+                        &linux_after.primary,
+                        host_cpu_count,
+                    )
+                })
+                .flatten(),
+        );
+        snapshot.cpu_breakdown = windows_after
+            .as_ref()
+            .zip(windows_before.as_ref())
+            .and_then(|(after, before)| windows::cpu_breakdown(before, after));
+        snapshot.host_cpu_percent = snapshot.cpu_breakdown.map(|cpu| cpu.total);
+        if !self.config.wsl_only && snapshot.cpu_breakdown.is_none() {
+            snapshot
+                .warnings
+                .push("Host CPU partition counters unavailable or inconsistent; CPU is N/A".into());
+        }
+        crate::guest_cpu::apply(
+            &mut snapshot,
+            &guest_cpu,
+            &guest_targets
+                .iter()
+                .map(|(env, id)| (*env, id.as_str()))
+                .collect::<Vec<_>>(),
+            containers_ready,
+            self.config.interval,
+        );
+        Ok(snapshot)
     }
 }
 
@@ -339,6 +455,25 @@ mod tests {
             container_process_limit: 5,
             collect_windows_applications: true,
         }
+    }
+
+    #[test]
+    #[ignore = "requires live Windows/WSL and a running supported Docker container"]
+    fn live_exclusive_guest_cpu() {
+        let mut options = config();
+        options.interval = Duration::from_secs(3);
+        options.no_wslc = true;
+        options.collect_windows_applications = false;
+        let snapshot = super::Monitor::new(options, None).sample().unwrap();
+        println!(
+            "total={:?} environments={:?} unresolved={} warnings={:?}",
+            snapshot.host_cpu_percent,
+            snapshot.environment_summary.0,
+            snapshot.cpu_overlap_unresolved,
+            snapshot.warnings
+        );
+        assert!(snapshot.environment_summary.0[3].is_some());
+        assert!(!snapshot.cpu_overlap_unresolved);
     }
 
     fn resource(environment: EnvironmentKind, kind: ResourceKind, name: &str) -> ResourceUsage {

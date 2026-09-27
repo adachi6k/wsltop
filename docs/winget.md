@@ -19,7 +19,7 @@ version/help, and local-manifest uninstallation. The Microsoft submission checks
 also passed; moderator approval/source indexing remain external steps.
 
 ```console
-python3 scripts/winget.py --tag v0.4.0 --output generated
+python3 scripts/winget.py --tag v1.0.0 --output generated
 ```
 
 Requires Python 3.10+ and authenticated GitHub CLI. Generation accepts only a
@@ -42,12 +42,15 @@ Local manifest installation requires the administrator-controlled
 successfully for a pushed stable tag. It uses `workflow_run`, because releases
 created with `GITHUB_TOKEN` do not trigger another ordinary `release` workflow.
 The originating repository and resolved tag commit are checked before generation.
-Release dry runs and PR runs do not submit anything upstream.
+Release dry runs and PR runs do not submit anything upstream. RC releases are
+skipped. The Release workflow now also publishes to crates.io; a failure there
+prevents this automatic WinGet run. After fixing that failure, rerun the failed
+Release jobs, or manually validate the published stable tag here.
 
 Every run generates manifests, validates with native WinGet, tests portable
 install/version/help/uninstall on Windows, and uploads a manifest artifact.
 PRs that change this integration run the same generation and Windows validation
-against the already published v0.4.0 release, without access to submission secrets.
+against the already published v1.0.0 release, without access to submission secrets.
 Manual `workflow_dispatch` accepts a tag and defaults to validation only.
 
 To enable automatic upstream PRs, configure repository Actions secret
@@ -62,7 +65,7 @@ than putting it in an issue, PR, or command argument.
 After validation, submission can also be run with a locally authenticated `gh`:
 
 ```console
-python3 scripts/submit-winget.py --tag v0.4.0 --manifest-dir generated/manifests/a/Adachi6k/wsltop/0.4.0
+python3 scripts/submit-winget.py --tag v1.0.0 --manifest-dir generated/manifests/a/Adachi6k/wsltop/1.0.0
 ```
 
 Submission checks for an existing upstream version/open PR, then creates a branch
