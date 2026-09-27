@@ -4,8 +4,10 @@ The `Release` workflow in `.github/workflows/release.yml` checks the version tag
 against `Cargo.toml`, builds and verifies Windows/Linux archives, validates the
 Cargo package, publishes GitHub Release assets, then publishes to crates.io.
 Only a `v*` tag push publishes. Pull requests and `workflow_dispatch` validate
-without publishing or requesting a crates.io token. Prerelease tags also publish
-their matching Cargo prerelease version.
+without publishing or requesting a crates.io token. Supported tags are
+`vMAJOR.MINOR.PATCH` and `vMAJOR.MINOR.PATCH-rc.N`, as enforced by the release-note
+script. RC tags also publish their matching Cargo prerelease version. Other
+prerelease formats, such as `-alpha.N` and `-beta.N`, are currently rejected.
 
 ## One-time setup
 
