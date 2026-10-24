@@ -70,9 +70,9 @@ explains that submission was skipped. Set the secret via GitHub Settings rather
 than putting it in an issue, PR, or command argument.
 
 Use a dedicated token with an expiration: `repo` also grants access to private
-repositories available to that account. During the v1.0.1 submission,
-`public_repo` allowed validation and some Git API calls but reference creation
-failed with GitHub's `This API operation needs the "repo" scope` response.
+repositories available to that account. During the v1.0.1 submission, manifest
+validation passed, but submission with `public_repo` failed at reference creation
+with GitHub's `This API operation needs the "repo" scope` response.
 The [Microsoft token setup guidance](https://github.com/microsoft/winget-create#github-personal-access-token-classic-permissions)
 also specifies `repo`. If adding this scope to the same existing classic token,
 its stored secret does not need replacing; replace the secret if the token value
