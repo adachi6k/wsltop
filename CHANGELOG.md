@@ -205,7 +205,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/adachi6k/wsltop/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0
 [1.0.0-rc.1]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0-rc.1
 [0.5.3]: https://github.com/adachi6k/wsltop/compare/v0.5.2...v0.5.3
