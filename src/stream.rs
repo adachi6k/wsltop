@@ -422,6 +422,7 @@ impl Aggregate {
                     && !config.wsl_only
                     && !config.no_wslc
                     && ready("WSLC")
+                    && self.wslc.available
                     && self.wslc.warnings.is_empty(),
                 normalized
                     && !config.no_docker
@@ -788,11 +789,18 @@ fn sample_windows(
     interval: Duration,
 ) {
     let mut before: Option<crate::model::WindowsSnapshot> = None;
+    let mut first_measurement = true;
     let mut delay = Duration::ZERO;
     while wait(&stop, delay) {
         let started = std::time::Instant::now();
         match windows::snapshot() {
             Ok(after) => {
+                let after = if let Some(old) = before.as_ref().filter(|_| first_measurement) {
+                    first_measurement = false;
+                    windows::retry_initial_cpu_sample(old, after, windows::snapshot)
+                } else {
+                    after
+                };
                 let captured_at = after.snapshot.captured_at;
                 let count = after.host_logical_cpu_count;
                 cpus.store(count, Ordering::Relaxed);
@@ -1531,6 +1539,36 @@ mod tests {
     }
 
     #[test]
+    fn wslc_summary_distinguishes_empty_success_absence_and_failure() {
+        let options = config();
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostCpuCount(16));
+        aggregate.apply(Event::WslcAggregate(Normalized::new(
+            16,
+            Ok(WslcUsage::default()),
+        )));
+        assert!(aggregate.snapshot(&options).environment_summary.0[2].is_none());
+
+        aggregate.apply(Event::WslcAggregate(Normalized::new(
+            16,
+            Ok(WslcUsage {
+                available: true,
+                ..WslcUsage::default()
+            }),
+        )));
+        assert_eq!(
+            aggregate.snapshot(&options).environment_summary.0[2],
+            Some(crate::summary::Usage::default())
+        );
+
+        aggregate.apply(Event::WslcAggregate(Normalized::new(
+            16,
+            Err("WSLC collector unavailable".into()),
+        )));
+        assert!(aggregate.snapshot(&options).environment_summary.0[2].is_none());
+    }
+
+    #[test]
     fn wsl_kernel_cpu_waits_for_authoritative_normalization() {
         let mut options = config();
         for changed in [false, true] {
@@ -1759,6 +1797,7 @@ mod tests {
         let cached_wslc = Normalized::new(
             8,
             WslcUsage {
+                available: true,
                 cpu_probes: Vec::new(),
                 resources: vec![container.clone()],
                 process_resources: vec![ContainerProcessUsage {
@@ -1933,6 +1972,7 @@ mod tests {
         );
         current.cpu_percent = 9.0;
         aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![current],
             process_resources: Vec::new(),
@@ -1950,6 +1990,7 @@ mod tests {
             "process",
         );
         aggregate.apply(Event::WslcDetails(normalized(WslcUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![stale.clone()],
             process_resources: vec![ContainerProcessUsage {
@@ -1971,6 +2012,7 @@ mod tests {
         );
         newer.cpu_percent = 12.0;
         aggregate.apply(Event::WslcAggregate(normalized(Ok(WslcUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![newer],
             process_resources: Vec::new(),
