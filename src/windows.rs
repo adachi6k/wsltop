@@ -212,6 +212,25 @@ pub fn cpu_breakdown(
     )
 }
 
+/// Give a transiently inconsistent initial CPU sample one chance to recover.
+/// Keep the original baseline, so the retry uses a wider measurement window.
+pub fn retry_initial_cpu_sample(
+    before: &WindowsSnapshot,
+    after: WindowsSnapshot,
+    retry: impl FnOnce() -> Result<WindowsSnapshot, Box<dyn Error>>,
+) -> WindowsSnapshot {
+    if before.cpu_accounting.is_none()
+        || before.host_logical_cpu_count != after.host_logical_cpu_count
+        || cpu_breakdown(before, &after).is_some()
+    {
+        return after;
+    }
+    match retry() {
+        Ok(recovered) if cpu_breakdown(before, &recovered).is_some() => recovered,
+        _ => after,
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn host_logical_cpu_count() -> Result<u32, Box<dyn Error>> {
     if let Some(count) = HOST_LOGICAL_CPU_COUNT.get().copied() {
@@ -457,6 +476,78 @@ mod tests {
                 "cpu_time_secs":cpu,"memory_bytes":4096}],
         });
         super::parse_snapshot(&serde_json::to_vec(&json).unwrap()).unwrap()
+    }
+
+    fn partition_snapshot(
+        timestamp: u64,
+        physical: u64,
+        root: u64,
+        guest: u64,
+    ) -> crate::model::WindowsSnapshot {
+        let mut snapshot = process_snapshot(timestamp, 0.0, 1);
+        let counters = |busy| {
+            (0..16)
+                .map(|index| crate::cpu_accounting::Counter {
+                    name: index.to_string(),
+                    busy,
+                    total: timestamp,
+                })
+                .collect()
+        };
+        snapshot.cpu_accounting = Some(crate::cpu_accounting::Sample::HyperV {
+            physical: counters(physical),
+            root: counters(root),
+            guest: counters(guest),
+        });
+        snapshot
+    }
+
+    #[test]
+    fn initial_cpu_sample_retries_transient_overcount_on_the_original_baseline() {
+        let before = partition_snapshot(1_000_000, 0, 0, 0);
+        let after = partition_snapshot(2_000_000, 400_000, 200_000, 200_001);
+        assert!(super::cpu_breakdown(&before, &after).is_none());
+        let mut retries = 0;
+        let recovered = super::retry_initial_cpu_sample(&before, after, || {
+            retries += 1;
+            Ok(partition_snapshot(3_000_000, 800_000, 400_000, 399_000))
+        });
+        assert_eq!(retries, 1);
+        assert_eq!(recovered.process_timestamp, 3_000_000);
+        let cpu = super::cpu_breakdown(&before, &recovered).unwrap();
+        assert_eq!(cpu.total, 40.0);
+        assert!(cpu.other >= 0.0);
+    }
+
+    #[test]
+    fn initial_cpu_sample_keeps_valid_measurements_and_requires_a_baseline() {
+        let mut before = partition_snapshot(1_000_000, 0, 0, 0);
+        let after = partition_snapshot(2_000_000, 400_000, 200_000, 100_000);
+        let unchanged = super::retry_initial_cpu_sample(&before, after, || {
+            panic!("a valid CPU sample must not trigger an extra query")
+        });
+        assert_eq!(unchanged.process_timestamp, 2_000_000);
+        before.cpu_accounting = None;
+        let unchanged = super::retry_initial_cpu_sample(&before, unchanged, || {
+            panic!("an absent CPU baseline cannot be recovered by a later sample")
+        });
+        assert_eq!(unchanged.process_timestamp, 2_000_000);
+    }
+
+    #[test]
+    fn initial_cpu_sample_retains_original_data_if_retry_fails_or_remains_inconsistent() {
+        let before = partition_snapshot(1_000_000, 0, 0, 0);
+        let invalid = || partition_snapshot(2_000_000, 400_000, 200_000, 200_001);
+        let unchanged = super::retry_initial_cpu_sample(&before, invalid(), || {
+            Ok(partition_snapshot(3_000_000, 800_000, 400_000, 400_001))
+        });
+        assert_eq!(unchanged.process_timestamp, 2_000_000);
+        assert!(super::cpu_breakdown(&before, &unchanged).is_none());
+        let unchanged = super::retry_initial_cpu_sample(&before, invalid(), || {
+            Err("retry query unavailable".into())
+        });
+        assert_eq!(unchanged.process_timestamp, 2_000_000);
+        assert!(super::cpu_breakdown(&before, &unchanged).is_none());
     }
 
     #[test]

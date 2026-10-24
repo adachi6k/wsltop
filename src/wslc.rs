@@ -19,6 +19,8 @@ struct RawWslcStat {
 
 #[derive(Debug, Clone, Default)]
 pub struct WslcUsage {
+    /// A successful stats command, including an empty result; false if absent.
+    pub available: bool,
     pub cpu_probes: Vec<crate::guest_cpu::Probe>,
     pub resources: Vec<ResourceUsage>,
     pub process_resources: Vec<ContainerProcessUsage>,
@@ -39,7 +41,7 @@ pub fn usage(host_logical_cpu_count: u32) -> Result<(WslcUsage, bool), Box<dyn E
 
 fn with_details(mut result: WslcUsage, populate: impl FnOnce(&mut WslcUsage)) -> (WslcUsage, bool) {
     // Detail failures do not invalidate successfully collected aggregate rows.
-    let complete = !result.resources.is_empty() && result.warnings.is_empty();
+    let complete = result.available && result.warnings.is_empty();
     populate(&mut result);
     (result, complete)
 }
@@ -66,7 +68,29 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
         .into());
     }
 
-    let raw: Vec<RawWslcStat> = serde_json::from_slice(&output.stdout)?;
+    let mut result = parse_stats(&output.stdout, host_logical_cpu_count)?;
+    result.cpu_probes = crate::guest_cpu::collect(
+        "wslc.exe",
+        &result
+            .resources
+            .iter()
+            .map(|resource| resource.id.as_str())
+            .collect::<Vec<_>>(),
+    );
+    Ok(result)
+}
+
+fn parse_stats(input: &[u8], host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn Error>> {
+    // Older WSLC versions return an array. WSLC 3.0.3 returns a stream of
+    // objects, with no output when there are no running containers.
+    let raw: Vec<RawWslcStat> =
+        if input.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'[') {
+            serde_json::from_slice(input)?
+        } else {
+            serde_json::Deserializer::from_slice(input)
+                .into_iter::<RawWslcStat>()
+                .collect::<Result<_, _>>()?
+        };
     let mut result = Vec::with_capacity(raw.len());
     let mut warnings = Vec::new();
 
@@ -110,10 +134,8 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<WslcUsage, Box<dyn
     }
 
     Ok(WslcUsage {
-        cpu_probes: crate::guest_cpu::collect(
-            "wslc.exe",
-            &result.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
-        ),
+        available: true,
+        cpu_probes: Vec::new(),
         resources: result,
         process_resources: Vec::new(),
         warnings,
@@ -318,12 +340,13 @@ fn parse_memory_usage(value: &str) -> Result<u64, Box<dyn Error>> {
 }
 
 fn parse_size_bytes(value: &str) -> Result<u64, Box<dyn Error>> {
-    let mut parts = value.split_whitespace();
-    let amount = parts.next().ok_or("missing size amount")?.parse::<f64>()?;
-    let unit = parts.next().unwrap_or("B");
-    if parts.next().is_some() {
-        return Err("unexpected extra tokens in size".into());
-    }
+    let value = value.trim();
+    let amount_end = value
+        .trim_end_matches(|character: char| character.is_ascii_alphabetic())
+        .len();
+    let (amount, unit) = value.split_at(amount_end);
+    let amount = amount.trim().parse::<f64>()?;
+    let unit = if unit.is_empty() { "B" } else { unit };
     if !amount.is_finite() || amount < 0.0 {
         return Err("size is not a finite non-negative number".into());
     }
@@ -361,6 +384,7 @@ mod tests {
         row.kind = crate::model::ResourceKind::Container;
         row.memory_bytes = 4096;
         let usage = super::WslcUsage {
+            available: true,
             resources: vec![row],
             ..Default::default()
         };
@@ -377,7 +401,57 @@ mod tests {
 
     use super::{
         parse_cpu_time, parse_memory_usage, parse_percent, parse_processes, parse_size_bytes,
+        parse_stats,
     };
+
+    #[test]
+    fn parses_legacy_arrays_and_current_json_streams() {
+        let first =
+            r#"{"CPUPerc":"32.00%","ID":"first","MemUsage":"2.5MiB / 16GiB","Name":"build"}"#;
+        let second =
+            r#"{"CPUPerc":"16.00%","ID":"second","MemUsage":"64kB / 16GiB","Name":"worker"}"#;
+        for input in [
+            format!("[\n{first},\n{second}\n]\r\n"),
+            format!("{first}\r\n{second}\r\n"),
+        ] {
+            let usage = parse_stats(input.as_bytes(), 16).unwrap();
+            assert!(usage.available);
+            assert!(usage.warnings.is_empty());
+            assert_eq!(usage.resources.len(), 2);
+            assert_eq!(usage.resources[0].id, "first");
+            assert_eq!(usage.resources[0].name, "build");
+            assert_eq!(usage.resources[0].cpu_percent, 2.0);
+            assert_eq!(usage.resources[0].memory_bytes, 2_621_440);
+            assert_eq!(usage.resources[1].id, "second");
+            assert_eq!(usage.resources[1].cpu_percent, 1.0);
+            assert_eq!(usage.resources[1].memory_bytes, 64_000);
+        }
+        assert_eq!(
+            parse_stats(first.as_bytes(), 16).unwrap().resources.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn successful_empty_stats_are_available_without_containers() {
+        for input in [b"".as_slice(), b" \r\n\t", b"[]", b"[\r\n]"] {
+            let usage = parse_stats(input, 16).unwrap();
+            assert!(usage.available);
+            assert!(usage.resources.is_empty());
+            assert!(usage.warnings.is_empty());
+            assert!(super::with_details(usage, |_| {}).1);
+        }
+        assert!(!super::with_details(super::WslcUsage::default(), |_| {}).1);
+    }
+
+    #[test]
+    fn malformed_stats_are_not_treated_as_empty() {
+        for input in [b"[".as_slice(), b"null", b"{}", b"not json", b"\xff"] {
+            assert!(parse_stats(input, 16).is_err());
+        }
+        let valid = r#"{"CPUPerc":"0.00%","ID":"first","MemUsage":"0B / 0B","Name":"idle"}"#;
+        assert!(parse_stats(format!("{valid}\r\n{{").as_bytes(), 16).is_err());
+    }
 
     #[test]
     fn parses_wslc_cpu_percent() {
@@ -392,12 +466,32 @@ mod tests {
             (497.73_f64 * 1024.0 * 1024.0).round() as u64
         );
         assert_eq!(parse_memory_usage("0 B / 15.56 GiB").unwrap(), 0);
+        assert_eq!(parse_memory_usage("0B / 0B").unwrap(), 0);
+        assert_eq!(parse_memory_usage("2.5MiB / 16GiB").unwrap(), 2_621_440);
     }
 
     #[test]
     fn parses_binary_sizes() {
         assert_eq!(parse_size_bytes("1 KiB").unwrap(), 1024);
         assert_eq!(parse_size_bytes("1 GiB").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size_bytes("1KiB").unwrap(), 1024);
+        assert_eq!(parse_size_bytes("1.5MB").unwrap(), 1_500_000);
+        assert_eq!(parse_size_bytes("42").unwrap(), 42);
+    }
+
+    #[test]
+    fn rejects_invalid_memory_sizes() {
+        for value in [
+            "",
+            "-1MiB",
+            "NaN MiB",
+            "inf B",
+            "1XB",
+            "1MiB extra",
+            "1e100GiB",
+        ] {
+            assert!(parse_size_bytes(value).is_err(), "{value}");
+        }
     }
 
     #[test]

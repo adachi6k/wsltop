@@ -8,6 +8,7 @@ published versions and downloads.
 
 | Record | Coverage |
 | --- | --- |
+| [2026-10-24 v1.0.1](2026-10-24-v1.0.1.md) | WSL 3.0.3 compatibility, initial host CPU retry and patch release preparation |
 | [2026-09-26 v1.0.0](2026-09-26-v1.0.0.md) | RC distribution, compatibility and final footer change |
 | [2026-09-05 Windows-native](2026-09-05-windows-native.md) | Archive and TUI smoke tests |
 | [2026-09-06 v0.4.0](2026-09-06-v0.4.0.md) | Release preparation results and pending publication checklist |

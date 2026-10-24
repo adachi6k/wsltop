@@ -170,7 +170,12 @@ impl Monitor {
         let windows_after = if self.config.wsl_only {
             None
         } else {
-            Some(windows::snapshot()?)
+            let after = windows::snapshot()?;
+            Some(if let Some(before) = &windows_before {
+                windows::retry_initial_cpu_sample(before, after, windows::snapshot)
+            } else {
+                after
+            })
         };
         let linux_complete = linux_before_complete
             && linux_after.warnings.is_empty()
@@ -221,8 +226,8 @@ impl Monitor {
             wslc_result = None;
             docker_result = None;
         }
-        // Empty optional results can also mean an unavailable executable/daemon
-        // in the legacy collectors. Do not turn that ambiguity into a known zero.
+        // WSLC distinguishes successful empty stats from a missing executable.
+        // Empty Docker results can still mean an unavailable executable/daemon.
         let summary_available = [
             windows_before.is_some()
                 && windows_after.is_some()

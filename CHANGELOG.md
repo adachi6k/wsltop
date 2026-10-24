@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-24
+
+### Fixed
+
+- Restore WSL Containers (WSLC) monitoring on WSL 3.0.3 by accepting JSON object streams, empty stats output and compact memory units alongside the older output format. No running containers now report zero usage instead of an EOF warning or unavailable metrics.
+- Retry an inconsistent initial Windows host CPU sample once against the original baseline, avoiding a transient startup N/A when the next sample is valid. Persistent counter failures remain unavailable.
+
+See the [release validation record](docs/validation/2026-10-24-v1.0.1.md) for checks and remaining publication gates.
+
 ## [1.0.0] - 2026-09-26
 
 ### Added
@@ -196,7 +205,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/adachi6k/wsltop/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0
 [1.0.0-rc.1]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0-rc.1
 [0.5.3]: https://github.com/adachi6k/wsltop/compare/v0.5.2...v0.5.3

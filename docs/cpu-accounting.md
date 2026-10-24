@@ -74,7 +74,10 @@ The calculation uses the raw counter's first/second values and checks its
 On hosts without a hypervisor, GetSystemTimes (or the system-wide counter on
 multi-group hosts) supplies the total, all assigned to Win. When host partition
 counters cannot be collected, the header shows N/A, and the collector can recover
-on subsequent valid samples. Host-only totals are not silently substituted for
+on subsequent valid samples. If the initial pair has a valid baseline but an
+inconsistent result, collection retries once against that original baseline.
+Only a valid retry is adopted; persistent inconsistencies still show N/A.
+Host-only totals are not silently substituted for
 physical Hyper-V CPU. `--wsl-only` disables the host CPU breakdown.
 
 Header values are rounded independently to one decimal. Stored raw percentages
@@ -201,6 +204,8 @@ examples. wsltop does not scale category values to force their sum to the host t
 ## WSLC containers
 
 `wslc.exe stats --format json --no-trunc` reports `CPUPerc` using its own container convention. `wsltop` divides that percentage by the Windows logical CPU count to place it on the common host-wide scale.
+
+The collector accepts legacy JSON arrays and the JSON object stream emitted by WSLC 3.0.3. A successful empty response means no running containers and reports zero usage; a missing executable or failed collection remains unavailable. Memory sizes may include or omit a space before their unit.
 
 The collector's `MemUsage` value is retained as resource metadata but is not used in parent/child subtraction.
 
