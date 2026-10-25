@@ -62,12 +62,22 @@ Manual `workflow_dispatch` accepts a tag and defaults to validation only.
 
 To enable automatic upstream PRs, configure repository Actions secret
 `WINGET_SUBMISSION_TOKEN` with a dedicated GitHub token capable of creating a
-fork/branches and PRs in public repositories (a classic token with `public_repo`
-scope, as described by Microsoft). Do not reuse the repository's `GITHUB_TOKEN`:
+fork/branches and PRs in public repositories (a classic token with `repo`
+scope). Do not reuse the repository's `GITHUB_TOKEN`:
 it is scoped to this repository. No token is stored in scripts or manifests.
 Without the secret, generation/testing/artifact upload still run and the summary
 explains that submission was skipped. Set the secret via GitHub Settings rather
 than putting it in an issue, PR, or command argument.
+
+Use a dedicated token with an expiration: `repo` also grants access to private
+repositories available to that account. During the
+[v1.0.1 submission](https://github.com/adachi6k/wsltop/actions/runs/40073913800/job/120813231033), manifest
+validation passed, but submission with `public_repo` failed at reference creation
+with GitHub's `This API operation needs the "repo" scope` response.
+If adding this scope to the same existing classic token,
+its stored secret does not need replacing; replace the secret if the token value
+is regenerated. After correcting permissions, rerun the failed submission job;
+existing upstream versions or open PRs are detected without creating duplicates.
 
 After validation, submission can also be run with a locally authenticated `gh`:
 
