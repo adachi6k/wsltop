@@ -38,13 +38,29 @@ of `wsl`. See [Microsoft's command reference](https://learn.microsoft.com/en-us/
 Real-host checks for wsltop v1.0.1 include WSL 3.0.3; see the
 [release validation record](docs/validation/2026-10-24-v1.0.1.md).
 
-With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
-you can fetch the x64 GitHub Releases binaries without a source build,
-which is faster than `cargo install`.
-
 ### Windows
 
-Download the **Windows x86_64 MSVC ZIP** from the
+Install with [WinGet](https://learn.microsoft.com/windows/package-manager/winget/):
+
+```powershell
+winget install --id Adachi6k.wsltop --exact --source winget
+```
+
+Open a new PowerShell window, then run:
+
+```powershell
+wsltop --interactive
+```
+
+To update an existing WinGet installation:
+
+```powershell
+winget upgrade --id Adachi6k.wsltop --exact --source winget
+```
+
+See [WinGet distribution](docs/winget.md) for package details.
+
+You can also download the **Windows x86_64 MSVC ZIP** from the
 [latest GitHub Release](https://github.com/adachi6k/wsltop/releases/latest).
 Extract it and open PowerShell in the versioned directory:
 
@@ -52,12 +68,13 @@ Extract it and open PowerShell in the versioned directory:
 .\wsltop.exe --interactive
 ```
 
-You can instead install with `cargo binstall wsltop`, then run
-`wsltop --interactive`.
+With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
+you can instead run `cargo binstall wsltop`, then `wsltop --interactive`.
 
 ### WSL / Linux
 
-Fast prebuilt install:
+Fast prebuilt install with [cargo-binstall](https://github.com/cargo-bins/cargo-binstall),
+without a source build:
 
 ```console
 cargo binstall wsltop

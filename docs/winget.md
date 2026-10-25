@@ -1,10 +1,23 @@
 # WinGet distribution
 
-Package ID: `Adachi6k.wsltop`. Initial submission:
-[microsoft/winget-pkgs#430402](https://github.com/microsoft/winget-pkgs/pull/430402)
-for v0.4.0. Community registration is pending; do not
-advertise `winget install --id Adachi6k.wsltop --exact` as available until the
-upstream PR is merged and the package appears in the WinGet source.
+Package ID: `Adachi6k.wsltop`, available from the public `winget` source.
+The [initial registration for v1.0.0](https://github.com/microsoft/winget-pkgs/pull/430402)
+and [v1.0.1 update](https://github.com/microsoft/winget-pkgs/pull/460765) are merged.
+The public source resolves version 1.0.1 as of 2026-10-25.
+
+Install from Windows PowerShell:
+
+```powershell
+winget install --id Adachi6k.wsltop --exact --source winget
+```
+
+Update an existing WinGet installation:
+
+```powershell
+winget upgrade --id Adachi6k.wsltop --exact --source winget
+```
+
+Open a new PowerShell window after installation and run `wsltop --interactive`.
 
 ## Manifest generation
 
@@ -24,8 +37,8 @@ sync; only link to a policy revision that is already publicly accessible.
 
 The [initial Windows CI run](https://github.com/adachi6k/wsltop/actions/runs/34032216509)
 passed generation, native validation, user-scope installation, installed
-version/help, and local-manifest uninstallation. The Microsoft submission checks
-also passed; moderator approval/source indexing remain external steps.
+version/help, and local-manifest uninstallation. Upstream acceptance and source
+indexing are checked separately for each new version.
 
 ```console
 python3 scripts/winget.py --tag v1.0.0 --output generated
@@ -94,8 +107,11 @@ Existing versions are never replaced. Microsoft may request CLA acceptance or
 manifest changes; this workflow does not approve legal agreements or merge PRs.
 Community acceptance and source indexing happen independently of wsltop releases.
 
-After acceptance: `winget show --id Adachi6k.wsltop --exact --source winget`,
-then test installation/upgrade from that public source before updating README.
+For each newly accepted version, check
+`winget show --id Adachi6k.wsltop --exact --source winget`, then verify public-source
+installation/upgrade before advertising that version in the README. The initial
+registration is complete; future versions still require independent acceptance
+and source indexing.
 
 References: [manifest authoring](https://learn.microsoft.com/windows/package-manager/package/manifest),
 [first contribution](https://github.com/microsoft/winget-pkgs/blob/master/doc/FirstContribution.md),
