@@ -72,12 +72,13 @@ PackageUrl: {url}
 PrivacyUrl: {PRIVACY_URL}
 License: MIT
 LicenseUrl: {url}/blob/{tag}/LICENSE
-ShortDescription: A unified top-like resource monitor for Windows, WSL2, Docker, and WSL Containers.
+ShortDescription: A unified top-like resource monitor for Windows, WSL, Docker, and WSL Containers.
 Description: |-
   Runs natively on Windows and WSL with interactive and one-shot views,
   CPU/memory/name sorting, resource hierarchy, and JSON output.
-  Requires Windows 11 and a usable primary WSL2 distribution.
-  Docker and WSL Containers are optional. WSL1 is not supported.
+  Requires Windows 11 and a usable primary Linux distribution running in WSL 2 mode.
+  WSL package versions, including 3.x, are separate from the distribution mode.
+  Docker and WSL Containers are optional. WSL 1 mode is not supported.
 Moniker: wsltop
 Tags:
 - monitoring

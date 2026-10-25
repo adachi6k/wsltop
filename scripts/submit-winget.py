@@ -102,7 +102,8 @@ def submit(directory, tag):
 Add {PACKAGE} {version}, a portable Windows/WSL resource monitor.
 Official release: https://github.com/adachi6k/wsltop/releases/tag/{tag}
 The ZIP checksum and nested executable path were verified before manifest generation.
-Windows 11 and a usable WSL2 distribution are required to monitor workloads.
+Windows 11 and a usable primary Linux distribution running in WSL 2 mode are required to monitor workloads.
+WSL package versions, including 3.x, are separate from the distribution mode.
 
 ## Manifest checklist
 

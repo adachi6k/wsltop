@@ -14,15 +14,19 @@ listener. Normal CLI/TUI and `--json` output remain separate.
 ## Quick start
 
 Install wsltop v0.5.1 or later using the [README quick start](../README.md#quick-start).
-Windows 11 with a usable WSL2 distribution is required; the Linux executable runs
-inside WSL2, not on standalone Linux.
+Windows 11 with a Linux distribution running in WSL 2 mode is required; the Linux
+executable runs inside that distribution, not on standalone Linux. See the
+[runtime requirements](../README.md#quick-start) for the distinction between WSL
+package versions (such as 3.x) and distribution modes.
 Configure your client to launch the executable with `["mcp"]` arguments and stdio
 transport; the client starts the server, so no separate background service is needed.
 Use an **absolute executable path**, not `~` or an unexpanded environment variable.
 The examples use the common `mcpServers` form; adapt the surrounding configuration
 to your client's documented stdio-server format.
 
-### Client running inside WSL2
+<a id="client-running-inside-wsl2"></a>
+
+### Client running inside WSL
 
 For a client running in WSL, point its server configuration at your installed binary.
 For a default Cargo installation, replace `<user>` with your Linux username:

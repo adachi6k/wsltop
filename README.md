@@ -1,6 +1,6 @@
 # wsltop
 
-`wsltop` is a unified top-like resource monitor for Windows, WSL2, Docker, and WSL Containers (WSLC). It runs natively on both Windows and WSL, combining host and guest observations on one host-wide CPU scale.
+`wsltop` is a unified top-like resource monitor for Windows, WSL, Docker, and WSL Containers (WSLC). It runs natively on both Windows and WSL, combining host and guest observations on one host-wide CPU scale.
 
 > Windows Task Manager says `VmmemWSL` is busy. `wsltop` shows which Windows, WSL, WSLC, or Docker workload is responsible.
 
@@ -28,8 +28,15 @@ are each limited to 0.25 CPU cores. [Capture details](docs/assets/README.md).
 
 ## Quick start
 
-Requires Windows 11 with a usable WSL2 distribution; the Linux binary runs
-inside WSL2. Docker and WSLC are optional.
+Requires Windows 11 and a Linux distribution running in WSL 2 mode; the Linux
+binary runs inside that distribution. Docker and WSLC are optional.
+
+WSL package versions, such as 3.x, are separate from the WSL 2 distribution mode.
+Use `wsl --version` to check the package version and `wsl --list --verbose` to
+confirm `VERSION 2` for the distribution. From a WSL shell, use `wsl.exe` instead
+of `wsl`. See [Microsoft's command reference](https://learn.microsoft.com/en-us/windows/wsl/basic-commands).
+Real-host checks for wsltop v1.0.1 include WSL 3.0.3; see the
+[release validation record](docs/validation/2026-10-24-v1.0.1.md).
 
 With [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) installed,
 you can fetch the x64 GitHub Releases binaries without a source build,
@@ -475,7 +482,7 @@ execution tools, process kill/termination, container stop/control, or network li
 The four tools are `get_system_summary`, `list_resources`, `inspect_resource`,
 and `list_children`.
 
-For a client running inside WSL2, add this stdio server configuration (replace
+For a client running inside WSL, add this stdio server configuration (replace
 `<user>` with your username). Run `command -v wsltop` to check the absolute path:
 
 ```json
@@ -528,14 +535,14 @@ See the [agent workflow](docs/mcp.md#agent-workflow-example) and
 
 ## Limitations
 
-- WSL1 is unsupported and untested; use WSL2.
+- WSL 1 mode is unsupported and untested; use a distribution running in WSL 2 mode.
 - Additional-distro startup/stop discovery is best effort. Docker/WSLC process detail may lag aggregate rows because collection runs at independent cadences.
 - Sampling is best effort. Linux, PowerShell, WSLC, Docker, and remote-distro snapshots are not captured atomically.
 - PowerShell process collection adds latency, but runs independently of other interactive collectors; the Windows logical CPU count is cached after its first successful query.
 - WSLC session attribution is deliberately conservative when multiple host mappings are possible.
 - Docker process `%CPU` from `docker top` is a ps-style lifetime/decay average and may not align precisely with interval-sampled container or `/proc` CPU.
 - Memory values from Windows, WSLC, and Docker have different meanings and are not attributed by subtraction.
-- Both executables require access to a WSL2 distribution; Windows-only monitoring without WSL is not supported.
+- Both executables require access to a Linux distribution running in WSL 2 mode; Windows-only monitoring without WSL is not supported.
 - Remote WSL discovery and snapshots can wait on `wsl.exe`. Optional TUI discovery runs separately from primary sampling, but primary selection/collection can still be delayed.
 
 ## Documentation

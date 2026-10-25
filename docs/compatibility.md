@@ -86,9 +86,13 @@ normal termination only. 1.0 does not broaden that scope or remove identity
 checks. Python and pidfd requirements apply to this optional action, not to
 ordinary monitoring.
 
-The supported runtime is Windows 11 with WSL2, using the Windows-native or
-WSL-native executable. Docker and WSLC are optional. Missing optional collectors
-can limit observations; 1.0 does not promise identical data on every host.
+The supported runtime is Windows 11 with a Linux distribution running in WSL 2
+mode, using the Windows-native or WSL-native executable. WSL 1 mode is unsupported.
+WSL package versions, including 3.x, are numbered separately from the distribution
+mode; see the [runtime requirements](../README.md#quick-start) for verification
+commands and recorded real-host checks.
+Docker and WSLC are optional. Missing optional collectors can limit observations;
+1.0 does not promise identical data on every host.
 Published binaries target x64 Windows MSVC and x64 Linux GNU. Source builds use
 current stable Rust; no older minimum Rust version is currently promised.
 

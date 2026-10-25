@@ -10,7 +10,9 @@ upstream PR is merged and the package appears in the WinGet source.
 
 The official GitHub Release ZIP is used unchanged as a nested portable package.
 The command alias is `wsltop`. Minimum Windows version is Windows 11
-(`10.0.22000.0`); the description explains the required primary WSL2 distribution.
+(`10.0.22000.0`); the description requires a usable primary Linux distribution
+running in WSL 2 mode. WSL package versions, including 3.x, are separate from
+that distribution mode.
 Installing the package does not provision WSL or a distribution.
 
 Generated manifests include `PrivacyUrl` pointing to a published, immutable
