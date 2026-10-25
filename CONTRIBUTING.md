@@ -28,6 +28,6 @@ Run `cargo run --locked -- --help` and `cargo run --locked -- --version` when ch
 
 ## Windows and WSL validation
 
-Ubuntu CI cannot exercise Windows interoperability or provide meaningful WSLC, Docker Desktop, multi-distribution, `vmmem*`, and Task Manager comparisons. Collector or accounting changes should be tested on a real Windows 11 + WSL2 host using [the validation plan](docs/test-plan.md). Include relevant Windows, WSL, distro, WSLC, Docker, and `wsltop` versions in the pull request.
+Ubuntu CI cannot exercise Windows interoperability or provide meaningful WSLC, Docker Desktop, multi-distribution, `vmmem*`, and Task Manager comparisons. Collector or accounting changes should be tested on a real Windows 11 host with a Linux distribution running in WSL 2 mode using [the validation plan](docs/test-plan.md). Include the Windows version, WSL package version (`wsl --version`), distribution mode (`wsl --list --verbose`), and relevant distro, WSLC, Docker, and `wsltop` versions in the pull request.
 
 Never include credentials, private container data, or other sensitive output in an issue or pull request.

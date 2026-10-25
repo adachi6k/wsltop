@@ -1,6 +1,6 @@
 # Validation and Test Plan
 
-This document separates automated CI checks from real Windows/WSL host validation. CI runs portable checks on Ubuntu, a Windows GNU cross-target check, and native Windows tests, an MSVC release build, and help/version smoke checks. Collectors that require WSL2, Windows interoperability, WSLC, Docker, or multiple distributions must be exercised on representative hosts before release.
+This document separates automated CI checks from real Windows/WSL host validation. CI runs portable checks on Ubuntu, a Windows GNU cross-target check, and native Windows tests, an MSVC release build, and help/version smoke checks. Collectors that require WSL, Windows interoperability, WSLC, Docker, or multiple distributions must be exercised on representative hosts before release.
 
 Recorded runs: [validation index](validation/README.md), including Windows-native
 archive/TUI smoke tests, CPU investigations and release acceptance records.
@@ -30,10 +30,13 @@ additional-collector cadence floor, and shutdown polling latency.
 
 ## Windows-native and WSL-native smoke procedure
 
-Use a Windows 11 + WSL2 host with a primary distro and a second disposable test
-distro. Record the commit/tag, Windows and WSL versions, distro names, host/guest
-CPU counts, terminal, and available Docker/WSLC versions. Run the same scenarios
-with both executables; a cross-target compile is not a runtime test.
+Use a Windows 11 host with a primary distro and a second disposable test distro
+running in WSL 2 mode. Record the commit/tag, Windows version, WSL package version
+(`wsl --version`), distribution modes (`wsl --list --verbose`), distro names,
+host/guest CPU counts, terminal, and available Docker/WSLC versions. From a WSL
+shell, use `wsl.exe` instead of `wsl`. WSL package releases such as 3.x are
+numbered separately from distribution modes. Run the same scenarios with both
+executables; a cross-target compile is not a runtime test.
 
 ### Windows PowerShell
 
@@ -188,7 +191,7 @@ Validate these failure paths deliberately:
 Before tagging a release:
 
 1. All automated commands pass from a clean checkout using `Cargo.lock`.
-2. The feature matrix is exercised on at least one current Windows 11 + WSL2 host.
+2. The feature matrix is exercised on at least one current Windows 11 host with distributions running in WSL 2 mode; record the WSL package version separately.
 3. CPU normalization is checked against one-CPU and four-CPU workloads.
 4. At least one optional-collector failure path is verified for WSLC and Docker.
 5. Validate both Linux x86_64 tar.gz and Windows x86_64 MSVC ZIP packaging in a dry run: each archive contains its executable, README, and LICENSE in a versioned directory; each SHA-256 file matches the archive; extracted executables pass help/version. Do not push a test `v*` tag merely to validate packaging, because a valid release tag publishes to both GitHub Releases and crates.io.
