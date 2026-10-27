@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Added
+
+- `--no-windows` hides Windows processes and applications from flat, tree and JSON output while keeping every running WSL distribution, Docker and WSLC row. Windows collection still runs, so the summary header and host-wide CPU normalization are unchanged. In the TUI, `w` toggles the filter.
+
 ## [1.0.1] - 2026-10-24
 
 ### Fixed

@@ -241,6 +241,7 @@ wsltop [OPTIONS]
 --sort cpu|memory|name Sort resources and their children (default: cpu)
 --sort-order asc|desc  Sort direction (default: desc)
 --hide-infra           Hide infrastructure rows
+--no-windows           Hide Windows processes/applications; keep all WSL distros
 ```
 
 Options that affect collection or the initial view also apply to interactive mode. `--once` remains an explicit alias for the default one-shot behavior.
@@ -288,6 +289,7 @@ Controls:
 | `c`, `m`, `n` | Sort by CPU, memory, or name |
 | `r` | Reverse sort direction |
 | `i` | Toggle infrastructure rows |
+| `w` | Toggle Windows process/application rows |
 | `h` | Toggle raw WSL host rows in flat view |
 | `0` | Toggle zero-CPU rows |
 | `?` | Open/close summary help (arrows/Pg scroll; Esc closes help) |

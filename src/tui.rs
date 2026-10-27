@@ -246,6 +246,7 @@ struct State {
     scroll: usize,
     tree: bool,
     hide_infra: bool,
+    hide_windows: bool,
     show_hosts: bool,
     status: String,
     hide_zero: bool,
@@ -436,6 +437,7 @@ impl State {
             items.extend([
                 "t tree".to_owned(),
                 format!("i infra:{}", on_off(!self.hide_infra)),
+                format!("w win:{}", on_off(!self.hide_windows)),
                 format!("h hosts:{}", on_off(self.show_hosts)),
                 format!("0 zero:{}", on_off(!self.hide_zero)),
             ]);
@@ -482,6 +484,7 @@ impl State {
             query: config.query(),
             tree,
             hide_infra: config.hide_infra,
+            hide_windows: config.hide_windows,
             show_hosts: config.show_wsl_host,
             status: "sampling...".to_string(),
             cpu_scale,
@@ -568,6 +571,10 @@ impl State {
                 self.selected = None;
             }
             KeyCode::Char('i') => self.hide_infra = !self.hide_infra,
+            KeyCode::Char('w') => {
+                self.hide_windows = !self.hide_windows;
+                self.scroll = 0;
+            }
             KeyCode::Char('h') => self.show_hosts = !self.show_hosts,
             KeyCode::Char('0') => self.hide_zero = !self.hide_zero,
             KeyCode::Char('c' | 'm' | 'n') => {
@@ -636,6 +643,7 @@ impl State {
             return;
         };
         self.query.hide_infra = self.hide_infra;
+        self.query.hide_windows = self.hide_windows;
         self.query.show_wsl_host = self.show_hosts;
         snapshot.requery(&self.query);
         let (output, rows) = if self.tree {
@@ -820,6 +828,7 @@ mod tests {
             no_wslc: false,
             no_docker: false,
             hide_infra: false,
+            hide_windows: false,
             show_container_processes: true,
             container_process_limit: 5,
             collect_windows_applications: false,
@@ -1227,6 +1236,10 @@ mod tests {
         state.key(KeyCode::Char('i'));
         assert_eq!(state.scroll, 0);
         assert!(state.tree && state.hide_infra);
+        state.key(KeyCode::Char('w'));
+        assert!(state.hide_windows);
+        state.key(KeyCode::Char('w'));
+        assert!(!state.hide_windows);
         assert!(state.key(KeyCode::Char('q')));
     }
 
@@ -1241,6 +1254,7 @@ mod tests {
             no_wslc: true,
             no_docker: true,
             hide_infra: true,
+            hide_windows: true,
             show_container_processes: false,
             container_process_limit: 5,
             collect_windows_applications: true,
@@ -1248,6 +1262,7 @@ mod tests {
         let state = State::from_config(&config, true, CpuScale::Core);
         assert!(state.tree);
         assert!(state.hide_infra);
+        assert!(state.hide_windows);
         assert!(state.show_hosts);
         assert_eq!(state.cpu_scale, CpuScale::Core);
     }
@@ -1264,6 +1279,7 @@ mod tests {
             no_wslc: true,
             no_docker: true,
             hide_infra: false,
+            hide_windows: false,
             show_container_processes: false,
             container_process_limit: 1,
             collect_windows_applications: false,
@@ -1323,6 +1339,7 @@ mod tests {
             no_wslc: true,
             no_docker: true,
             hide_infra: false,
+            hide_windows: false,
             show_container_processes: false,
             container_process_limit: 5,
             collect_windows_applications: false,
@@ -1383,6 +1400,7 @@ mod tests {
             no_wslc: true,
             no_docker: true,
             hide_infra: false,
+            hide_windows: false,
             show_container_processes: false,
             container_process_limit: 5,
             collect_windows_applications: false,

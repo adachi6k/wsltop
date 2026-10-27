@@ -59,6 +59,7 @@ struct Options {
     wsl_only: bool,
     no_wslc: bool,
     hide_infra: bool,
+    hide_windows: bool,
     tree: bool,
     no_docker: bool,
     interactive: bool,
@@ -110,6 +111,7 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
         no_wslc: options.no_wslc,
         no_docker: options.no_docker,
         hide_infra: options.hide_infra,
+        hide_windows: options.hide_windows,
         show_container_processes: options.show_container_processes,
         container_process_limit: options.container_process_limit,
         collect_windows_applications,
@@ -146,6 +148,9 @@ fn run(options: Options) -> Result<(), Box<dyn Error>> {
 }
 
 fn needs_windows_applications(options: &Options) -> bool {
+    if options.hide_windows && !options.interactive {
+        return false;
+    }
     options.interactive || !options.json || options.tree
 }
 
@@ -169,6 +174,7 @@ where
         wsl_only: false,
         no_wslc: false,
         hide_infra: false,
+        hide_windows: false,
         tree: false,
         no_docker: false,
         interactive: false,
@@ -217,6 +223,7 @@ where
             }
             "--no-wslc" => options.no_wslc = true,
             "--hide-infra" => options.hide_infra = true,
+            "--no-windows" => options.hide_windows = true,
             "--tree" => options.tree = true,
             "--no-docker" => options.no_docker = true,
             "--show-container-processes" | "--show-docker-processes" => {
@@ -278,7 +285,7 @@ fn print_help() {
         "wsltop {}\n\n\
 Unified Windows, WSL, WSL Containers, and Docker resource monitor\n\n\
 USAGE:\n    wsltop [OPTIONS]\n    wsltop mcp [COLLECTOR OPTIONS] (read-only stdio; see wsltop mcp --help)\n\n\
-OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --sort KEY            Sort resources by cpu, memory or name [default: cpu]\n    --sort-order ORDER    Sort direction: asc or desc [default: desc]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --distro NAME          Select the primary WSL distro (Windows-native only)\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    -h, --help             Show this help\n    -V, --version          Show version\n",
+OPTIONS:\n    --once                 Take one sampled measurement (default behavior)\n    -i, --interactive      Run the continuously updating terminal UI\n    --json                 Emit JSON instead of a table (not valid with --interactive)\n    --tree                 Show the CPU attribution tree (initial TUI view when interactive)\n    --limit N              Show at most N flat resources [default: 30]\n    --interval-ms N        Sampling/refresh interval in milliseconds [default: {}]\n    --sort KEY            Sort resources by cpu, memory or name [default: cpu]\n    --sort-order ORDER    Sort direction: asc or desc [default: desc]\n    --cpu-scale SCALE      CPU display scale: core or host [default: core]\n    --show-wsl-host        Include raw vmmem/vmmemWSL/vmmemwslc-* rows in flat views\n    --distro NAME          Select the primary WSL distro (Windows-native only)\n    --wsl-only             Skip Windows, additional distro, and WSLC collectors\n    --no-wslc              Disable automatic WSLC container collection\n    --no-docker            Disable automatic Docker container collection\n    --show-container-processes Include Docker/WSLC processes (default for text/TUI)\n    --hide-container-processes Hide Docker/WSLC processes from flat output\n    --container-process-limit N Show at most N processes per container [default: 5]\n    --hide-infra           Hide infrastructure resource rows\n    --no-windows           Hide Windows processes/applications (summary totals kept)\n    -h, --help             Show this help\n    -V, --version          Show version\n",
         env!("CARGO_PKG_VERSION"),
         DEFAULT_INTERVAL_MS
     );
@@ -309,6 +316,19 @@ mod tests {
         ] {
             assert!(parse_args_from(args).is_err());
         }
+    }
+
+    #[test]
+    fn no_windows_is_a_view_filter_that_skips_one_shot_application_metadata() {
+        let defaults = parse_args_from(Vec::<String>::new()).unwrap();
+        assert!(!defaults.hide_windows);
+        let options = parse_args_from(["--no-windows"]).unwrap();
+        assert!(options.hide_windows);
+        assert!(!options.wsl_only);
+        assert!(!super::needs_windows_applications(&options));
+        // The TUI keeps the metadata so the `w` toggle can bring rows back.
+        let interactive = parse_args_from(["--no-windows", "--interactive"]).unwrap();
+        assert!(super::needs_windows_applications(&interactive));
     }
 
     #[test]
