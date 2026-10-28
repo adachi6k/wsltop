@@ -315,7 +315,7 @@ N/A: disabled, warming up, unavailable or incomplete collection.\n\
 --wsl-only: WSL-native uses visible CPUs; Windows-native uses host CPUs.\n\
 Filters, limits, sorting and row CPU scale do not change the summary.\n\n\
 ? close help | t tree/flat | c/m/n sort CPU/memory/name | r reverse\n\
-i infrastructure | w Windows rows | h VM hosts | 0 zero rows | arrows/Pg scroll\n\
+i infrastructure | w Windows processes/apps | h VM hosts | 0 zero rows | arrows/Pg scroll\n\
 s select in flat view (arrows/Pg move selection); s returns to scrolling\n\
 k request SIGTERM (Windows TUI, primary WSL only); y confirms, Esc cancels\n\
 Termination needs Python 3.9+ and pidfd in WSL; no install or kill fallback.\n\

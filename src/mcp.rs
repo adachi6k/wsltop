@@ -487,6 +487,7 @@ mod tests {
             assert!(Arguments::parse(name, args.as_object().unwrap().clone()).is_err());
         }
         assert!(collector_options(&["--once".into()]).is_err());
+        assert!(collector_options(&["--hide-windows".into()]).is_err());
         assert!(collector_options(&["--interval-ms".into()]).is_err());
         let (config, _) = collector_options(&[
             "--wsl-only".into(),

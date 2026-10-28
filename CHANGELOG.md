@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file. The format 
 
 ### Added
 
-- `--no-windows` hides Windows processes and applications from flat, tree and JSON output while keeping every running WSL distribution, Docker and WSLC row. Windows collection still runs, so the summary header and host-wide CPU normalization are unchanged. In the TUI, `w` toggles the filter.
+- `--hide-windows` hides Windows processes and applications from flat, tree and JSON output while preserving Windows process measurements and the selected WSL, Docker and WSLC collectors. Summary totals and CPU normalization are unchanged. Raw VM host rows follow `--show-wsl-host` in flat views and remain as attribution parents in tree views. In the TUI, `w` toggles the filter immediately.
 
 ## [1.0.1] - 2026-10-24
 

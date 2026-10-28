@@ -241,10 +241,17 @@ wsltop [OPTIONS]
 --sort cpu|memory|name Sort resources and their children (default: cpu)
 --sort-order asc|desc  Sort direction (default: desc)
 --hide-infra           Hide infrastructure rows
---no-windows           Hide Windows processes/applications; keep all WSL distros
+--hide-windows         Hide Windows processes/applications; keep all WSL distros
 ```
 
 Options that affect collection or the initial view also apply to interactive mode. `--once` remains an explicit alias for the default one-shot behavior.
+
+`--hide-windows` filters Windows process/application rows in text, JSON, and the
+TUI. Windows host/process measurements and the selected WSL/container collectors
+continue running, so summary totals and CPU normalization are unchanged. Raw
+`vmmem*` rows still require `--show-wsl-host` in flat views; tree views retain VM
+parents for attribution. In the TUI, `w` toggles this filter. The `--no-docker`
+and `--no-wslc` options disable their respective collectors.
 
 For a memory ranking, use `wsltop --sort memory`; for alphabetical JSON, use
 `wsltop --json --sort name --sort-order asc`. TUI keys `c`, `m`, and `n` select
