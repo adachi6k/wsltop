@@ -130,6 +130,10 @@ pub struct ResourceQuery {
     pub show_container_processes: bool,
     pub show_wsl_host: bool,
     pub hide_infra: bool,
+    /// Hide Windows processes and applications. Raw WSL host rows (vmmem*)
+    /// follow `show_wsl_host` in flat views and remain as attribution parents
+    /// in tree views. Summary totals and collector selection are unchanged.
+    pub hide_windows: bool,
 }
 
 impl Default for ResourceQuery {
@@ -141,8 +145,13 @@ impl Default for ResourceQuery {
             show_container_processes: false,
             show_wsl_host: false,
             hide_infra: false,
+            hide_windows: false,
         }
     }
+}
+
+fn windows_workload(row: &ResourceUsage) -> bool {
+    row.environment == EnvironmentKind::Windows && !attribution::is_host_resource(row)
 }
 
 fn container_process(row: &ResourceUsage) -> bool {
@@ -159,6 +168,7 @@ impl ResourceQuery {
             .iter()
             .filter(|row| self.show_wsl_host || !attribution::is_host_resource(row))
             .filter(|row| !self.hide_infra || row.kind != ResourceKind::Infra)
+            .filter(|row| !self.hide_windows || !windows_workload(row))
             .cloned()
             .partition(container_process);
         self.sort.resources(&mut parents);
@@ -190,6 +200,10 @@ impl ResourceQuery {
         let mut tree = source.clone();
         if self.hide_infra {
             attribution::hide_infra(&mut tree);
+        }
+        if self.hide_windows {
+            tree.windows_applications.clear();
+            tree.unmapped_children.retain(|row| !windows_workload(row));
         }
         tree.groups
             .sort_by(|a, b| self.sort.compare(&a.host, &b.host));
@@ -388,6 +402,92 @@ pub(crate) mod tests {
         assert_eq!(names(&query.flat(&rows)), ["wslc", "docker"]);
         query.limit = 0;
         assert!(query.flat(&rows).is_empty());
+    }
+
+    #[test]
+    fn hide_windows_keeps_every_wsl_distro_and_container_but_drops_windows_workloads() {
+        let mut app = row("Chrome", 50.0, 10);
+        app.environment = EnvironmentKind::Windows;
+        app.kind = ResourceKind::Application;
+        let mut winproc = row("svchost", 40.0, 10);
+        winproc.environment = EnvironmentKind::Windows;
+        let mut vmmem = row("vmmemWSL", 30.0, 10);
+        vmmem.environment = EnvironmentKind::Windows;
+        vmmem.kind = ResourceKind::Host;
+        let primary = row("cargo", 20.0, 10);
+        let mut other_distro = row("rustc", 10.0, 10);
+        other_distro.source = Some("todis-eudiw".into());
+        let mut docker = row("postgres", 5.0, 10);
+        docker.environment = EnvironmentKind::Docker;
+        docker.kind = ResourceKind::Container;
+        let mut wslc = row("wslc", 3.0, 10);
+        wslc.environment = EnvironmentKind::WslContainer;
+        wslc.kind = ResourceKind::Container;
+        let rows = vec![app, winproc, vmmem, primary, other_distro, docker, wslc];
+
+        let mut query = ResourceQuery {
+            hide_windows: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            names(&query.flat(&rows)),
+            ["cargo", "rustc", "postgres", "wslc"]
+        );
+        // Hidden Windows workloads must not consume the flat row limit.
+        query.limit = 1;
+        assert_eq!(names(&query.flat(&rows)), ["cargo"]);
+        query.limit = 30;
+        // Raw VM host rows remain under the existing --show-wsl-host switch.
+        query.show_wsl_host = true;
+        assert_eq!(
+            names(&query.flat(&rows)),
+            ["vmmemWSL", "cargo", "rustc", "postgres", "wslc"]
+        );
+        query.hide_windows = false;
+        assert_eq!(query.flat(&rows).len(), 7);
+    }
+
+    #[test]
+    fn hide_windows_clears_tree_applications_and_windows_unmapped_children() {
+        let mut winproc = row("svchost", 4.0, 10);
+        winproc.environment = EnvironmentKind::Windows;
+        let wsl = row("cargo", 2.0, 10);
+        let mut host = row("vmmemWSL", 3.0, 10);
+        host.environment = EnvironmentKind::Windows;
+        host.kind = ResourceKind::Host;
+        let tree = AttributionTree {
+            host_logical_cpu_count: 8,
+            groups: vec![AttributionGroup {
+                name: "WSL VM".into(),
+                host,
+                cpu_percent: 3.0,
+                children: vec![wsl.clone()],
+                known_children_cpu_percent: 2.0,
+                unattributed_cpu_percent: 1.0,
+                over_attributed_cpu_percent: 0.0,
+                mapping_status: MappingStatus::Resolved,
+            }],
+            unmapped_children: vec![winproc.clone(), wsl.clone()],
+            docker_groups: Vec::new(),
+            wslc_groups: Vec::new(),
+            windows_applications: vec![WindowsApplicationUsage {
+                resource: winproc.clone(),
+                processes: vec![winproc],
+            }],
+        };
+        let query = ResourceQuery {
+            hide_windows: true,
+            ..Default::default()
+        };
+        let view = query.tree(&tree);
+        assert!(view.windows_applications.is_empty());
+        assert_eq!(names(&view.unmapped_children), ["cargo"]);
+        assert_eq!(view.groups[0].host.name, "vmmemWSL");
+        assert_eq!(names(&view.groups[0].children), ["cargo"]);
+        assert_eq!(view.groups[0].cpu_percent, 3.0);
+        assert_eq!(view.groups[0].unattributed_cpu_percent, 1.0);
+        // The retained source is untouched so the TUI toggle can restore it.
+        assert_eq!(tree.windows_applications.len(), 1);
     }
 
     #[test]

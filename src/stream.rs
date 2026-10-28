@@ -1103,6 +1103,7 @@ mod tests {
             no_wslc: false,
             no_docker: false,
             hide_infra: false,
+            hide_windows: false,
             show_container_processes: false,
             container_process_limit: 5,
             collect_windows_applications: true,

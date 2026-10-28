@@ -142,6 +142,7 @@ procedure or passing CI does not mark it complete.
 | Initial interactive options | Combine `--interactive` with interval, collector switches, limit, tree, infra, and host options | Initial state and all collection/filter choices are honored |
 | Invalid interactive JSON | `wsltop --interactive --json` | Exits with an explicit incompatibility error and restores terminal state |
 | Hide infrastructure | `wsltop --hide-infra` and toggle `i` in TUI | `plan9` infrastructure rows are hidden as selected |
+| Hide Windows workloads | `wsltop --hide-windows` with flat/tree and text/JSON output; toggle `w` in TUI | Windows processes/applications are hidden; enabled WSL, Docker and WSLC collectors continue. Summary totals stay unchanged. Raw VM hosts follow `--show-wsl-host` in flat views and remain as tree parents. `w` hides/restores rows immediately, including when started with `--hide-windows` |
 | Show raw host | `wsltop --show-wsl-host` | Raw `vmmem*` host rows appear only in flat views |
 | WSL-only | `wsltop --wsl-only` | Current distro and optional Docker data remain; Windows, additional distros, and WSLC are skipped; limitation warning appears |
 

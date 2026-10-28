@@ -87,6 +87,7 @@ fn collector_options(args: &[String]) -> Result<(MonitorConfig, Option<String>),
             no_wslc: options.no_wslc,
             no_docker: options.no_docker,
             hide_infra: false,
+            hide_windows: false,
             show_container_processes: true,
             container_process_limit: 5,
             collect_windows_applications: true,
@@ -486,6 +487,7 @@ mod tests {
             assert!(Arguments::parse(name, args.as_object().unwrap().clone()).is_err());
         }
         assert!(collector_options(&["--once".into()]).is_err());
+        assert!(collector_options(&["--hide-windows".into()]).is_err());
         assert!(collector_options(&["--interval-ms".into()]).is_err());
         let (config, _) = collector_options(&[
             "--wsl-only".into(),

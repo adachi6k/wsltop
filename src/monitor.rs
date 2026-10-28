@@ -17,6 +17,7 @@ pub struct MonitorConfig {
     pub no_wslc: bool,
     pub no_docker: bool,
     pub hide_infra: bool,
+    pub hide_windows: bool,
     pub show_container_processes: bool,
     pub container_process_limit: usize,
     pub collect_windows_applications: bool,
@@ -53,6 +54,7 @@ impl MonitorConfig {
             show_container_processes: self.show_container_processes,
             show_wsl_host: self.show_wsl_host,
             hide_infra: self.hide_infra,
+            hide_windows: self.hide_windows,
         }
     }
 }
@@ -456,6 +458,7 @@ mod tests {
             no_wslc: false,
             no_docker: false,
             hide_infra: false,
+            hide_windows: false,
             show_container_processes: false,
             container_process_limit: 5,
             collect_windows_applications: true,
