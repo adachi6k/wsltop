@@ -52,14 +52,11 @@ pub fn run(
 
         if event::poll(Duration::from_millis(100))? {
             if let Some(code) = actionable_key(event::read()?) {
+                let previous_tree = state.tree;
                 if state.key(code) {
                     break;
                 }
-                if matches!(
-                    code,
-                    KeyCode::Char('t' | 's' | 'i' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
-                ) {
-                    state.rebuild_lines();
+                if state.tree != previous_tree {
                     worker.set_details(state.tree);
                 }
             }
@@ -591,6 +588,13 @@ impl State {
             }
             _ => {}
         }
+        // Update the displayed rows before another sample arrives.
+        if matches!(
+            code,
+            KeyCode::Char('t' | 's' | 'i' | 'w' | 'h' | '0' | 'c' | 'm' | 'n' | 'r')
+        ) {
+            self.rebuild_lines();
+        }
         false
     }
 
@@ -925,7 +929,6 @@ mod tests {
             );
             assert!(expected.iter().any(|row| row.contains("child-process")));
             state.key(KeyCode::Char('t'));
-            state.rebuild_lines();
             let expected: Vec<_> =
                 crate::render::tree(state.snapshot.as_ref().unwrap(), state.cpu_scale)
                     .lines()
@@ -1268,6 +1271,113 @@ mod tests {
     }
 
     #[test]
+    fn windows_toggle_redraws_flat_and_tree_without_waiting_for_a_sample() {
+        use crate::model::{EnvironmentKind, ResourceKind, WindowsApplicationUsage};
+        use ratatui::{backend::TestBackend, Terminal};
+
+        for tree in [false, true] {
+            for initially_hidden in [false, true] {
+                let config = MonitorConfig {
+                    sort: Default::default(),
+                    interval: Duration::from_secs(30),
+                    limit: 30,
+                    show_wsl_host: false,
+                    wsl_only: false,
+                    no_wslc: true,
+                    no_docker: true,
+                    hide_infra: false,
+                    hide_windows: initially_hidden,
+                    show_container_processes: false,
+                    container_process_limit: 5,
+                    collect_windows_applications: true,
+                };
+                let wsl = crate::query::tests::row("wsl-worker", 10.0, 100);
+                let mut windows = crate::query::tests::row("win-worker", 20.0, 200);
+                windows.environment = EnvironmentKind::Windows;
+                let mut app = windows.clone();
+                app.kind = ResourceKind::Application;
+                app.name = "win-app".into();
+                app.id = "windows-app:test".into();
+                app.pid = None;
+                let sample = || {
+                    let mut tree = crate::attribution::build_tree_with_docker(
+                        8,
+                        &[],
+                        std::slice::from_ref(&wsl),
+                        &[],
+                        &[],
+                    );
+                    tree.windows_applications = vec![WindowsApplicationUsage {
+                        resource: app.clone(),
+                        processes: vec![windows.clone()],
+                    }];
+                    let rows = vec![windows.clone(), wsl.clone()];
+                    let summary = crate::summary::EnvironmentSummary::collect(&rows, [true; 4]);
+                    let mut snapshot = crate::monitor::MonitorSnapshot::from_collected(
+                        rows,
+                        tree,
+                        vec![],
+                        &config,
+                    );
+                    snapshot.host_cpu_percent = Some(42.5);
+                    snapshot.environment_summary = summary;
+                    snapshot
+                };
+                let mut state = State::from_config(&config, tree, CpuScale::Core);
+                state.apply_sample(Ok(sample()));
+                let summary = state.snapshot.as_ref().unwrap().environment_summary.0;
+                let mut terminal = Terminal::new(TestBackend::new(180, 24)).unwrap();
+                for hidden in [initially_hidden, !initially_hidden, initially_hidden] {
+                    if state.hide_windows != hidden {
+                        state.scroll = 10;
+                        assert!(!state.key(KeyCode::Char('w')));
+                        assert_eq!(state.scroll, 0);
+                    }
+                    terminal
+                        .draw(|frame| {
+                            draw_ui(
+                                frame,
+                                &mut state,
+                                HeaderMode::Compact,
+                                false,
+                                config.interval,
+                            )
+                        })
+                        .unwrap();
+                    let screen: String = terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .map(|cell| cell.symbol())
+                        .collect();
+                    assert_eq!(screen.contains("win-app"), !hidden);
+                    assert_eq!(screen.contains("win-worker"), tree && !hidden);
+                    assert!(screen.contains("wsl-worker"));
+                    assert!(screen.contains(if hidden { "win:off" } else { "win:on" }));
+                    let snapshot = state.snapshot.as_ref().unwrap();
+                    assert_eq!(snapshot.host_cpu_percent, Some(42.5));
+                    assert_eq!(snapshot.environment_summary.0, summary);
+                }
+                // Incoming samples must preserve the user's toggled view.
+                state.key(KeyCode::Char('w'));
+                state.apply_sample(Ok(sample()));
+                assert_eq!(state.hide_windows, !initially_hidden);
+                assert_eq!(
+                    state
+                        .snapshot
+                        .as_ref()
+                        .unwrap()
+                        .tree
+                        .windows_applications
+                        .len(),
+                    usize::from(initially_hidden)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn sort_keys_requery_untruncated_snapshot_immediately_and_survive_updates() {
         use crate::query::{SortKey, SortOrder};
         let config = MonitorConfig {
@@ -1301,7 +1411,6 @@ mod tests {
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
         state.scroll = 10;
         state.key(KeyCode::Char('m'));
-        state.rebuild_lines();
         assert_eq!(state.scroll, 0);
         assert_eq!(state.query.sort.key, SortKey::Memory);
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
@@ -1309,15 +1418,12 @@ mod tests {
         state.apply_sample(Ok(sample()));
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
         state.key(KeyCode::Char('r'));
-        state.rebuild_lines();
         assert_eq!(state.query.sort.order, SortOrder::Asc);
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
         state.key(KeyCode::Char('n'));
-        state.rebuild_lines();
         assert_eq!(state.query.sort.key, SortKey::Name);
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "busy");
         state.key(KeyCode::Char('c'));
-        state.rebuild_lines();
         assert_eq!(state.snapshot.as_ref().unwrap().resources[0].name, "large");
         state.apply_sample(Err("offline".into()));
         assert_eq!(super::host_cpu_label(state.snapshot.as_ref()), "N/A");
@@ -1359,12 +1465,10 @@ mod tests {
         let mut state = State::from_config(&config, false, CpuScale::Core);
         state.apply_sample(Ok(sample(vec![first.clone(), second.clone()])));
         state.key(KeyCode::Char('s'));
-        state.rebuild_lines();
         state.key(KeyCode::Down);
         assert_eq!(state.selected.as_ref().unwrap().pid, Some(101));
         let first_line = state.selected_line().unwrap();
         state.key(KeyCode::Char('m'));
-        state.rebuild_lines();
         assert_eq!(state.selected.as_ref().unwrap().pid, Some(101));
         assert_ne!(state.selected_line().unwrap(), first_line);
         first.start_id = Some(999);
@@ -1378,7 +1482,6 @@ mod tests {
         second.cpu_percent = 0.0;
         state.apply_sample(Ok(sample(vec![first, second])));
         state.key(KeyCode::Char('0'));
-        state.rebuild_lines();
         assert!(
             state.selected.is_none(),
             "hidden rows must not remain selected"
@@ -1420,7 +1523,6 @@ mod tests {
         let mut state = State::from_config(&config, false, CpuScale::Core);
         state.apply_sample(Ok(snapshot));
         state.key(KeyCode::Char('s'));
-        state.rebuild_lines();
         state.key(KeyCode::Down);
         state
     }
