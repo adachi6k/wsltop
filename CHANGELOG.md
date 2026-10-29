@@ -4,9 +4,15 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-30
+
 ### Added
 
 - `--hide-windows` hides Windows processes and applications from flat, tree and JSON output while preserving Windows process measurements and the selected WSL, Docker and WSLC collectors. Summary totals and CPU normalization are unchanged. Raw VM host rows follow `--show-wsl-host` in flat views and remain as attribution parents in tree views. In the TUI, `w` toggles the filter immediately.
+
+Thanks to Raphael Citeau (@kohex-net) for the original Windows visibility patch in [#78](https://github.com/adachi6k/wsltop/issues/78), incorporated in [#79](https://github.com/adachi6k/wsltop/pull/79).
+
+See the [release validation record](docs/validation/2026-10-29-v1.1.0.md) for candidate checks and publication status.
 
 ## [1.0.1] - 2026-10-24
 
@@ -209,7 +215,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/adachi6k/wsltop/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/adachi6k/wsltop/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0
 [1.0.0-rc.1]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0-rc.1
