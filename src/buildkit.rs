@@ -1,6 +1,6 @@
 //! Docker's embedded BuildKit executors are absent from `docker stats`.
 //! Identify them from /proc cgroups and group their sampled processes once.
-use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage};
+use crate::model::{ContainerProcessUsage, EnvironmentKind, ResourceKind, ResourceUsage, Snapshot};
 use std::collections::BTreeMap;
 
 /// Keep the distro in the source: PID and executor IDs are namespace-local.
@@ -30,6 +30,19 @@ fn identity(source: &str) -> Option<(Option<&str>, &str)> {
 
 pub fn executor_id(source: &str) -> Option<&str> {
     identity(source).map(|(_, id)| id)
+}
+
+pub fn normalize_disabled_snapshot(snapshot: &mut Snapshot) {
+    for process in &mut snapshot.processes {
+        if process.key.environment != EnvironmentKind::Docker {
+            continue;
+        }
+        let Some((distro, _)) = process.key.source.as_deref().and_then(identity) else {
+            continue;
+        };
+        process.key.environment = EnvironmentKind::Wsl;
+        process.key.source = distro.map(str::to_string);
+    }
 }
 
 pub fn distro(row: &ResourceUsage) -> Option<&str> {
@@ -156,5 +169,50 @@ mod tests {
         assert!(rows.iter().all(|p| p.environment == EnvironmentKind::Wsl));
         assert_eq!(rows[0].source, None);
         assert_eq!(rows[1].source.as_deref(), Some("docker-desktop"));
+    }
+
+    #[test]
+    fn disabled_docker_matches_processes_when_buildkit_cgroup_metadata_changes() {
+        let captured_at = std::time::Instant::now();
+        let mut before = Snapshot {
+            system_cpu: None,
+            captured_at,
+            processes: vec![crate::model::ProcessSample {
+                key: crate::model::ProcessKey {
+                    environment: EnvironmentKind::Docker,
+                    source: source("0::/docker/buildkit/job1", Some("docker-desktop")),
+                    pid: 42,
+                    start_id: 7,
+                },
+                name: "worker".into(),
+                cpu_time_secs: 1.0,
+                memory_bytes: 4096,
+            }],
+        };
+        let mut after = Snapshot {
+            system_cpu: None,
+            captured_at: captured_at + std::time::Duration::from_secs(1),
+            processes: vec![crate::model::ProcessSample {
+                key: crate::model::ProcessKey {
+                    environment: EnvironmentKind::Wsl,
+                    source: Some("docker-desktop".into()),
+                    pid: 42,
+                    start_id: 7,
+                },
+                name: "worker".into(),
+                cpu_time_secs: 2.0,
+                memory_bytes: 8192,
+            }],
+        };
+
+        normalize_disabled_snapshot(&mut before);
+        normalize_disabled_snapshot(&mut after);
+
+        let usage = crate::sampler::calculate_usage(&before, &after, 1);
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].environment, EnvironmentKind::Wsl);
+        assert_eq!(usage[0].source.as_deref(), Some("docker-desktop"));
+        assert_eq!(usage[0].cpu_percent, 100.0);
+        assert_eq!(usage[0].memory_bytes, 8192);
     }
 }

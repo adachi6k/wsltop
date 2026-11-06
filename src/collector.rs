@@ -173,6 +173,7 @@ pub(crate) struct CollectorPlan {
     primary_distro: Option<String>,
     additional: Vec<(String, Box<dyn ProcessSnapshotCollector>)>,
     distro_discovery: Box<dyn RunningDistroDiscovery>,
+    additional_enabled: bool,
     warnings: Vec<String>,
 }
 
@@ -202,6 +203,7 @@ impl CollectorPlan {
             primary_distro: current.clone(),
             additional: Vec::new(),
             distro_discovery: Box::new(WslRunningDistroDiscovery),
+            additional_enabled: !wsl_only,
             warnings: Vec::new(),
         };
         if wsl_only {
@@ -260,15 +262,28 @@ impl CollectorPlan {
             primary_distro: Some(primary_distro),
             additional,
             distro_discovery: Box::new(discovery),
+            additional_enabled: !wsl_only,
             warnings: spec.warnings,
         })
     }
 
-    pub(crate) fn capture(&self) -> Result<CollectedSnapshots, CollectorError> {
+    pub(crate) fn capture(&mut self) -> Result<CollectedSnapshots, CollectorError> {
+        self.capture_with_factory(|name| {
+            Box::new(RemoteWslProcCollector::new(
+                name.to_string(),
+                Some(name.to_string()),
+            ))
+        })
+    }
+
+    fn capture_with_factory(
+        &mut self,
+        mut make_collector: impl FnMut(&str) -> Box<dyn ProcessSnapshotCollector>,
+    ) -> Result<CollectedSnapshots, CollectorError> {
         let primary = self.primary.snapshot()?;
         let mut additional = Vec::new();
         let mut warnings = self.warnings.clone();
-        let running: HashSet<_> = if self.additional.is_empty() {
+        let running: HashSet<_> = if !self.additional_enabled {
             HashSet::new()
         } else {
             match self.distro_discovery.running_distros() {
@@ -285,7 +300,7 @@ impl CollectorPlan {
                 }
             }
         };
-        for (name, collector) in &self.additional {
+        for (name, _) in &self.additional {
             if !running
                 .iter()
                 .any(|running_name| running_name.eq_ignore_ascii_case(name))
@@ -293,8 +308,25 @@ impl CollectorPlan {
                 warnings.push(format!(
                     "additional WSL {name} unavailable: distribution is no longer running"
                 ));
+            }
+        }
+        for name in running {
+            if self
+                .primary_distro
+                .as_deref()
+                .is_some_and(|primary| primary.eq_ignore_ascii_case(&name))
+            {
                 continue;
             }
+            let index = self
+                .additional
+                .iter()
+                .position(|(existing, _)| existing.eq_ignore_ascii_case(&name))
+                .unwrap_or_else(|| {
+                    self.additional.push((name.clone(), make_collector(&name)));
+                    self.additional.len() - 1
+                });
+            let (name, collector) = &self.additional[index];
             match collector.snapshot() {
                 Ok(snapshot) => additional.push((name.clone(), snapshot)),
                 Err(error) => warnings.push(format!("additional WSL {name} unavailable: {error}")),
@@ -553,11 +585,12 @@ mod tests {
 
     #[test]
     fn required_collector_failure_is_an_error() {
-        let plan = CollectorPlan {
+        let mut plan = CollectorPlan {
             primary: Box::new(StubCollector(Err("primary failed"))),
             primary_distro: None,
             additional: Vec::new(),
             distro_discovery: Box::new(StubDiscovery(Ok(Vec::new()))),
+            additional_enabled: true,
             warnings: Vec::new(),
         };
         assert_eq!(plan.capture().unwrap_err().to_string(), "primary failed");
@@ -565,7 +598,7 @@ mod tests {
 
     #[test]
     fn optional_collector_failure_is_a_warning() {
-        let plan = CollectorPlan {
+        let mut plan = CollectorPlan {
             primary: Box::new(StubCollector(Ok(snapshot()))),
             primary_distro: None,
             additional: vec![(
@@ -573,6 +606,7 @@ mod tests {
                 Box::new(StubCollector(Err("remote failed"))),
             )],
             distro_discovery: Box::new(StubDiscovery(Ok(vec!["Ubuntu-2".to_string()]))),
+            additional_enabled: true,
             warnings: Vec::new(),
         };
         let result = plan.capture().unwrap();
@@ -586,7 +620,7 @@ mod tests {
     #[test]
     fn stopped_optional_distro_is_not_started_by_snapshot_collection() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let plan = CollectorPlan {
+        let mut plan = CollectorPlan {
             primary: Box::new(StubCollector(Ok(snapshot()))),
             primary_distro: None,
             additional: vec![(
@@ -594,6 +628,7 @@ mod tests {
                 Box::new(CountingCollector(Arc::clone(&calls))),
             )],
             distro_discovery: Box::new(StubDiscovery(Ok(Vec::new()))),
+            additional_enabled: true,
             warnings: Vec::new(),
         };
 
@@ -609,7 +644,7 @@ mod tests {
     #[test]
     fn capture_running_membership_is_case_insensitive() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let plan = CollectorPlan {
+        let mut plan = CollectorPlan {
             primary: Box::new(StubCollector(Ok(snapshot()))),
             primary_distro: None,
             additional: vec![(
@@ -617,6 +652,7 @@ mod tests {
                 Box::new(CountingCollector(Arc::clone(&calls))),
             )],
             distro_discovery: Box::new(StubDiscovery(Ok(vec!["ubuntu-2".to_string()]))),
+            additional_enabled: true,
             warnings: Vec::new(),
         };
 
@@ -625,6 +661,67 @@ mod tests {
         assert_eq!(result.additional.len(), 1);
         assert_eq!(result.additional[0].0, "Ubuntu-2");
         assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn capture_refreshes_running_distros_after_plan_creation() {
+        struct ChangingDiscovery(AtomicUsize);
+
+        impl RunningDistroDiscovery for ChangingDiscovery {
+            fn running_distros(&self) -> Result<Vec<String>, CollectorError> {
+                match self.0.fetch_add(1, Ordering::Relaxed) {
+                    0 => Ok(Vec::new()),
+                    _ => Ok(vec!["docker-desktop".into()]),
+                }
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        struct CountingCollector(Arc<AtomicUsize>);
+
+        impl ProcessSnapshotCollector for CountingCollector {
+            fn snapshot(&self) -> Result<Snapshot, CollectorError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(snapshot())
+            }
+        }
+
+        let mut plan = CollectorPlan {
+            primary: Box::new(StubCollector(Ok(snapshot()))),
+            primary_distro: None,
+            additional: Vec::new(),
+            distro_discovery: Box::new(ChangingDiscovery(AtomicUsize::new(0))),
+            additional_enabled: true,
+            warnings: Vec::new(),
+        };
+        let mut make_collector = |_: &str| -> Box<dyn ProcessSnapshotCollector> {
+            Box::new(CountingCollector(Arc::clone(&calls)))
+        };
+
+        assert!(plan
+            .capture_with_factory(&mut make_collector)
+            .unwrap()
+            .additional
+            .is_empty());
+        let second = plan.capture_with_factory(&mut make_collector).unwrap();
+        assert_eq!(
+            second
+                .additional
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["docker-desktop"]
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            plan.capture_with_factory(&mut make_collector)
+                .unwrap()
+                .additional
+                .len(),
+            1
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(plan.additional.len(), 1);
     }
 
     #[test]
@@ -650,6 +747,7 @@ mod tests {
                 "running".to_string(),
                 "failed".to_string(),
             ]))),
+            additional_enabled: true,
             warnings: vec!["initial warning".to_string()],
         };
 
@@ -680,6 +778,7 @@ mod tests {
                 Box::new(StubCollector(Ok(snapshot()))),
             )],
             distro_discovery: Box::new(StubDiscovery(Err("discovery failed"))),
+            additional_enabled: true,
             warnings: Vec::new(),
         };
 
@@ -701,6 +800,7 @@ mod tests {
                 Box::new(StubCollector(Ok(snapshot()))),
             )],
             distro_discovery: Box::new(StubDiscovery(Ok(vec!["ubuntu-2".to_string()]))),
+            additional_enabled: true,
             warnings: Vec::new(),
         };
 
@@ -754,6 +854,7 @@ mod tests {
                 Box::new(CountingCollector(Arc::clone(&calls))),
             )],
             distro_discovery: Box::new(StubDiscovery(Ok(vec!["UBUNTU-2".to_string()]))),
+            additional_enabled: true,
             warnings: Vec::new(),
         };
 

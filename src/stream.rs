@@ -567,6 +567,7 @@ pub fn run(
         Arc::clone(&stop),
         Arc::clone(&host_cpu_count),
         initial.interval,
+        initial.no_docker,
     );
     if !initial.wsl_only {
         spawn_additional_processes(
@@ -575,6 +576,7 @@ pub fn run(
             Arc::clone(&stop),
             Arc::clone(&host_cpu_count),
             initial.interval,
+            initial.no_docker,
         );
     }
     if !initial.wsl_only {
@@ -628,6 +630,7 @@ fn spawn_primary_processes(
     stop: Arc<AtomicBool>,
     cpus: Arc<AtomicU32>,
     interval: Duration,
+    no_docker: bool,
 ) {
     thread::spawn(move || {
         let mut primary_before: Option<(crate::model::Snapshot, Option<u32>)> = None;
@@ -636,14 +639,20 @@ fn spawn_primary_processes(
             let started = std::time::Instant::now();
             let capture_count = cpus.load(Ordering::Relaxed);
             match collector.snapshot() {
-                Ok(after) => {
+                Ok(mut after) => {
+                    if no_docker {
+                        crate::buildkit::normalize_disabled_snapshot(&mut after);
+                    }
                     let had_baseline = primary_before.is_some();
                     let count = match cpus.load(Ordering::Relaxed) {
                         0 => fallback_cpu_count(),
                         count => count,
                     };
                     let stable_count = (capture_count == count).then_some(count);
-                    if let Some((old, old_count)) = &primary_before {
+                    if let Some((old, old_count)) = &mut primary_before {
+                        if no_docker {
+                            crate::buildkit::normalize_disabled_snapshot(old);
+                        }
                         let rows = sampler::calculate_usage(old, &after, count);
                         let mut update = Normalized::new(count, Ok(rows));
                         update.action_scope = after
@@ -687,6 +696,7 @@ fn spawn_additional_processes(
     stop: Arc<AtomicBool>,
     cpus: Arc<AtomicU32>,
     interval: Duration,
+    no_docker: bool,
 ) {
     thread::spawn(move || {
         let cadence = additional_process_cadence(interval);
@@ -697,7 +707,7 @@ fn spawn_additional_processes(
             let count = cpus.load(Ordering::Relaxed).max(1);
             match collector.snapshot() {
                 Ok(after) => {
-                    let update = calculate_additional_update(&mut before, after, count);
+                    let update = calculate_additional_update(&mut before, after, count, no_docker);
                     if sender
                         .send(Event::ExtraWsl(Normalized::new(count, Ok(update))))
                         .is_err()
@@ -721,9 +731,15 @@ fn spawn_additional_processes(
 
 fn calculate_additional_update(
     before: &mut BTreeMap<String, crate::model::Snapshot>,
-    after: StreamAdditionalSnapshots,
+    mut after: StreamAdditionalSnapshots,
     cpu_count: u32,
+    no_docker: bool,
 ) -> ExtraWslUpdate {
+    if no_docker {
+        for (_, snapshot) in &mut after.snapshots {
+            crate::buildkit::normalize_disabled_snapshot(snapshot);
+        }
+    }
     let successful_sources = after
         .snapshots
         .iter()
@@ -732,7 +748,10 @@ fn calculate_additional_update(
         .collect();
     let mut rows = Vec::new();
     for (name, snapshot) in &after.snapshots {
-        if let Some(old) = before.get(name) {
+        if let Some(old) = before.get_mut(name) {
+            if no_docker {
+                crate::buildkit::normalize_disabled_snapshot(old);
+            }
             rows.extend(sampler::calculate_usage(old, snapshot, cpu_count));
         }
     }
@@ -1167,6 +1186,7 @@ mod tests {
                 failures: BTreeMap::new(),
             },
             8,
+            false,
         );
         assert!(before.contains_key("Ubuntu-2"));
 
@@ -1178,11 +1198,78 @@ mod tests {
                 ..StreamAdditionalSnapshots::default()
             },
             8,
+            false,
         );
         assert!(before.contains_key("Ubuntu-2"));
 
-        calculate_additional_update(&mut before, StreamAdditionalSnapshots::default(), 8);
+        calculate_additional_update(&mut before, StreamAdditionalSnapshots::default(), 8, false);
         assert!(!before.contains_key("Ubuntu-2"));
+    }
+
+    #[test]
+    fn no_docker_additional_delta_survives_changing_buildkit_cgroup_metadata() {
+        let process = |environment, source, cpu_time_secs| crate::model::ProcessSample {
+            key: crate::model::ProcessKey {
+                environment,
+                source,
+                pid: 42,
+                start_id: 7,
+            },
+            name: "worker".into(),
+            cpu_time_secs,
+            memory_bytes: 4096,
+        };
+        let captured_at = Instant::now();
+        let snapshot = |process, offset_secs| crate::model::Snapshot {
+            system_cpu: None,
+            captured_at: captured_at + Duration::from_secs(offset_secs),
+            processes: vec![process],
+        };
+        let mut before = BTreeMap::new();
+        let baseline = calculate_additional_update(
+            &mut before,
+            StreamAdditionalSnapshots {
+                snapshots: vec![(
+                    "docker-desktop".into(),
+                    snapshot(
+                        process(
+                            EnvironmentKind::Docker,
+                            crate::buildkit::source(
+                                "0::/docker/buildkit/job1",
+                                Some("docker-desktop"),
+                            ),
+                            1.0,
+                        ),
+                        0,
+                    ),
+                )],
+                running_sources: BTreeSet::from(["docker-desktop".into()]),
+                failures: BTreeMap::new(),
+            },
+            1,
+            true,
+        );
+        assert!(baseline.rows.is_empty());
+
+        let update = calculate_additional_update(
+            &mut before,
+            StreamAdditionalSnapshots {
+                snapshots: vec![(
+                    "docker-desktop".into(),
+                    snapshot(
+                        process(EnvironmentKind::Wsl, Some("docker-desktop".into()), 2.0),
+                        1,
+                    ),
+                )],
+                running_sources: BTreeSet::from(["docker-desktop".into()]),
+                failures: BTreeMap::new(),
+            },
+            1,
+            true,
+        );
+        assert_eq!(update.rows.len(), 1);
+        assert_eq!(update.rows[0].environment, EnvironmentKind::Wsl);
+        assert_eq!(update.rows[0].cpu_percent, 100.0);
     }
 
     #[test]
@@ -1206,13 +1293,14 @@ mod tests {
             running_sources: BTreeSet::from(["Debian".into()]),
             failures: BTreeMap::new(),
         };
-        let baseline = calculate_additional_update(&mut before, sample(), fallback_cpu_count());
+        let baseline =
+            calculate_additional_update(&mut before, sample(), fallback_cpu_count(), false);
         assert!(baseline.successful_sources.is_empty());
         aggregate.apply(Event::ExtraWsl(normalized(Ok(baseline))));
         assert!(aggregate.pending.contains("additional WSL"));
         assert!(aggregate.extra_wsl.is_empty());
 
-        let delta = calculate_additional_update(&mut before, sample(), fallback_cpu_count());
+        let delta = calculate_additional_update(&mut before, sample(), fallback_cpu_count(), false);
         assert!(delta.successful_sources.contains("Debian"));
         aggregate.apply(Event::ExtraWsl(normalized(Ok(delta))));
         assert!(!aggregate.pending.contains("additional WSL"));
@@ -1225,14 +1313,16 @@ mod tests {
             running_sources: BTreeSet::from(["Debian".into(), "docker-desktop".into()]),
             failures: BTreeMap::new(),
         };
-        let baseline = calculate_additional_update(&mut before, expanded(), fallback_cpu_count());
+        let baseline =
+            calculate_additional_update(&mut before, expanded(), fallback_cpu_count(), false);
         assert_eq!(
             baseline.successful_sources,
             BTreeSet::from(["Debian".into()])
         );
         aggregate.apply(Event::ExtraWsl(normalized(Ok(baseline))));
         assert!(aggregate.pending.contains("additional WSL"));
-        let delta = calculate_additional_update(&mut before, expanded(), fallback_cpu_count());
+        let delta =
+            calculate_additional_update(&mut before, expanded(), fallback_cpu_count(), false);
         aggregate.apply(Event::ExtraWsl(normalized(Ok(delta))));
         assert!(!aggregate.pending.contains("additional WSL"));
 
@@ -1241,6 +1331,7 @@ mod tests {
             &mut before,
             StreamAdditionalSnapshots::default(),
             fallback_cpu_count(),
+            false,
         );
         aggregate.apply(Event::ExtraWsl(normalized(Ok(stopped))));
         assert!(!aggregate.pending.contains("additional WSL"));

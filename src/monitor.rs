@@ -107,8 +107,12 @@ impl Monitor {
     }
     pub fn sample(&mut self) -> Result<MonitorSnapshot, Box<dyn Error>> {
         let mut warnings = Vec::new();
-        let collector_plan = CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
-        let linux_before = collector_plan.capture()?;
+        let mut collector_plan =
+            CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
+        let mut linux_before = collector_plan.capture()?;
+        if self.config.no_docker {
+            normalize_disabled_buildkit(&mut linux_before);
+        }
         let linux_before_complete = linux_before.warnings.is_empty();
         for warning in linux_before.warnings {
             push_unique_warning(&mut warnings, warning);
@@ -156,7 +160,12 @@ impl Monitor {
             })
         });
         thread::sleep(self.config.interval);
-        let linux_middle = collector_plan.capture();
+        let mut linux_middle = collector_plan.capture();
+        if self.config.no_docker {
+            if let Ok(snapshots) = &mut linux_middle {
+                normalize_disabled_buildkit(snapshots);
+            }
+        }
         let mut wslc_result = wslc_worker.map(|worker| {
             worker
                 .join()
@@ -168,7 +177,10 @@ impl Monitor {
                 .unwrap_or_else(|_| Err("Docker collector panicked".to_string()))
         });
         // Bracket both container probe rounds with the primary kernel samples.
-        let linux_after = collector_plan.capture()?;
+        let mut linux_after = collector_plan.capture()?;
+        if self.config.no_docker {
+            normalize_disabled_buildkit(&mut linux_after);
+        }
         let windows_after = if self.config.wsl_only {
             None
         } else {
@@ -179,15 +191,27 @@ impl Monitor {
                 after
             })
         };
+        let linux_middle_complete = match &linux_middle {
+            Ok(middle) => {
+                for warning in &middle.warnings {
+                    push_unique_warning(&mut warnings, warning.clone());
+                }
+                middle.warnings.is_empty()
+                    && same_additional_sources(&linux_before.additional, &middle.additional)
+                    && same_additional_sources(&middle.additional, &linux_after.additional)
+            }
+            Err(error) => {
+                push_unique_warning(
+                    &mut warnings,
+                    format!("additional WSL sampling unavailable: {error}"),
+                );
+                false
+            }
+        };
         let linux_complete = linux_before_complete
+            && linux_middle_complete
             && linux_after.warnings.is_empty()
-            && linux_before.additional.len() == linux_after.additional.len()
-            && linux_before.additional.iter().all(|(name, _)| {
-                linux_after
-                    .additional
-                    .iter()
-                    .any(|(other, _)| name == other)
-            });
+            && same_additional_sources(&linux_before.additional, &linux_after.additional);
         for warning in linux_after.warnings {
             push_unique_warning(&mut warnings, warning);
         }
@@ -206,7 +230,7 @@ impl Monitor {
             if let Some((_, after)) = linux_after
                 .additional
                 .iter()
-                .find(|(candidate, _)| candidate == name)
+                .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
             {
                 linux_usage.extend(sampler::calculate_usage(before, after, host_cpu_count));
             }
@@ -449,11 +473,30 @@ fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
     }
 }
 
+fn normalize_disabled_buildkit(snapshots: &mut crate::collector::CollectedSnapshots) {
+    crate::buildkit::normalize_disabled_snapshot(&mut snapshots.primary);
+    for (_, snapshot) in &mut snapshots.additional {
+        crate::buildkit::normalize_disabled_snapshot(snapshot);
+    }
+}
+
+fn same_additional_sources(
+    left: &[(String, crate::model::Snapshot)],
+    right: &[(String, crate::model::Snapshot)],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|(name, _)| {
+            right
+                .iter()
+                .any(|(other, _)| name.eq_ignore_ascii_case(other))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_windows_application_view, push_unique_warning, should_collect_windows_metadata,
-        wsl_only_warning, MonitorConfig,
+        apply_windows_application_view, push_unique_warning, same_additional_sources,
+        should_collect_windows_metadata, wsl_only_warning, MonitorConfig,
     };
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use std::time::Duration;
@@ -607,6 +650,22 @@ mod tests {
         assert!(!complete);
         assert_eq!(linux[0].environment, EnvironmentKind::Wsl);
         assert!(linux[0].source.is_none());
+    }
+
+    #[test]
+    fn docker_collection_completeness_requires_paired_additional_sources() {
+        let snapshot = || crate::model::Snapshot {
+            system_cpu: None,
+            captured_at: std::time::Instant::now(),
+            processes: Vec::new(),
+        };
+        let before = Vec::new();
+        let after = vec![("docker-desktop".to_string(), snapshot())];
+        assert!(!same_additional_sources(&before, &after));
+        assert!(same_additional_sources(
+            &after,
+            &[("DOCKER-DESKTOP".to_string(), snapshot())]
+        ));
     }
 
     #[test]
