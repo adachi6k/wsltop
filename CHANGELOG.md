@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+### Changed
+
+- Attribute embedded Docker BuildKit processes to executor rows using WSL cgroup observations; publish Docker totals only after Docker statistics and all enabled WSL collectors complete successfully.
+
 ## [1.1.0] - 2026-10-30
 
 ### Added
