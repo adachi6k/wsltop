@@ -8,6 +8,7 @@ published versions and downloads.
 
 | Record | Coverage |
 | --- | --- |
+| [2026-11-07 v1.1.1](2026-11-07-v1.1.1.md) | BuildKit correctness fixes, release packaging and candidate validation |
 | [2026-11-07 BuildKit review](2026-11-07-buildkit-review.md) | Dynamic WSL sampling and disabled-Docker regressions; Windows-native BuildKit attribution and fallback |
 | [2026-10-29 v1.1.0](2026-10-29-v1.1.0.md) | Windows visibility filtering, immediate TUI toggling and native release-artifact checks |
 | [2026-10-24 v1.0.1](2026-10-24-v1.0.1.md) | WSL 3.0.3 compatibility, initial host CPU retry and patch release preparation |

@@ -4,9 +4,19 @@ All notable changes to this project will be documented in this file. The format 
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-07
+
+### Fixed
+
+- Classify embedded Docker BuildKit processes under Docker executor rows instead of WSL, using verified cgroup membership. Remove the corresponding WSL process rows to avoid duplicate attribution.
+- Keep Docker totals unavailable until Docker statistics and all enabled WSL collectors have complete samples, including distributions that start during sampling.
+- Preserve WSL process CPU and memory with `--no-docker` when BuildKit cgroup metadata appears, disappears or changes between samples.
+
 ### Changed
 
-- Attribute embedded Docker BuildKit processes to executor rows using WSL cgroup observations; publish Docker totals only after Docker statistics and all enabled WSL collectors complete successfully.
+- Update the rmcp dependency from 3.6 to 3.8 while retaining the existing read-only MCP tools and contracts.
+
+See the [release validation record](docs/validation/2026-11-07-v1.1.1.md) for candidate checks and publication status.
 
 ## [1.1.0] - 2026-10-30
 
@@ -219,7 +229,8 @@ termination, container control, shell tools or network listener.
 - Flat JSON remains a top-level resource array.
 - Raw WSL host rows remain hidden by default and available through `--show-wsl-host`.
 
-[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/adachi6k/wsltop/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/adachi6k/wsltop/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/adachi6k/wsltop/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/adachi6k/wsltop/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/adachi6k/wsltop/compare/v0.5.3...v1.0.0
