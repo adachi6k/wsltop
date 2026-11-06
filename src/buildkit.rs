@@ -174,45 +174,49 @@ mod tests {
     #[test]
     fn disabled_docker_matches_processes_when_buildkit_cgroup_metadata_changes() {
         let captured_at = std::time::Instant::now();
-        let mut before = Snapshot {
+        let snapshot = |distro: Option<&str>, cgroup: Option<&str>, offset| Snapshot {
             system_cpu: None,
-            captured_at,
+            captured_at: captured_at + std::time::Duration::from_secs(offset),
             processes: vec![crate::model::ProcessSample {
                 key: crate::model::ProcessKey {
-                    environment: EnvironmentKind::Docker,
-                    source: source("0::/docker/buildkit/job1", Some("docker-desktop")),
+                    environment: if cgroup.is_some() {
+                        EnvironmentKind::Docker
+                    } else {
+                        EnvironmentKind::Wsl
+                    },
+                    source: cgroup.map_or_else(
+                        || distro.map(str::to_string),
+                        |cgroup| source(cgroup, distro),
+                    ),
                     pid: 42,
                     start_id: 7,
                 },
                 name: "worker".into(),
-                cpu_time_secs: 1.0,
-                memory_bytes: 4096,
-            }],
-        };
-        let mut after = Snapshot {
-            system_cpu: None,
-            captured_at: captured_at + std::time::Duration::from_secs(1),
-            processes: vec![crate::model::ProcessSample {
-                key: crate::model::ProcessKey {
-                    environment: EnvironmentKind::Wsl,
-                    source: Some("docker-desktop".into()),
-                    pid: 42,
-                    start_id: 7,
-                },
-                name: "worker".into(),
-                cpu_time_secs: 2.0,
-                memory_bytes: 8192,
+                cpu_time_secs: 1.0 + offset as f64,
+                memory_bytes: 4096 * (offset + 1),
             }],
         };
 
-        normalize_disabled_snapshot(&mut before);
-        normalize_disabled_snapshot(&mut after);
+        let job1 = Some("0::/docker/buildkit/job1");
+        let job2 = Some("0::/docker/buildkit/job2");
+        for distro in [None, Some("docker-desktop")] {
+            for (old_cgroup, new_cgroup) in [(job1, None), (None, job1), (job1, job2)] {
+                let mut before = snapshot(distro, old_cgroup, 0);
+                let mut after = snapshot(distro, new_cgroup, 1);
+                normalize_disabled_snapshot(&mut before);
+                normalize_disabled_snapshot(&mut after);
 
-        let usage = crate::sampler::calculate_usage(&before, &after, 1);
-        assert_eq!(usage.len(), 1);
-        assert_eq!(usage[0].environment, EnvironmentKind::Wsl);
-        assert_eq!(usage[0].source.as_deref(), Some("docker-desktop"));
-        assert_eq!(usage[0].cpu_percent, 100.0);
-        assert_eq!(usage[0].memory_bytes, 8192);
+                let usage = crate::sampler::calculate_usage(&before, &after, 1);
+                assert_eq!(
+                    usage.len(),
+                    1,
+                    "{distro:?}: {old_cgroup:?} -> {new_cgroup:?}"
+                );
+                assert_eq!(usage[0].environment, EnvironmentKind::Wsl);
+                assert_eq!(usage[0].source.as_deref(), distro);
+                assert_eq!(usage[0].cpu_percent, 100.0);
+                assert_eq!(usage[0].memory_bytes, 8192);
+            }
+        }
     }
 }
