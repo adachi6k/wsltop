@@ -61,11 +61,26 @@ fn read_process(pid: u32, clock_ticks: f64, page_size: u64) -> io::Result<Proces
     let parsed = linux_proc::parse_stat(&stat, &stat_path)?;
     let cmdline = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
     let name = linux_proc::cmdline_name(&cmdline).unwrap_or_else(|| parsed.command.to_string());
+    let build_source = fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .ok()
+        .and_then(|cgroup| crate::buildkit::source(&cgroup, None))
+        .filter(|_| {
+            // Bracket cgroup membership with the process generation, so PID
+            // reuse cannot attach an unrelated process to a build.
+            fs::read_to_string(&stat_path).ok().is_some_and(|after| {
+                linux_proc::parse_stat(&after, &stat_path)
+                    .is_ok_and(|after| after.start_ticks == parsed.start_ticks)
+            })
+        });
 
     Ok(ProcessSample {
         key: ProcessKey {
-            environment: EnvironmentKind::Wsl,
-            source: None,
+            environment: if build_source.is_some() {
+                EnvironmentKind::Docker
+            } else {
+                EnvironmentKind::Wsl
+            },
+            source: build_source,
             pid,
             start_id: parsed.start_ticks,
         },

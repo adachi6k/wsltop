@@ -222,14 +222,17 @@ impl Aggregate {
             self.docker_detail_warnings.clone_from(&usage.warnings);
             return;
         }
-        let baseline_only = matches!(
+        let warming_up = matches!(
             &event,
             Event::ExtraWsl(Normalized { value: Ok(update), .. })
-                if !update.running_sources.is_empty()
-                    && update.successful_sources.is_empty()
+                if !update.running_sources.is_subset(&update.successful_sources)
                     && update.failures.is_empty()
         );
-        if !baseline_only {
+        if warming_up {
+            // A newly discovered distro needs its own baseline even when the
+            // other distros already have process deltas.
+            self.pending.insert(name);
+        } else {
             self.pending.remove(name);
         }
         let result = match event {
@@ -274,7 +277,7 @@ impl Aggregate {
                     let rows = update
                         .rows
                         .iter()
-                        .filter(|row| row.source.as_deref() == Some(source.as_str()))
+                        .filter(|row| crate::buildkit::distro(row) == Some(source.as_str()))
                         .cloned()
                         .collect();
                     self.extra_wsl.insert(source, rows);
@@ -366,6 +369,9 @@ impl Aggregate {
 
         let mut linux = self.linux.clone();
         linux.extend(self.extra_wsl.values().flatten().cloned());
+        let mut docker = self.docker.resources.clone();
+        let builds = crate::buildkit::take_usage(&mut linux, !config.no_docker);
+        docker.extend(builds);
         let hosts: Vec<_> = self
             .windows
             .iter()
@@ -377,7 +383,7 @@ impl Aggregate {
             &hosts,
             &linux,
             &self.wslc.resources,
-            &self.docker.resources,
+            &docker,
         );
         attribution::attach_wslc_processes(&mut tree, &self.wslc.process_resources);
         if config.collect_windows_applications && !config.wsl_only {
@@ -395,39 +401,36 @@ impl Aggregate {
                     .flat_map(|item| item.processes.iter().cloned()),
             );
             resources.extend(
-                self.docker
-                    .resources
+                docker
                     .iter()
                     .flat_map(|item| item.processes.iter().cloned()),
             );
         }
-        resources.extend(
-            self.docker
-                .resources
-                .iter()
-                .map(|item| item.resource.clone()),
-        );
+        resources.extend(docker.iter().map(|item| item.resource.clone()));
         let ready = |name| !self.pending.contains(name) && !self.errors.contains_key(name);
         let normalized = self.host_cpu_authoritative;
+        let linux_ready = normalized
+            && ready("current WSL")
+            && (config.wsl_only || ready("additional WSL"))
+            && self.extra_wsl_errors.is_empty()
+            && self.collector_warnings.is_empty();
+        let docker_ready = !config.no_docker
+            && linux_ready
+            && ready("Docker")
+            && self.docker.available
+            && self.docker.warnings.is_empty();
         let mut summary = crate::summary::EnvironmentSummary::collect(
             &resources,
             [
                 !config.wsl_only && ready("Windows"),
-                normalized
-                    && ready("current WSL")
-                    && (config.wsl_only || ready("additional WSL"))
-                    && self.extra_wsl_errors.is_empty()
-                    && self.collector_warnings.is_empty(),
+                linux_ready,
                 normalized
                     && !config.wsl_only
                     && !config.no_wslc
                     && ready("WSLC")
                     && self.wslc.available
                     && self.wslc.warnings.is_empty(),
-                normalized
-                    && !config.no_docker
-                    && ready("Docker")
-                    && self.docker.warnings.is_empty(),
+                docker_ready,
             ],
         );
         summary.set_wsl_cpu(normalized.then_some(self.wsl_cpu_percent).flatten());
@@ -443,14 +446,9 @@ impl Aggregate {
             targets.extend(self.wslc.resources.iter().map(|r| (2, r.id.as_str())));
         }
         if !config.no_docker {
-            targets.extend(
-                self.docker
-                    .resources
-                    .iter()
-                    .map(|r| (3, r.resource.id.as_str())),
-            );
+            targets.extend(docker.iter().map(|r| (3, r.resource.id.as_str())));
         }
-        let containers_ready = (config.no_docker || ready("Docker"))
+        let containers_ready = (config.no_docker || docker_ready)
             && (config.wsl_only || config.no_wslc || ready("WSLC"));
         crate::guest_cpu::apply(
             &mut snapshot,
@@ -1131,6 +1129,13 @@ mod tests {
         Normalized::new(fallback_cpu_count(), value)
     }
 
+    fn empty_docker_stats() -> DockerUsage {
+        DockerUsage {
+            available: true,
+            ..DockerUsage::default()
+        }
+    }
+
     fn empty_snapshot() -> crate::model::Snapshot {
         crate::model::Snapshot {
             system_cpu: None,
@@ -1209,6 +1214,25 @@ mod tests {
 
         let delta = calculate_additional_update(&mut before, sample(), fallback_cpu_count());
         assert!(delta.successful_sources.contains("Debian"));
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(delta))));
+        assert!(!aggregate.pending.contains("additional WSL"));
+
+        let expanded = || StreamAdditionalSnapshots {
+            snapshots: vec![
+                ("Debian".into(), empty_snapshot()),
+                ("docker-desktop".into(), empty_snapshot()),
+            ],
+            running_sources: BTreeSet::from(["Debian".into(), "docker-desktop".into()]),
+            failures: BTreeMap::new(),
+        };
+        let baseline = calculate_additional_update(&mut before, expanded(), fallback_cpu_count());
+        assert_eq!(
+            baseline.successful_sources,
+            BTreeSet::from(["Debian".into()])
+        );
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(baseline))));
+        assert!(aggregate.pending.contains("additional WSL"));
+        let delta = calculate_additional_update(&mut before, expanded(), fallback_cpu_count());
         aggregate.apply(Event::ExtraWsl(normalized(Ok(delta))));
         assert!(!aggregate.pending.contains("additional WSL"));
 
@@ -1292,6 +1316,99 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("Ubuntu-2") && warning.contains("remote /proc")));
+    }
+
+    #[test]
+    fn buildkit_from_additional_wsl_appears_once_under_docker_and_expires_with_its_source() {
+        let mut config = config();
+        config.no_wslc = true;
+        config.show_container_processes = true;
+        let mut aggregate = Aggregate::new(&config);
+        aggregate.apply(Event::HostCpuCount(fallback_cpu_count()));
+        aggregate.apply(Event::Linux(normalized(Ok(Vec::new()))));
+        aggregate.wsl_cpu_percent = Some(20.0);
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(empty_docker_stats()))));
+        let mut process = row(EnvironmentKind::Docker, ResourceKind::Process, "12897");
+        process.pid = Some(12897);
+        process.name = "git-remote-http".into();
+        process.source =
+            crate::buildkit::source("0::/docker/buildkit/job1", Some("docker-desktop"));
+        process.cpu_percent = 2.0;
+        let update = |rows| ExtraWslUpdate {
+            rows,
+            running_sources: BTreeSet::from(["docker-desktop".into()]),
+            successful_sources: BTreeSet::from(["docker-desktop".into()]),
+            failures: BTreeMap::new(),
+        };
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(update(vec![process])))));
+        let snapshot = aggregate.snapshot(&config);
+        assert_eq!(snapshot.resources.len(), 2);
+        assert!(snapshot
+            .resources
+            .iter()
+            .all(|r| r.environment == EnvironmentKind::Docker));
+        assert_eq!(snapshot.resources[0].kind, ResourceKind::Container);
+        assert_eq!(snapshot.resources[1].pid, Some(12897));
+        assert_eq!(snapshot.tree.docker_groups.len(), 1);
+        assert_eq!(snapshot.tree.docker_groups[0].children.len(), 1);
+        let rendered = crate::render::flat(&snapshot, crate::render::CpuScale::Host);
+        assert!(rendered.contains("Docker  container           job1"));
+        assert!(rendered.contains("[docker-desktop] BuildKit job1"));
+        assert!(rendered.contains("git-remote-http"));
+        assert_eq!(
+            snapshot.environment_summary.0[3].unwrap().cpu_percent,
+            Some(2.0)
+        );
+        assert_eq!(
+            snapshot.environment_summary.0[1].unwrap().cpu_percent,
+            Some(20.0)
+        );
+        assert_eq!(
+            snapshot.environment_summary.0[1].unwrap().memory_bytes,
+            Some(0)
+        );
+        assert!(snapshot.cpu_overlap_unresolved);
+
+        aggregate.apply(Event::DockerAggregate(normalized(Err(
+            "docker stats timed out".into(),
+        ))));
+        let cli_failed = aggregate.snapshot(&config);
+        assert_eq!(cli_failed.resources, snapshot.resources);
+        assert!(cli_failed.environment_summary.0[3].is_none());
+        assert!(cli_failed.cpu_overlap_unresolved);
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(empty_docker_stats()))));
+
+        config.show_container_processes = false;
+        let hidden = aggregate.snapshot(&config);
+        assert_eq!(hidden.resources.len(), 1);
+        assert_eq!(
+            hidden.environment_summary.0[3],
+            snapshot.environment_summary.0[3]
+        );
+        assert_eq!(hidden.tree.docker_groups[0].children.len(), 1);
+
+        config.no_docker = true;
+        let disabled = aggregate.snapshot(&config);
+        assert_eq!(disabled.resources.len(), 1);
+        assert_eq!(disabled.resources[0].environment, EnvironmentKind::Wsl);
+        assert_eq!(
+            disabled.resources[0].source.as_deref(),
+            Some("docker-desktop")
+        );
+
+        config.no_docker = false;
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(ExtraWslUpdate {
+            running_sources: BTreeSet::from(["docker-desktop".into()]),
+            failures: BTreeMap::from([("docker-desktop".into(), "read failed".into())]),
+            ..ExtraWslUpdate::default()
+        }))));
+        let stale = aggregate.snapshot(&config);
+        assert_eq!(stale.tree.docker_groups.len(), 1);
+        assert!(stale.environment_summary.0[3].is_none());
+        aggregate.apply(Event::ExtraWsl(normalized(Ok(update(Vec::new())))));
+        let ended = aggregate.snapshot(&config);
+        assert!(ended.resources.is_empty());
+        assert!(ended.tree.docker_groups.is_empty());
     }
 
     #[test]
@@ -1502,7 +1619,7 @@ mod tests {
         )));
         aggregate.apply(Event::DockerAggregate(Normalized::new(
             16,
-            Ok(DockerUsage::default()),
+            Ok(empty_docker_stats()),
         )));
         let mut snapshot = aggregate.snapshot(&options);
         let expected = Some(80.0);
@@ -1537,6 +1654,104 @@ mod tests {
             aggregate.snapshot(&options).environment_summary.0[1],
             Some(crate::summary::Usage::default())
         );
+    }
+
+    #[test]
+    fn docker_summary_requires_wsl_collection_even_before_any_buildkit_is_observed() {
+        let mut options = config();
+        options.no_wslc = true;
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::HostCpuCount(16));
+        aggregate.apply(Event::DockerAggregate(Normalized::new(
+            16,
+            Ok(empty_docker_stats()),
+        )));
+        let unavailable = |aggregate: &Aggregate| {
+            let snapshot = aggregate.snapshot(&options);
+            assert!(snapshot.environment_summary.0[3].is_none());
+            assert!(snapshot.cpu_overlap_unresolved);
+        };
+        unavailable(&aggregate); // Primary and additional WSL have not sampled.
+        let mut primary = Normalized::new(16, Ok(Vec::new()));
+        primary.system_cpu = Some(20.0);
+        aggregate.apply(Event::Linux(primary));
+        unavailable(&aggregate);
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Ok(ExtraWslUpdate {
+                running_sources: BTreeSet::from(["docker-desktop".into()]),
+                ..Default::default()
+            }),
+        )));
+        unavailable(&aggregate); // Initial baseline is not yet a CPU sample.
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Err("discovery failed".into()),
+        )));
+        unavailable(&aggregate);
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Ok(ExtraWslUpdate {
+                running_sources: BTreeSet::from(["docker-desktop".into()]),
+                failures: BTreeMap::from([("docker-desktop".into(), "read failed".into())]),
+                ..Default::default()
+            }),
+        )));
+        unavailable(&aggregate);
+        aggregate.apply(Event::ExtraWsl(Normalized::new(
+            16,
+            Ok(ExtraWslUpdate {
+                running_sources: BTreeSet::from(["docker-desktop".into()]),
+                successful_sources: BTreeSet::from(["docker-desktop".into()]),
+                ..Default::default()
+            }),
+        )));
+        let complete = aggregate.snapshot(&options);
+        assert_eq!(
+            complete.environment_summary.0[3],
+            Some(crate::summary::Usage::default())
+        );
+        assert!(!complete.cpu_overlap_unresolved);
+
+        aggregate.apply(Event::DockerAggregate(Normalized::new(
+            16,
+            Err("timeout".into()),
+        )));
+        unavailable(&aggregate);
+        aggregate.apply(Event::DockerAggregate(Normalized::new(
+            16,
+            Ok(DockerUsage::default()),
+        )));
+        unavailable(&aggregate); // Missing CLI/daemon is not a successful empty result.
+        aggregate.apply(Event::DockerAggregate(Normalized::new(
+            16,
+            Ok(empty_docker_stats()),
+        )));
+        assert_eq!(
+            aggregate.snapshot(&options).environment_summary.0[3],
+            complete.environment_summary.0[3]
+        );
+        aggregate.apply(Event::Linux(Normalized::new(
+            16,
+            Err("primary failed".into()),
+        )));
+        unavailable(&aggregate);
+    }
+
+    #[test]
+    fn docker_summary_with_wsl_only_does_not_wait_for_disabled_sources() {
+        let mut options = config();
+        options.wsl_only = true;
+        let mut aggregate = Aggregate::new(&options);
+        aggregate.apply(Event::DockerAggregate(normalized(Ok(empty_docker_stats()))));
+        assert!(aggregate.snapshot(&options).environment_summary.0[3].is_none());
+        aggregate.apply(Event::Linux(normalized(Ok(Vec::new()))));
+        let snapshot = aggregate.snapshot(&options);
+        assert_eq!(
+            snapshot.environment_summary.0[3],
+            Some(crate::summary::Usage::default())
+        );
+        assert!(!snapshot.cpu_overlap_unresolved);
     }
 
     #[test]
@@ -1820,6 +2035,7 @@ mod tests {
         let cached_docker = Normalized::new(
             8,
             DockerUsage {
+                available: true,
                 cpu_probes: Vec::new(),
                 resources: vec![ContainerProcessUsage {
                     resource: docker_container.clone(),
@@ -1830,6 +2046,7 @@ mod tests {
             },
         );
         let mut fresh_docker = DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: docker_container,
@@ -1851,6 +2068,7 @@ mod tests {
             "container",
         );
         let usage = || DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
@@ -1888,6 +2106,7 @@ mod tests {
         );
         let process = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
@@ -1897,6 +2116,7 @@ mod tests {
             warnings: Vec::new(),
         }))));
         aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container.clone(),
@@ -1906,6 +2126,7 @@ mod tests {
             warnings: Vec::new(),
         })));
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: container,
@@ -1927,6 +2148,7 @@ mod tests {
         );
         current.cpu_percent = 9.0;
         aggregate.apply(Event::DockerAggregate(normalized(Ok(DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: current,
@@ -1946,6 +2168,7 @@ mod tests {
         );
         let detail = row(EnvironmentKind::Docker, ResourceKind::Process, "process");
         aggregate.apply(Event::DockerDetails(normalized(DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![ContainerProcessUsage {
                 resource: stale,

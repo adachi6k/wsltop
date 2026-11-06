@@ -8,6 +8,7 @@ use std::time::Instant;
 // Longer than Linux TASK_COMM_LEN (16 bytes including the terminator), so a
 // task name containing newlines cannot impersonate the system-section boundary.
 const SYSTEM_MARKER: &str = "\nWSLTOP_SYSTEM_COUNTERS_BEGIN\n";
+const BUILD_MARKER: &str = "WSLTOP_DOCKER_BUILD ";
 
 fn wsl_command() -> Command {
     #[allow(unused_mut)]
@@ -82,11 +83,29 @@ pub fn snapshot(distro: &str, source: Option<&str>) -> Result<Snapshot, Box<dyn 
 }
 
 fn snapshot_script(primary: bool) -> String {
-    let script = "clock_ticks=$(getconf CLK_TCK) || exit; page_size=$(getconf PAGESIZE) || exit; printf '%s %s\\n' \"$clock_ticks\" \"$page_size\" || exit; for d in /proc/[0-9]*; do [ -r \"$d/stat\" ] && cat \"$d/stat\" 2>/dev/null || :; done";
+    let script = format!(
+        r#"clock_ticks=$(getconf CLK_TCK) || exit
+page_size=$(getconf PAGESIZE) || exit
+printf '%s %s\n' "$clock_ticks" "$page_size" || exit
+for d in /proc/[0-9]*; do
+    cat "$d/stat" 2>/dev/null || continue
+    {{
+        while IFS= read -r group; do
+            case "$group" in
+                *:/docker/buildkit/*)
+                    printf '\n{BUILD_MARKER}%s ' "$group"
+                    cat "$d/stat" 2>/dev/null || :
+                    printf '\n'
+                    ;;
+            esac
+        done < "$d/cgroup"
+    }} 2>/dev/null || :
+done"#
+    );
     if primary {
         format!("{script}; printf '%s' '{SYSTEM_MARKER}'; grep '^cpu' /proc/stat 2>/dev/null || :; printf 'UPTIME '; cat /proc/uptime 2>/dev/null || :; printf 'BOOT '; cat /proc/sys/kernel/random/boot_id 2>/dev/null || :; printf '\\nWSLTOP_ACTION_SCOPE '; readlink /proc/self/ns/pid /proc/self/ns/mnt 2>/dev/null || :; id -u 2>/dev/null || :")
     } else {
-        script.into()
+        script
     }
 }
 
@@ -125,7 +144,15 @@ fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn 
         .parse::<f64>()?;
     let page_size = header.get(1).ok_or("missing page size")?.parse::<u64>()?;
     let mut processes = Vec::new();
+    let mut builds = std::collections::HashMap::new();
     for stat in lines {
+        let (cgroup, stat) = match stat.strip_prefix(BUILD_MARKER) {
+            Some(record) => match record.split_once(' ') {
+                Some((cgroup, stat)) => (Some(cgroup), stat),
+                None => continue,
+            },
+            None => (None, stat),
+        };
         let Some(open) = stat.find('(') else { continue };
         let Some(close) = stat.rfind(')') else {
             continue;
@@ -149,6 +176,12 @@ fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn 
         let Ok(rss) = fields[21].parse::<i64>() else {
             continue;
         };
+        if let Some(cgroup) = cgroup {
+            if let Some(build_source) = crate::buildkit::source(cgroup, source) {
+                builds.insert((pid, start_id), build_source);
+            }
+            continue;
+        }
         processes.push(ProcessSample {
             key: ProcessKey {
                 environment: EnvironmentKind::Wsl,
@@ -160,6 +193,12 @@ fn parse_snapshot(source: Option<&str>, text: &str) -> Result<Snapshot, Box<dyn 
             cpu_time_secs: (utime + stime) as f64 / ticks,
             memory_bytes: (rss.max(0) as u64).saturating_mul(page_size),
         });
+    }
+    for process in &mut processes {
+        if let Some(build_source) = builds.remove(&(process.key.pid, process.key.start_id)) {
+            process.key.environment = EnvironmentKind::Docker;
+            process.key.source = Some(build_source);
+        }
     }
     Ok(Snapshot {
         system_cpu: system.split_once("UPTIME ").and_then(|(stat, rest)| {
@@ -194,6 +233,78 @@ fn decode_wsl_text(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn buildkit_membership_requires_the_same_process_generation() {
+        let stat = |pid, start| {
+            format!("{pid} (git-remote-http) S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 {start} 0 3")
+        };
+        let text =
+            format!(
+            "100 4096\n{}\n{}0::/docker/buildkit/job1 {}\n{}\n{}0::/docker/buildkit/job1 {}\n{}\n",
+            stat(12897, 777), super::BUILD_MARKER, stat(12897, 777),
+            stat(42, 888), super::BUILD_MARKER, stat(42, 999), stat(43, 111),
+        );
+        for distro in [None, Some("docker-desktop")] {
+            let snapshot = super::parse_snapshot(distro, &text).unwrap();
+            assert_eq!(snapshot.processes.len(), 3);
+            let build = &snapshot.processes[0];
+            assert_eq!(build.key.environment, crate::model::EnvironmentKind::Docker);
+            assert_eq!(
+                build.key.source,
+                crate::buildkit::source("0::/docker/buildkit/job1", distro)
+            );
+            assert_eq!(build.key.pid, 12897);
+            assert_eq!(build.key.start_id, 777);
+            assert_eq!(build.cpu_time_secs, 1.2);
+            for process in &snapshot.processes[1..] {
+                assert_eq!(process.key.environment, crate::model::EnvironmentKind::Wsl);
+                assert_eq!(process.key.source.as_deref(), distro);
+            }
+        }
+        assert!(super::BUILD_MARKER.len() > 16);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_script_collects_buildkit_membership_and_tolerates_missing_cgroup() {
+        let dir = std::env::temp_dir().join(format!(
+            "wsltop-buildkit-proc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for pid in [42, 43] {
+            std::fs::create_dir_all(dir.join(pid.to_string())).unwrap();
+            std::fs::write(
+                dir.join(format!("{pid}/stat")),
+                format!("{pid} (git) S 1 1 1 0 0 0 0 0 0 0 100 20 0 0 0 0 0 0 777 0 3\n"),
+            )
+            .unwrap();
+        }
+        std::fs::write(dir.join("42/cgroup"), "0::/docker/buildkit/job1\n").unwrap();
+        let path = dir.to_str().unwrap().replace('\'', "'\\''");
+        let script =
+            super::snapshot_script(false).replace("/proc/[0-9]*", &format!("'{path}'/[0-9]*"));
+        let output = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(output.status.success());
+        let snapshot = super::parse_snapshot_bytes(Some("docker-desktop"), &output.stdout).unwrap();
+        assert_eq!(snapshot.processes.len(), 2);
+        assert_eq!(
+            snapshot.processes[0].key.environment,
+            crate::model::EnvironmentKind::Docker
+        );
+        assert_eq!(
+            snapshot.processes[1].key.environment,
+            crate::model::EnvironmentKind::Wsl
+        );
+    }
+
     #[test]
     fn action_scope_is_separate_from_boot_and_optional() {
         let text = format!("100 4096\n{}cpu 100 0 0 0 0 0 0\ncpu0 0\nUPTIME 10 0\nBOOT boot-a\nWSLTOP_ACTION_SCOPE pid:[7]\nmnt:[8]\n1000\n", super::SYSTEM_MARKER);

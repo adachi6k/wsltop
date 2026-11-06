@@ -19,6 +19,9 @@ struct RawDockerStat {
 
 #[derive(Debug, Clone, Default)]
 pub struct DockerUsage {
+    /// A successful stats response, including an empty one. Missing CLI/daemon
+    /// observations stay unavailable rather than implying zero containers.
+    pub available: bool,
     pub cpu_probes: Vec<crate::guest_cpu::Probe>,
     pub resources: Vec<ContainerProcessUsage>,
     pub warnings: Vec<String>,
@@ -36,7 +39,7 @@ fn with_details(
     populate: impl FnOnce(&mut DockerUsage),
 ) -> (DockerUsage, bool) {
     // Detail failures do not invalidate successfully collected aggregate rows.
-    let complete = !result.resources.is_empty() && result.warnings.is_empty();
+    let complete = result.available && result.warnings.is_empty();
     populate(&mut result);
     (result, complete)
 }
@@ -72,14 +75,22 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<d
         )
         .into());
     }
-    let resources = parse_stats(&output.stdout, host_logical_cpu_count)?;
-    let cpu_probes = crate::guest_cpu::collect(
+    let mut result = parse_usage(&output.stdout, host_logical_cpu_count)?;
+    result.cpu_probes = crate::guest_cpu::collect(
         "docker",
-        &resources.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        &result
+            .resources
+            .iter()
+            .map(|r| r.resource.id.as_str())
+            .collect::<Vec<_>>(),
     );
+    Ok(result)
+}
+
+fn parse_usage(input: &[u8], host_cpu_count: u32) -> Result<DockerUsage, Box<dyn Error>> {
     Ok(DockerUsage {
-        cpu_probes,
-        resources: resources
+        available: true,
+        resources: parse_stats(input, host_cpu_count)?
             .into_iter()
             .map(|resource| ContainerProcessUsage {
                 resource,
@@ -87,7 +98,7 @@ pub fn aggregate_usage(host_logical_cpu_count: u32) -> Result<DockerUsage, Box<d
                 host_pids: Vec::new(),
             })
             .collect(),
-        warnings: Vec::new(),
+        ..DockerUsage::default()
     })
 }
 
@@ -318,6 +329,7 @@ mod tests {
         .unwrap()
         .remove(0);
         let usage = super::DockerUsage {
+            available: true,
             cpu_probes: Vec::new(),
             resources: vec![crate::model::ContainerProcessUsage {
                 resource: row,
@@ -339,6 +351,20 @@ mod tests {
 
     use super::{daemon_unavailable, parse_cpu_time, parse_stats, parse_top};
     use crate::model::{EnvironmentKind, ResourceKind};
+
+    #[test]
+    fn successful_empty_stats_are_available_without_containers() {
+        for input in [b"".as_slice(), b" \r\n\t"] {
+            let usage = super::parse_usage(input, 16).unwrap();
+            assert!(usage.available);
+            assert!(usage.resources.is_empty());
+            assert!(super::with_details(usage, |_| {}).1);
+        }
+        assert!(!super::with_details(super::DockerUsage::default(), |_| {}).1);
+        for input in [b"not json".as_slice(), b"{}", b"null", b"\xff"] {
+            assert!(super::parse_usage(input, 16).is_err());
+        }
+    }
 
     #[test]
     fn parses_and_normalizes_docker_stats() {
