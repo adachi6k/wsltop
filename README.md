@@ -457,6 +457,16 @@ WSLC collection uses the current/default CLI session. A single available `vmmemw
 
 Docker collection is optional. Container CPU and memory come from Docker statistics. For each container, `docker top <id> -eo pid,ppid,pcpu,rss,time,comm,args` independently discovers processes in the Docker daemon's PID namespace. Process `%CPU` is divided by the Windows host logical CPU count and processes are nested under their container. `unattributed` and `over_attributed` residuals are calculated without scaling process values to fit the container. If the process backend does not support `time`, wsltop retries the older column set and leaves TIME+ unavailable instead of dropping the container detail.
 
+Embedded BuildKit steps may not appear in `docker stats`. When WSL process collection
+confirms `/docker/buildkit/<executor>` cgroup membership, wsltop groups sampled
+processes under a Docker `BuildKit <executor>` row (including `docker-desktop`) and
+removes them from WSL process and RSS totals. CPU and memory reflect sampled process
+deltas and RSS, so short-lived processes can be missed; WSL kernel CPU remains
+inclusive and overlap is marked unresolved. `--no-docker` keeps processes in WSL.
+Docker totals remain unavailable until Docker statistics and all enabled WSL
+collectors complete successfully; a successful empty sample is zero, while failures
+retain observed rows without publishing partial totals.
+
 Docker Desktop's WSL 2 backend shares the WSL kernel, so its CPU is already included
 in the WSL category total. A separate Hyper-V backend does not share that kernel.
 Kernel sharing does not establish a shared PID namespace or a verified attribution

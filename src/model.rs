@@ -171,7 +171,7 @@ pub struct ResourceUsage {
 #[derive(Debug, Clone)]
 pub struct ContainerProcessUsage {
     pub resource: ResourceUsage,
-    /// Process observations collected inside the Docker daemon's PID namespace.
+    /// Process observations from the runtime or cgroup-verified BuildKit /proc rows.
     pub processes: Vec<ResourceUsage>,
     /// Host PIDs are only populated after the daemon has been proven to share
     /// the current WSL host PID namespace.

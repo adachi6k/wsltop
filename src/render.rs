@@ -389,8 +389,14 @@ fn display_name(row: &ResourceUsage) -> String {
             let source = if matches!(
                 row.environment,
                 EnvironmentKind::Docker | EnvironmentKind::WslContainer
-            ) {
-                source.chars().take(12).collect::<String>()
+            ) && !(row.kind == crate::model::ResourceKind::Container
+                && crate::buildkit::executor_id(&row.id).is_some())
+            {
+                crate::buildkit::executor_id(source)
+                    .unwrap_or(source)
+                    .chars()
+                    .take(12)
+                    .collect::<String>()
             } else {
                 source.clone()
             };
@@ -416,8 +422,16 @@ fn display_id(row: &ResourceUsage, tree: &AttributionTree) -> String {
             })
             .unwrap_or_else(|| "-".to_string());
     }
-    row.pid
-        .map_or_else(|| row.id.chars().take(12).collect(), |pid| pid.to_string())
+    row.pid.map_or_else(
+        || {
+            crate::buildkit::executor_id(&row.id)
+                .unwrap_or(&row.id)
+                .chars()
+                .take(12)
+                .collect()
+        },
+        |pid| pid.to_string(),
+    )
 }
 fn env_name(environment: EnvironmentKind) -> &'static str {
     match environment {

@@ -107,8 +107,12 @@ impl Monitor {
     }
     pub fn sample(&mut self) -> Result<MonitorSnapshot, Box<dyn Error>> {
         let mut warnings = Vec::new();
-        let collector_plan = CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
-        let linux_before = collector_plan.capture()?;
+        let mut collector_plan =
+            CollectorPlan::native(self.distro.as_deref(), self.config.wsl_only)?;
+        let mut linux_before = collector_plan.capture()?;
+        if self.config.no_docker {
+            normalize_disabled_buildkit(&mut linux_before);
+        }
         let linux_before_complete = linux_before.warnings.is_empty();
         for warning in linux_before.warnings {
             push_unique_warning(&mut warnings, warning);
@@ -156,7 +160,12 @@ impl Monitor {
             })
         });
         thread::sleep(self.config.interval);
-        let linux_middle = collector_plan.capture();
+        let mut linux_middle = collector_plan.capture();
+        if self.config.no_docker {
+            if let Ok(snapshots) = &mut linux_middle {
+                normalize_disabled_buildkit(snapshots);
+            }
+        }
         let mut wslc_result = wslc_worker.map(|worker| {
             worker
                 .join()
@@ -168,7 +177,10 @@ impl Monitor {
                 .unwrap_or_else(|_| Err("Docker collector panicked".to_string()))
         });
         // Bracket both container probe rounds with the primary kernel samples.
-        let linux_after = collector_plan.capture()?;
+        let mut linux_after = collector_plan.capture()?;
+        if self.config.no_docker {
+            normalize_disabled_buildkit(&mut linux_after);
+        }
         let windows_after = if self.config.wsl_only {
             None
         } else {
@@ -179,15 +191,27 @@ impl Monitor {
                 after
             })
         };
+        let linux_middle_complete = match &linux_middle {
+            Ok(middle) => {
+                for warning in &middle.warnings {
+                    push_unique_warning(&mut warnings, warning.clone());
+                }
+                middle.warnings.is_empty()
+                    && same_additional_sources(&linux_before.additional, &middle.additional)
+                    && same_additional_sources(&middle.additional, &linux_after.additional)
+            }
+            Err(error) => {
+                push_unique_warning(
+                    &mut warnings,
+                    format!("additional WSL sampling unavailable: {error}"),
+                );
+                false
+            }
+        };
         let linux_complete = linux_before_complete
+            && linux_middle_complete
             && linux_after.warnings.is_empty()
-            && linux_before.additional.len() == linux_after.additional.len()
-            && linux_before.additional.iter().all(|(name, _)| {
-                linux_after
-                    .additional
-                    .iter()
-                    .any(|(other, _)| name == other)
-            });
+            && same_additional_sources(&linux_before.additional, &linux_after.additional);
         for warning in linux_after.warnings {
             push_unique_warning(&mut warnings, warning);
         }
@@ -206,7 +230,7 @@ impl Monitor {
             if let Some((_, after)) = linux_after
                 .additional
                 .iter()
-                .find(|(candidate, _)| candidate == name)
+                .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
             {
                 linux_usage.extend(sampler::calculate_usage(before, after, host_cpu_count));
             }
@@ -228,15 +252,14 @@ impl Monitor {
             wslc_result = None;
             docker_result = None;
         }
-        // WSLC distinguishes successful empty stats from a missing executable.
-        // Empty Docker results can still mean an unavailable executable/daemon.
-        let summary_available = [
+        // Each enabled source must be complete, even when it has no rows.
+        let mut summary_available = [
             windows_before.is_some()
                 && windows_after.is_some()
                 && collector_cpu_count == host_cpu_count,
             linux_complete && collector_cpu_count == host_cpu_count,
             matches!(wslc_result.as_ref(), Some(Ok((_, true)))),
-            matches!(docker_result.as_ref(), Some(Ok((_, true)))),
+            false, // Docker also depends on the WSL BuildKit observations below.
         ];
         let mut guest_cpu = crate::guest_cpu::History::default();
         guest_cpu.kernel(linux_before.primary.system_cpu.as_ref());
@@ -250,22 +273,7 @@ impl Monitor {
         if let Some(Ok((usage, _))) = &docker_result {
             guest_cpu.containers(3, &usage.cpu_probes);
         }
-        let guest_targets: Vec<_> = wslc_result
-            .as_ref()
-            .and_then(|r| r.as_ref().ok())
-            .into_iter()
-            .flat_map(|(u, _)| u.resources.iter().map(|r| (2, r.id.clone())))
-            .chain(
-                docker_result
-                    .as_ref()
-                    .and_then(|r| r.as_ref().ok())
-                    .into_iter()
-                    .flat_map(|(u, _)| u.resources.iter().map(|r| (3, r.resource.id.clone()))),
-            )
-            .collect();
-        let containers_ready = (!collect_wslc || wslc_result.as_ref().is_some_and(Result::is_ok))
-            && (!collect_docker || docker_result.as_ref().is_some_and(Result::is_ok))
-            && collector_cpu_count == host_cpu_count;
+        let wslc_ready = !collect_wslc || wslc_result.as_ref().is_some_and(Result::is_ok);
         let wslc_usage = match wslc_result {
             None => wslc::WslcUsage::default(),
             Some(result) => match result {
@@ -279,19 +287,25 @@ impl Monitor {
                 }
             },
         };
-        let docker_usage = match docker_result {
-            None => Vec::new(),
-            Some(result) => match result {
-                Ok((result, _)) => {
-                    warnings.extend(result.warnings);
-                    result.resources
-                }
-                Err(error) => {
-                    warnings.push(format!("Docker collector unavailable: {error}"));
-                    Vec::new()
-                }
-            },
-        };
+        let (docker_usage, docker_complete) = merge_docker_usage(
+            &mut linux_usage,
+            docker_result,
+            collect_docker,
+            summary_available[1],
+            &mut warnings,
+        );
+        summary_available[3] = docker_complete;
+        let containers_ready = wslc_ready
+            && (!collect_docker || docker_complete)
+            && collector_cpu_count == host_cpu_count;
+        // Process sums are not common-window cgroup counters. Include builds
+        // as targets so overlap resolution cannot silently erase their CPU.
+        let guest_targets: Vec<_> = wslc_usage
+            .resources
+            .iter()
+            .map(|r| (2, r.id.clone()))
+            .chain(docker_usage.iter().map(|r| (3, r.resource.id.clone())))
+            .collect();
         let hosts: Vec<_> = windows_usage
             .iter()
             .filter(|row| attribution::is_host_resource(row))
@@ -378,6 +392,30 @@ impl Monitor {
     }
 }
 
+/// Keep useful rows from either source, but only publish a Docker total once
+/// both CLI stats and the WSL process samples (including BuildKit) are complete.
+fn merge_docker_usage(
+    linux: &mut Vec<ResourceUsage>,
+    result: Option<Result<(docker::DockerUsage, bool), String>>,
+    enabled: bool,
+    linux_complete: bool,
+    warnings: &mut Vec<String>,
+) -> (Vec<crate::model::ContainerProcessUsage>, bool) {
+    let (mut containers, cli_complete) = match result {
+        Some(Ok((usage, complete))) => {
+            warnings.extend(usage.warnings);
+            (usage.resources, complete)
+        }
+        Some(Err(error)) => {
+            warnings.push(format!("Docker collector unavailable: {error}"));
+            (Vec::new(), false)
+        }
+        None => (Vec::new(), false),
+    };
+    containers.extend(crate::buildkit::take_usage(linux, enabled));
+    (containers, enabled && cli_complete && linux_complete)
+}
+
 #[cfg(target_os = "windows")]
 fn wsl_only_host_cpu_count() -> Result<u32, Box<dyn Error>> {
     windows::host_logical_cpu_count()
@@ -435,11 +473,30 @@ fn push_unique_warning(warnings: &mut Vec<String>, warning: String) {
     }
 }
 
+fn normalize_disabled_buildkit(snapshots: &mut crate::collector::CollectedSnapshots) {
+    crate::buildkit::normalize_disabled_snapshot(&mut snapshots.primary);
+    for (_, snapshot) in &mut snapshots.additional {
+        crate::buildkit::normalize_disabled_snapshot(snapshot);
+    }
+}
+
+fn same_additional_sources(
+    left: &[(String, crate::model::Snapshot)],
+    right: &[(String, crate::model::Snapshot)],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|(name, _)| {
+            right
+                .iter()
+                .any(|(other, _)| name.eq_ignore_ascii_case(other))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_windows_application_view, push_unique_warning, should_collect_windows_metadata,
-        wsl_only_warning, MonitorConfig,
+        apply_windows_application_view, push_unique_warning, same_additional_sources,
+        should_collect_windows_metadata, wsl_only_warning, MonitorConfig,
     };
     use crate::model::{EnvironmentKind, ResourceKind, ResourceUsage, WindowsApplicationUsage};
     use std::time::Duration;
@@ -499,6 +556,116 @@ mod tests {
             cpu_time_seconds: None,
             memory_bytes: 0,
         }
+    }
+
+    #[test]
+    fn docker_merge_preserves_observations_but_never_publishes_a_partial_total() {
+        let mut build = resource(EnvironmentKind::Docker, ResourceKind::Process, "git");
+        build.source = crate::buildkit::source("0::/docker/buildkit/job1", Some("docker-desktop"));
+        build.cpu_percent = 6.25;
+        build.memory_bytes = 4096;
+        let mut ordinary = resource(EnvironmentKind::Docker, ResourceKind::Container, "web");
+        ordinary.pid = None;
+        let stats = docker_stats(vec![crate::model::ContainerProcessUsage {
+            resource: ordinary,
+            processes: Vec::new(),
+            host_pids: Vec::new(),
+        }]);
+        for (cli, linux_complete, expected_rows, expected_warning) in [
+            (
+                Some(Err("docker stats timed out".to_string())),
+                true,
+                1,
+                true,
+            ),
+            (None, true, 1, false),
+            (
+                Some(Ok((crate::docker::DockerUsage::default(), false))),
+                true,
+                1,
+                false,
+            ),
+            (Some(Ok((stats.clone(), true))), false, 2, false),
+        ] {
+            let mut linux = vec![build.clone()];
+            let mut warnings = Vec::new();
+            let (containers, complete) =
+                super::merge_docker_usage(&mut linux, cli, true, linux_complete, &mut warnings);
+            assert!(!complete);
+            assert!(linux.is_empty());
+            assert_eq!(containers.len(), expected_rows);
+            assert_eq!(containers.last().unwrap().processes, [build.clone()]);
+            assert_eq!(!warnings.is_empty(), expected_warning);
+            let rows: Vec<_> = containers.into_iter().map(|r| r.resource).collect();
+            assert!(crate::summary::EnvironmentSummary::collect(
+                &rows,
+                [false, false, false, complete]
+            )
+            .0[3]
+                .is_none());
+        }
+
+        let (containers, complete) = super::merge_docker_usage(
+            &mut vec![build],
+            Some(Ok((stats, true))),
+            true,
+            true,
+            &mut Vec::new(),
+        );
+        let rows: Vec<_> = containers.into_iter().map(|r| r.resource).collect();
+        let summary =
+            crate::summary::EnvironmentSummary::collect(&rows, [false, false, false, complete]);
+        assert_eq!(summary.0[3].unwrap().cpu_percent, Some(7.25));
+        assert_eq!(summary.0[3].unwrap().memory_bytes, Some(4096));
+    }
+
+    fn docker_stats(
+        resources: Vec<crate::model::ContainerProcessUsage>,
+    ) -> crate::docker::DockerUsage {
+        crate::docker::DockerUsage {
+            available: true,
+            resources,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn docker_merge_distinguishes_a_complete_empty_observation_from_disabled_collection() {
+        let (rows, complete) = super::merge_docker_usage(
+            &mut Vec::new(),
+            Some(Ok((docker_stats(Vec::new()), true))),
+            true,
+            true,
+            &mut Vec::new(),
+        );
+        assert!(rows.is_empty());
+        assert!(complete);
+
+        let mut process = resource(EnvironmentKind::Docker, ResourceKind::Process, "git");
+        process.source = crate::buildkit::source("0::/docker/buildkit/job1", None);
+        let mut linux = vec![process];
+        let (rows, complete) =
+            super::merge_docker_usage(&mut linux, None, false, true, &mut Vec::new());
+        assert!(rows.is_empty());
+        assert!(!complete);
+        assert_eq!(linux[0].environment, EnvironmentKind::Wsl);
+        assert!(linux[0].source.is_none());
+    }
+
+    #[test]
+    fn docker_collection_completeness_requires_paired_additional_sources() {
+        let snapshot = || crate::model::Snapshot {
+            system_cpu: None,
+            captured_at: std::time::Instant::now(),
+            processes: Vec::new(),
+        };
+        let before = Vec::new();
+        let after = vec![("docker-desktop".to_string(), snapshot())];
+        assert!(!same_additional_sources(&before, &after));
+        assert!(same_additional_sources(
+            &after,
+            &[("DOCKER-DESKTOP".to_string(), snapshot())]
+        ));
     }
 
     #[test]
